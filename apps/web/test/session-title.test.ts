@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { type WebEvent, WebSessionStore } from "../src/runtime.ts";
-import { cleanGeneratedTitle, sessionTitleInput } from "../src/session-title.ts";
+import { cleanGeneratedTitle, type SlashCommandResolver, sessionTitleInput } from "../src/session-title.ts";
 
 /* ── Unit: the title answer cleaner ──────────────────────────────────────── */
 
@@ -33,21 +33,75 @@ test("a title answer is stripped of decorations and rejected when unusable", () 
 
 test("the title input is the prompt itself, whitespace-collapsed and capped", () => {
 	assert.equal(sessionTitleInput("帮我修复\n登录页面  的问题，token 过期后不会刷新"), "帮我修复 登录页面 的问题，token 过期后不会刷新");
-	assert.equal(sessionTitleInput("  hi  "), null);
+	// A short prompt is still titled (by itself); only an empty one is not.
+	assert.equal(sessionTitleInput("  hi  "), "hi");
+	assert.equal(sessionTitleInput("   "), null);
 	assert.equal(sessionTitleInput(`${"x".repeat(1_500)}`), "x".repeat(1_200));
 });
 
-test("a slash command is not titled, but a skill invocation contributes its request", () => {
-	assert.equal(sessionTitleInput("/plan"), null);
-	assert.equal(sessionTitleInput("/permissions full-access"), null);
-	assert.equal(sessionTitleInput("/skill:lark-calendar 帮我创建明天上午十点的站会"), "帮我创建明天上午十点的站会");
+/** A kernel that registers these commands and one prompt template, `review`. */
+const kernel: SlashCommandResolver = (name) =>
+	["goal", "plan", "permissions", "compact", "ultraloop", "clm"].includes(name)
+		? "command"
+		: name === "review"
+			? "template"
+			: undefined;
+const titleOf = (prompt: string) => sessionTitleInput(prompt, kernel);
+
+test("a task command is titled by its argument", () => {
+	assert.equal(titleOf("/goal 请在当前项目中从零开发一款可运行的浏览器塔防游戏"), "请在当前项目中从零开发一款可运行的浏览器塔防游戏");
+	assert.equal(titleOf("/plan 重构登录模块的 token 刷新逻辑"), "重构登录模块的 token 刷新逻辑");
+	// `/goal start` is the explicit form of the same objective.
+	assert.equal(titleOf("/goal start 开发一款浏览器塔防游戏"), "开发一款浏览器塔防游戏");
+	// A task that is itself a skill invocation is titled like the skill sent alone.
+	assert.equal(titleOf("/plan /skill:lark-calendar 帮我创建明天上午十点的站会"), "帮我创建明天上午十点的站会");
+	assert.equal(titleOf("/skill:lark-calendar 帮我创建明天上午十点的站会"), "帮我创建明天上午十点的站会");
 	assert.equal(
-		sessionTitleInput('<skill name="pdf" location="/skills/pdf/SKILL.md">\nUse the pdf skill.\n</skill>\n\n帮我把这两个报告合并成一份'),
+		titleOf('<skill name="pdf" location="/skills/pdf/SKILL.md">\nUse the pdf skill.\n</skill>\n\n帮我把这两个报告合并成一份'),
 		"帮我把这两个报告合并成一份",
 	);
-	// A skill with no request of its own is too short to title: the sidebar's
-	// fallback already shows the skill's name.
-	assert.equal(sessionTitleInput('<skill name="pdf" location="/skills/pdf/SKILL.md">\nUse the pdf skill.\n</skill>'), null);
+	// A skill with no request of its own is titled by the skill's name.
+	assert.equal(titleOf('<skill name="pdf" location="/skills/pdf/SKILL.md">\nUse the pdf skill.\n</skill>'), "pdf");
+	// The host's template naming misses a template behind `/plan`; its own line titles the session.
+	assert.equal(titleOf("/plan /review src/auth.ts"), "/review src/auth.ts");
+});
+
+test("the ultraloop mode's keyword prefix is not part of the title", () => {
+	assert.equal(titleOf("ultracode: 帮我重构支付模块"), "帮我重构支付模块");
+	assert.equal(titleOf("ULTRALOOP: /skill:pdf 合并两份报告"), "合并两份报告");
+	// The keyword anywhere else is the user's own wording.
+	assert.equal(titleOf("用 ultracode 跑一遍审计"), "用 ultracode 跑一遍审计");
+});
+
+test("a configuring command leaves the title to the next input", () => {
+	for (const line of [
+		"/permissions full-access",
+		"/compact keep the API notes",
+		"/ultraloop on",
+		"/clm status",
+		"/plan",
+		"/goal  ",
+		"/goal status",
+		"/goal pause",
+		"/goal clear",
+		"/goal stop",
+		"/goal budget 5000",
+		"/goal edit 新目标",
+		// A prompt template is named after its command line by the host itself.
+		"/review src/auth.ts",
+	]) {
+		assert.equal(titleOf(line), null, line);
+	}
+});
+
+test("a slash line the kernel does not register is an ordinary prompt", () => {
+	// Pasted paths, including a single segment that looks like a command name.
+	assert.equal(titleOf("/tmp 看下这个目录里的日志"), "/tmp 看下这个目录里的日志");
+	assert.equal(titleOf("/Users/me/repo 帮我看看这个目录"), "/Users/me/repo 帮我看看这个目录");
+	// With no resolver nothing is registered: a slash line is plain text.
+	assert.equal(sessionTitleInput("/goal 开发塔防游戏"), "/goal 开发塔防游戏");
+	// The kernel splits a command line at a space only; `/goal\n…` is no command.
+	assert.equal(titleOf("/goal\n开发塔防游戏"), "/goal 开发塔防游戏");
 });
 
 /* ── End to end: the first send names the session via a sidecar call ──────── */
@@ -136,7 +190,7 @@ async function waitFor(check: () => boolean, timeoutMs = 10_000): Promise<void> 
 	throw new Error("condition did not become true before the deadline");
 }
 
-test("the first prompt names the session; later sends and short prompts do not", { timeout: 60_000 }, async () => {
+test("the first input names the session; later sends do not; short input names it directly", { timeout: 60_000 }, async () => {
 	const base = await mkdtemp(join(tmpdir(), "stepcode-web-session-title-"));
 	const fixture = await startFixture(base);
 	const previous = {
@@ -171,13 +225,39 @@ test("the first prompt names the session; later sends and short prompts do not",
 		await waitFor(() => session.snapshot().status === "completed");
 		assert.equal(fixture.titleRequests.length, 1);
 
-		// A fresh session whose first prompt is too short keeps the fallback title.
+		// A fresh session whose first prompt is short is named by it, with no model call.
 		const quiet = await store.create(base);
 		await quiet.send("hi");
 		await waitFor(() => quiet.snapshot().status === "completed");
-		await new Promise((resolve) => setTimeout(resolve, 500));
+		await waitFor(() => quiet.snapshot().name === "hi");
 		assert.equal(fixture.titleRequests.length, 1);
-		assert.equal(quiet.snapshot().name, undefined);
+
+		// A goal journals no user message; its objective still names the session.
+		const goal = await store.create(base);
+		await goal.send("/goal 帮我修复登录页面里 token 过期后不会自动刷新的问题");
+		await waitFor(() => goal.snapshot().name === "修复登录令牌过期");
+		assert.equal(fixture.titleRequests.length, 2);
+		await goal.controlGoal("clear");
+
+		// The goal strip's start control bypasses `send` and must title as well.
+		const started = await store.create(base);
+		await started.controlGoal("start", "做一个塔防游戏");
+		await waitFor(() => started.snapshot().name === "做一个塔防游戏");
+		assert.equal(fixture.titleRequests.length, 2);
+		await started.controlGoal("clear");
+
+		// A configuring command first leaves the title to the input after it.
+		const configured = await store.create(base);
+		await configured.send("/goal status");
+		await configured.send("帮我修复登录页面里 token 过期后不会自动刷新的问题");
+		await waitFor(() => configured.snapshot().name === "修复登录令牌过期");
+		assert.equal(fixture.titleRequests.length, 3);
+
+		// A pasted path is no command: the session is titled from the whole line.
+		const pathed = await store.create(base);
+		await pathed.send("/tmp 看下");
+		await waitFor(() => pathed.snapshot().name === "/tmp 看下");
+		assert.equal(fixture.titleRequests.length, 3);
 	} finally {
 		await store.close();
 		await fixture.stop();

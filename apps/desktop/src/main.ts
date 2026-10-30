@@ -26,6 +26,7 @@ import { readReleaseEnvelope } from "./release-envelope.ts";
 import { launchWebServer, type RunningWebServer, resolveNodeExecutable, resolveWebServerEntry } from "./server-host.ts";
 import { readShellEnvironment } from "./shell-environment.ts";
 import { DesktopStateStore } from "./state.ts";
+import { TagGroupCloseOwner } from "./tag-group-close.ts";
 import { createMainWindow } from "./window.ts";
 
 const userDataOverride = process.env.STEPCODE_DESKTOP_USER_DATA_DIR?.trim();
@@ -46,6 +47,16 @@ function positiveInteger(value: string | undefined): number | undefined {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+/** The account's Documents folder, or undefined where the OS reports none. */
+function documentsDirectory(): string | undefined {
+	try {
+		return app.getPath("documents");
+	} catch (error) {
+		console.warn(`[desktop] Documents folder unavailable (${message(error)})`);
+		return undefined;
+	}
+}
+
 async function main(): Promise<void> {
 	const here = dirname(fileURLToPath(import.meta.url));
 	const preload = join(here, "preload.cjs");
@@ -62,6 +73,20 @@ async function main(): Promise<void> {
 	let restarting: Promise<void> | undefined;
 	let quitting = false;
 	let shutdownComplete = false;
+	let quitRequested = false;
+	const groupClose = new TagGroupCloseOwner(() => {
+		quitRequested = false;
+	});
+	const shutdown = (): void => {
+		if (quitting) return;
+		quitting = true;
+		const running = server;
+		server = undefined;
+		void (running?.stop() ?? Promise.resolve()).finally(() => {
+			shutdownComplete = true;
+			app.quit();
+		});
+	};
 	// Embedded-browser guests may not reach the Host on any hostname; its port is read on every request,
 	// so a restarted server on a new port is covered too.
 	const browserGuests = new DesktopBrowserGuests(() => {
@@ -73,7 +98,12 @@ async function main(): Promise<void> {
 
 	const showError = (title: string, detail: string): void => {
 		console.error(`[desktop] ${title}\n${detail}`);
-		if (window !== undefined && !window.isDestroyed()) void window.loadURL(errorPageUrl(title, detail, logPath));
+		if (window !== undefined && !window.isDestroyed()) {
+			void window.loadURL(errorPageUrl(title, detail, logPath)).catch((error: unknown) => {
+				// A dirty renderer can veto this replacement and retain its group operations on the trusted origin.
+				console.warn(`[desktop] error-page navigation cancelled (${message(error)})`);
+			});
+		}
 	};
 
 	/**
@@ -133,7 +163,15 @@ async function main(): Promise<void> {
 			// if neither a system Node nor the private fallback is available.
 			console.warn(`[desktop] bundled Node fallback unavailable (${message(error)})`);
 		}
-		const workspace = process.env.STEPCODE_WEB_CWD?.trim() || state.lastWorkspace() || homedir();
+		const launchFolder = process.env.STEPCODE_WEB_CWD?.trim() || state.lastWorkspace();
+		const workspace = launchFolder || homedir();
+		// With no folder to launch in, the host prepares the first-use workspace under
+		// Documents (<Documents>/StepCode/default-workspace) instead of using home.
+		// A chosen folder must never be replaced by it, so an inherited value is dropped.
+		serverEnvironment = { ...serverEnvironment };
+		const documents = launchFolder ? undefined : documentsDirectory();
+		if (documents) serverEnvironment.STEPCODE_WEB_DOCUMENTS_DIR = documents;
+		else delete serverEnvironment.STEPCODE_WEB_DOCUMENTS_DIR;
 		const options = {
 			entry,
 			node,
@@ -163,7 +201,7 @@ async function main(): Promise<void> {
 		);
 		void running.exited.then((exit) => {
 			if (exit.requested || server !== running) return;
-			server = undefined;
+			// Retain the trusted origin while a dirty page drains userData writes, even though HTTP is unavailable.
 			if (quitting) return;
 			const status = exit.signal === null ? `exit code ${String(exit.code)}` : `signal ${exit.signal}`;
 			showError("The StepCode server stopped unexpectedly", `${status}\n${exit.stderr}`.trim());
@@ -173,11 +211,15 @@ async function main(): Promise<void> {
 	/** Start (or restart) the server and point the window at it. */
 	const restartServer = (): Promise<void> => {
 		restarting ??= (async () => {
+			const target = window;
+			if (target && !target.isDestroyed()) {
+				const loading = loadingPageUrl();
+				const prepared = await groupClose.restart(target, () => target.loadURL(loading), loading);
+				if (!prepared || quitting || window !== target) return;
+			}
 			const previous = server;
 			server = undefined;
 			await previous?.stop();
-			if (window !== undefined && !window.isDestroyed())
-				await window.loadURL(loadingPageUrl()).catch(() => undefined);
 			try {
 				await startServer();
 			} catch (error) {
@@ -193,6 +235,12 @@ async function main(): Promise<void> {
 
 	const openWindow = (): BrowserWindow => {
 		const created = createMainWindow({
+			onNativeClose: (target) => {
+				const quit = quitRequested;
+				groupClose.nativeClose(target);
+				quitRequested = quit;
+			},
+			onDocumentChanged: (target, url) => groupClose.documentChanged(target, url),
 			preload,
 			icon,
 			version: app.getVersion(),
@@ -205,7 +253,9 @@ async function main(): Promise<void> {
 			if (!smoke) created.show();
 		});
 		created.on("closed", () => {
+			groupClose.closed(created);
 			if (window === created) window = undefined;
+			if (quitRequested) shutdown();
 		});
 		if (server !== undefined) loadApp(created);
 		else void created.loadURL(loadingPageUrl()).catch(() => undefined);
@@ -233,21 +283,21 @@ async function main(): Promise<void> {
 		if (process.platform !== "darwin") app.quit();
 	});
 	app.on("before-quit", (event) => {
-		quitting = true;
-		if (shutdownComplete || server === undefined) return;
+		if (shutdownComplete) return;
 		event.preventDefault();
-		const running = server;
-		server = undefined;
-		void running.stop().finally(() => {
-			shutdownComplete = true;
-			app.quit();
-		});
+		if (quitting || quitRequested) return;
+		quitRequested = true;
+		// Keep the Host and trusted IPC origin until the actual window has closed.
+		if (window && !window.isDestroyed()) window.close();
+		else shutdown();
 	});
 
 	await app.whenReady();
 	// A packaged app shows the bundle's icon.icns; `electron .` would show Electron's own icon.
 	if (!app.isPackaged && existsSync(icon)) app.dock?.setIcon(icon);
 	installDesktopIpc({
+		groupClose,
+		state,
 		getWindow: () => window,
 		getServerOrigin: () => server?.origin,
 		onDirectoryPicked: (path) => state.update({ lastWorkspace: path }),

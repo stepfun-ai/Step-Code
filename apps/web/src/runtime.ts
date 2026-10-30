@@ -22,6 +22,8 @@ import {
 	createStepToolProfile,
 	DEFAULT_THINKING_LEVEL,
 	DefaultResourceLoader,
+	defaultStepPluginsDir,
+	discoverStepPluginResourcePaths,
 	type ExtensionUIContext,
 	type FeedbackEvidence,
 	FULL_ACCESS_RISK_OPTIONS,
@@ -46,6 +48,7 @@ import {
 	readFeedbackUsername,
 	readGlobalStepDefaults,
 	readStepBuildIdentity,
+	readSubagentLaneSnapshot,
 	resolveFeedbackEndpoint,
 	resolveFeedbackSettings,
 	resolveStepAgentDir,
@@ -66,6 +69,9 @@ import {
 	type StepMcpStatus,
 	type StepPermissionPresetId,
 	type StepSettingsManager,
+	SUBAGENT_LANE_CHANNEL,
+	SUBAGENT_RESPONSE_ENTRY,
+	type SubagentLaneSnapshot,
 	submitFeedback as submitKernelFeedback,
 	syncStepLoginProfileEndpoint,
 	THINKING_LEVEL_OPTIONS,
@@ -90,11 +96,21 @@ import {
 	SteeringImages,
 	type SteeringMessageView,
 } from "./message-queue.ts";
+import {
+	LivePromptCommands,
+	PROMPT_COMMAND_TYPE,
+	pairPromptCommands,
+	promptCommandRecord,
+	promptMessageText,
+	type WebPromptCommand,
+	webPromptCommands,
+} from "./prompt-commands.ts";
 import { RetryTracker } from "./retry-state.ts";
 import { SelectionBroker, type SelectionEvent, type SelectionRequest, selectionSelect } from "./selection.ts";
-import { generateSessionTitle, sessionTitleInput } from "./session-title.ts";
+import { generateSessionTitle, type SlashCommandKind, sessionTitleInput } from "./session-title.ts";
 import { type WebSkill, webSkills } from "./skills.ts";
 import { resolveSubagentCliPath } from "./subagent-cli.ts";
+import { retainSubagentLane } from "./subagent-lane-cache.ts";
 import { projectSubagentNotification } from "./subagent-notification.ts";
 import { TextInputBroker, type TextInputEvent, textInput } from "./text-input.ts";
 import { savedThinkingTimings, THINKING_TIMING_TYPE, ThinkingClock, type ThinkingTimings } from "./thinking-timing.ts";
@@ -142,11 +158,19 @@ async function refreshStepModelCatalog(modelRuntime: ModelRuntime): Promise<void
 	}
 }
 
-export type WebEvent =
+/** What this session's listeners are told; `emit` stamps each one with its revision. */
+export type WebEventBody =
+	| { type: "subagent_lane"; lane: SubagentLaneSnapshot | null }
 	| ClarificationEvent
 	| SelectionEvent
 	| TextInputEvent
-	| { type: "agent"; event: AgentSessionEvent; thinkingTimings?: ThinkingTimings }
+	| {
+			type: "agent";
+			event: AgentSessionEvent;
+			thinkingTimings?: ThinkingTimings;
+			/** On a user `message_start`: the prompt-command line it expanded from (see `prompt-commands.ts`). */
+			promptCommand?: string;
+	  }
 	| { type: "approval_required"; approval: ApprovalRequest }
 	| {
 			/**
@@ -172,6 +196,13 @@ export type WebEvent =
 	| { type: "status"; status: WebSessionStatus; unread: boolean }
 	| ({ type: "queue" } & WebQueueState)
 	| { type: "error"; message: string };
+
+/**
+ * One published event, ordered by `revision`. The number is monotonic per bound
+ * session and lets a reader tell an HTTP snapshot from before an event it has
+ * already applied (see the client's `renderSnapshot`).
+ */
+export type WebEvent = WebEventBody & { readonly revision: number };
 
 /**
  * Messages the user sent during a turn and nothing has run yet: `queued` waits
@@ -239,8 +270,8 @@ function webUiContext(
 	return {
 		clarify: (questions, signal) => clarifications.ask(questions, signal),
 		select: selectionSelect(selections),
-		confirm: (title, message, options) =>
-			broker.confirm(title.replace(/^Approve |^Dangerous /u, ""), message, options?.signal),
+		// The broker derives the tool and the grant key from the dialog title.
+		confirm: (title, message, options) => broker.confirm(title, message, options?.signal),
 		input: textInput(textInputs),
 		// A command's answer is a notice in the transcript, not a prompt: it never
 		// reaches the model or the session file.
@@ -311,6 +342,7 @@ export function webExtensions(
 	broker: ApprovalBroker,
 	onPermissionChange: (preset: StepPermissionPresetId) => void,
 	usageRecording?: () => WebUsageResources,
+	onLane?: (lane: SubagentLaneSnapshot | null) => void,
 ): InlineExtension[] {
 	const telemetry = NOOP_OBSERVABILITY_PROVIDER.createReporter();
 	const persisted = settingsManager.getStepSettings();
@@ -322,6 +354,13 @@ export function webExtensions(
 		name: "StepCode Web host",
 		hidden: true,
 		factory: (pi) => {
+			if (onLane) {
+				pi.events.on(SUBAGENT_LANE_CHANNEL, (value) => {
+					const lane = readSubagentLaneSnapshot(value);
+					if (lane) onLane(lane);
+				});
+				pi.on("session_shutdown", () => onLane(null));
+			}
 			pi.on("tool_call", (event) => {
 				broker.captureToolCall(event.toolCallId, event.toolName, event.input);
 			});
@@ -349,6 +388,14 @@ export function webExtensions(
 			telemetry,
 			cliPath: resolveSubagentCliPath(),
 			ultraloopSessionMode: false,
+			subagent: {
+				// A child runs `--mode rpc` with no window of its own, so its
+				// permission dialog used to be cancelled and a subagent's write
+				// failed without anyone being asked. Show it on this session's
+				// approval stream instead: the dialog body carries the tool's
+				// summarized input (path, content, command).
+				requestApproval: (prompt) => broker.confirm(prompt.title, prompt.message, prompt.signal),
+			},
 		}),
 		createStepCronExtension({ telemetry }),
 		createStepGoalExtension({ telemetry }),
@@ -571,6 +618,18 @@ export function commandEchoText(text: string): string | null {
 	return text.trim();
 }
 
+/**
+ * Command names a prompt template cannot take over: the kernel commands the
+ * composer reaches and the Web surfaces it handles itself. An open session
+ * also knows its registered extension commands (see `WebSession.commands`).
+ */
+function isReservedCommandName(name: string): boolean {
+	return ECHOED_COMMANDS.has(name) || name === "mcp" || name === "btw" || name === "feedback";
+}
+
+/** Commands `AgentSession` handles itself, before any extension command (`_handleLiveContextCommand`). */
+const LIVE_CONTEXT_COMMANDS: ReadonlySet<string> = new Set(["clm", "clm-compact"]);
+
 /** Same provider and model id, which is all a resolved model needs to match. */
 function modelsMatch(left: { provider: string; id: string }, right: { provider: string; id: string }): boolean {
 	return left.provider === right.provider && left.id === right.id;
@@ -592,7 +651,10 @@ function goalRoundOf(entry: SessionEntry): number | undefined {
 
 export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 	// Only assistant turns carry usage; other message kinds have none to report.
-	const usage = entry.type === "message" && entry.message.role === "assistant" ? entry.message.usage : undefined;
+	const usage =
+		entry.type === "message" && entry.message.role === "assistant" && !entry.imported
+			? entry.message.usage
+			: undefined;
 	const notification =
 		entry.type === "custom_message" ? projectSubagentNotification(entry.customType, entry.details) : undefined;
 	// The command echo's text rides the custom entry's data.
@@ -602,10 +664,14 @@ export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 		id: entry.id,
 		type: entry.type,
 		timestamp: entry.timestamp,
+		...(entry.imported ? { imported: entry.imported } : {}),
 		...(entry.type === "message" ? { message: entry.message } : {}),
 		...(usage ? { usage } : {}),
 		...(entry.type === "custom_message" ? { content: entry.content, customType: entry.customType } : {}),
 		...(notification ? { details: notification } : {}),
+		...(entry.type === "custom" && entry.customType === SUBAGENT_RESPONSE_ENTRY
+			? { customType: entry.customType, data: entry.data }
+			: {}),
 		...(goalRound === undefined ? {} : { goalRound }),
 		...(echo === undefined ? {} : { customType: COMMAND_ECHO_TYPE, command: echo }),
 		// A compaction row shows what it replaced: the summary, the prompt volume
@@ -628,15 +694,88 @@ function commandEchoOf(entry: SessionEntry): string | undefined {
 	return typeof text === "string" && text ? text : undefined;
 }
 
-/** Timing is host presentation metadata, not a field added to provider messages. */
+/**
+ * Whether a tool batch that ends the branch is missing a result.
+ *
+ * A settled batch can end the transcript: a tool or permission hook can
+ * terminate the run, and a manual `/clm` stops after the turn whose context edit
+ * was accepted. Only a call without its result proves the run was cut off while
+ * the tool was still running.
+ */
+function hasUnansweredToolCall(entries: readonly SessionEntry[], resultIndex: number): boolean {
+	let batchIndex = -1;
+	for (let index = resultIndex - 1; index >= 0; index--) {
+		const entry = entries[index];
+		if (entry?.type !== "message") continue;
+		if (entry.message.role !== "assistant") continue;
+		if (!entry.message.content.some((block) => block.type === "toolCall")) continue;
+		batchIndex = index;
+		break;
+	}
+	const batch = batchIndex < 0 ? undefined : entries[batchIndex];
+	if (batch?.type !== "message" || batch.message.role !== "assistant") return false;
+	const calls = batch.message.content.flatMap((block) => (block.type === "toolCall" ? [block.id] : []));
+	if (!calls.length) return false;
+	const answered = new Set<string>();
+	for (let index = batchIndex + 1; index < entries.length; index++) {
+		const entry = entries[index];
+		if (entry?.type === "message" && entry.message.role === "toolResult") answered.add(entry.message.toolCallId);
+	}
+	return calls.some((id) => !answered.has(id));
+}
+
+/**
+ * Whether the newest turn on this branch was cut off rather than finished.
+ *
+ * A host that stops mid-turn records the partial reply as `aborted`, and a crash
+ * leaves the branch ending in a shape only an unfinished turn produces. Both used
+ * to read as a conversation that simply ended early; this lets the page say a run
+ * was interrupted. Derived from entries so the answer survives a restart, and
+ * false while a turn runs, where an unanswered prompt is just the turn still
+ * starting.
+ *
+ * Tool work needs care: a branch may legitimately end on a tool result (a tool or
+ * permission hook terminated the run, or a manual `/clm` stopped after its
+ * accepted edit), so a trailing result only counts when its call never answered.
+ * A trailing tool-use assistant has no results at all, which is the killed-host
+ * shape. Errors and truncated replies are not "interrupted": they are rendered
+ * as what they are.
+ */
+export function hasInterruptedTurn(entries: readonly SessionEntry[], running: boolean): boolean {
+	if (running) return false;
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index];
+		if (entry?.type !== "message") continue;
+		// Imported tails are source snapshots, not evidence of a stopped native turn.
+		if (entry.imported) return false;
+		const message = entry.message;
+		if (message.role === "user") return true;
+		if (message.role === "toolResult") return hasUnansweredToolCall(entries, index);
+		if (message.role === "assistant") return message.stopReason === "aborted" || message.stopReason === "toolUse";
+	}
+	return false;
+}
+
+/**
+ * Timing is host presentation metadata, not a field added to provider messages.
+ * So is `promptCommand`: the line a user message expanded from, when it was a
+ * prompt command (`prompt-commands.ts`), so the flow shows that line instead
+ * of the whole template.
+ */
 export function projectEntries(entries: readonly SessionEntry[]): Record<string, unknown>[] {
 	const timings = savedThinkingTimings(entries);
+	const promptCommands = pairPromptCommands(entries);
 	return entries.map((entry) => {
 		const thinkingTimings =
 			entry.type === "message" && entry.message.role === "assistant"
 				? timings.get(entry.message.timestamp)
 				: undefined;
-		return { ...projectEntry(entry), ...(thinkingTimings ? { thinkingTimings } : {}) };
+		const promptCommand = promptCommands.get(entry.id);
+		return {
+			...projectEntry(entry),
+			...(thinkingTimings ? { thinkingTimings } : {}),
+			...(promptCommand ? { promptCommand } : {}),
+		};
 	});
 }
 
@@ -686,6 +825,8 @@ function lastUserEntryId(session: AgentSession): string | undefined {
 const FORK_SUFFIX = "_fork";
 /** Keep the suffix visible: a fork of a very long title is shortened, not truncated past the suffix. */
 const FORK_TITLE_MAX = 96;
+/** A session named after its prompt-command line keeps the name a sidebar row can show. */
+const PROMPT_COMMAND_NAME_MAX = 96;
 
 function forkTitleOf(parent: string): string {
 	const room = FORK_TITLE_MAX - FORK_SUFFIX.length;
@@ -701,11 +842,29 @@ export class WebSession {
 	/** `/btw` answers of this session, oldest first. Process memory, never persisted. */
 	private sideAnswers: WebSideAnswer[] = [];
 	private readonly listeners = new Set<(event: WebEvent) => void>();
+	private readonly subagentLanes = new Map<string, SubagentLaneSnapshot>();
 	private runtime!: AgentSessionRuntime;
 	private session!: AgentSession;
 	private status: WebSessionStatus = "idle";
 	private readonly closeListeners = new Set<() => void>();
 	private unread = false;
+	/**
+	 * Set once `close` starts. Anything that would start work must check it: a
+	 * queued dispatch or a request already parsed when shutdown began would
+	 * otherwise start a turn on a disposed session, spending a model call whose
+	 * reply has nowhere to land.
+	 */
+	private closing = false;
+	/**
+	 * Prompts accepted but not yet running.
+	 *
+	 * The kernel only starts a run after its pre-run work (auth, compaction
+	 * check, `before_agent_start` hooks such as MCP reconciliation), and until
+	 * then neither its run state nor this session's status says "busy". A
+	 * shutdown in that window would dispose the session with the prompt still in
+	 * memory, so the count is part of `isBusy` and shutdown waits for the run.
+	 */
+	private pendingPrompts = 0;
 	/** Pages following this session's event stream right now; a run that ends in front of one is already seen. */
 	private viewers = 0;
 	private unsubscribeSession?: () => void;
@@ -753,6 +912,14 @@ export class WebSession {
 	private lastRunAborted = false;
 	/** The kernel's retry of a failed model request, while one is scheduled or running. */
 	private readonly retry = new RetryTracker();
+	/** Prompt-command lines sent but not yet seen as a user `message_start`. */
+	private readonly livePromptCommands = new LivePromptCommands();
+	/**
+	 * Counts what this session's listeners have been told. A snapshot stamped
+	 * with an older revision describes a state the page has already moved past;
+	 * a reader that still applied it would resurrect a stopped turn's status.
+	 */
+	private revision = 0;
 	/** Settles when the bound session's `session_start` handlers (MCP startup included) have finished. */
 	private extensionsReady: Promise<void> = Promise.resolve();
 	/** Startup of the bound session; replaced on fork or /new so a stale binding cannot report into it. */
@@ -957,6 +1124,13 @@ export class WebSession {
 						// The session does not exist yet when the extension list is built,
 						// so recording resolves its skill list lazily, once it does.
 						() => this.usageResources(),
+						(lane) => {
+							if (!lane) this.subagentLanes.clear();
+							else {
+								retainSubagentLane(this.subagentLanes, lane);
+							}
+							this.emit({ type: "subagent_lane", lane });
+						},
 					),
 				},
 			});
@@ -1091,7 +1265,18 @@ export class WebSession {
 			this.retry.apply(event);
 			if (event.type === "auto_retry_start" && this.status !== "running") this.setStatus("running", false);
 			if (event.type === "queue_update") this.emit({ type: "queue", ...this.queueState() });
-			this.emit({ type: "agent", event, ...(thinkingTimings ? { thinkingTimings } : {}) });
+			// A prompt command's expansion arrives as an ordinary user message; the
+			// line it came from rides the live event (the snapshot pairs it from the journal).
+			const promptCommand =
+				event.type === "message_start"
+					? this.livePromptCommands.take(promptMessageText(event.message) ?? "")
+					: undefined;
+			this.emit({
+				type: "agent",
+				event,
+				...(thinkingTimings ? { thinkingTimings } : {}),
+				...(promptCommand ? { promptCommand } : {}),
+			});
 			if (event.type === "agent_settled") {
 				const hold = this.holdQueue || this.lastRunFailed;
 				this.holdQueue = false;
@@ -1154,8 +1339,10 @@ export class WebSession {
 		this.emit({ type: "status", status, unread });
 	}
 
-	private emit(event: WebEvent): void {
-		for (const listener of this.listeners) listener(event);
+	private emit(event: WebEventBody): void {
+		this.revision += 1;
+		const stamped: WebEvent = { ...event, revision: this.revision };
+		for (const listener of this.listeners) listener(stamped);
 	}
 
 	publishError(message: string): void {
@@ -1200,9 +1387,9 @@ export class WebSession {
 		return () => this.closeListeners.delete(listener);
 	}
 
-	/** A turn is running or waiting on the user; closing now would cut it off. */
+	/** A turn is running, waiting on the user, or accepted and still being set up. */
 	isBusy(): boolean {
-		return this.status === "running" || this.status === "waiting";
+		return this.status === "running" || this.status === "waiting" || this.pendingPrompts > 0;
 	}
 
 	/**
@@ -1243,7 +1430,34 @@ export class WebSession {
 	 */
 	async send(text: string, attachments: readonly WebAttachment[] = [], followUp = false): Promise<void> {
 		if (this.isReverting()) throw new Error("Wait for the revert to finish");
-		this.unread = false;
+		await this.promptTracked(() => {
+			this.unread = false;
+			return this.sendWithinTurn(text, attachments, followUp);
+		});
+	}
+
+	/**
+	 * Run one kernel prompt under the session's lifecycle.
+	 *
+	 * The composer's path is `send`, but session control reaches the kernel
+	 * directly: `/goal <objective>` starts a real turn, and `/plan` /
+	 * `/ultraloop` can too. All of them must refuse work once closing and count
+	 * as a pending turn until their run starts, or shutdown disposes the session
+	 * with the prompt still in memory — the same loss `send` guards against.
+	 * Commands that only configure the session (`/permissions`, `/goal pause`)
+	 * settle without a run; waiting for one exits as soon as they do.
+	 */
+	private async promptTracked(start: () => Promise<void>): Promise<void> {
+		if (this.closing) throw new Error("This session is closing");
+		this.pendingPrompts += 1;
+		try {
+			await start();
+		} finally {
+			this.pendingPrompts -= 1;
+		}
+	}
+
+	private async sendWithinTurn(text: string, attachments: readonly WebAttachment[], followUp: boolean): Promise<void> {
 		if (!this.extensionsStartup.settled) {
 			if (this.startingPrompt) {
 				// A second message before the first could start waits behind it.
@@ -1282,7 +1496,10 @@ export class WebSession {
 		this.echoCommand(text);
 		this.maybeGenerateSessionTitle(text);
 		const images = imagesOf(attachments);
-		await this.session.prompt(withTextAttachments(text, attachments), {
+		const sent = withTextAttachments(text, attachments);
+		const promptCommand = this.recordPromptCommand(text, sent);
+		if (promptCommand) this.nameAfterPromptCommand(promptCommand);
+		await this.session.prompt(sent, {
 			source: "rpc",
 			...(images.length ? { images } : {}),
 			...(followUp ? { streamingBehavior: "followUp" as const } : {}),
@@ -1300,18 +1517,55 @@ export class WebSession {
 	}
 
 	/**
-	 * Name the session after its first prompt, with a fire-and-forget sidecar
-	 * call on the session's own model. The sidebar already titles a nameless
-	 * session by its first message, so the generated title only has to beat
-	 * that raw prefix; a failure is dropped and the fallback stays. One
-	 * attempt per open session, and a name set while it runs (the user
-	 * renamed) always wins.
+	 * Journal the line of a prompt command before the kernel expands it (see
+	 * `prompt-commands.ts`), so the flow can show that line instead of the
+	 * template; returns that line. Presentation only: a failure to record it
+	 * must not stop the prompt, which then simply shows expanded.
+	 */
+	private recordPromptCommand(typed: string, sent: string): string | undefined {
+		const record = promptCommandRecord(typed, sent, this.session.promptTemplates);
+		if (!record) return undefined;
+		try {
+			this.session.sessionManager.appendCustomEntry(PROMPT_COMMAND_TYPE, record);
+			this.livePromptCommands.add(record);
+			return record.text;
+		} catch (error) {
+			this.emit({
+				type: "error",
+				message: `Could not record the command line: ${error instanceof Error ? error.message : String(error)}`,
+			});
+			return undefined;
+		}
+	}
+
+	/**
+	 * A session opened by a prompt command is named after that line. Without a
+	 * name the sidebar falls back to the first message, which is the whole
+	 * expanded template, and a slash line is never sent for a generated title.
+	 */
+	private nameAfterPromptCommand(line: string): void {
+		if (this.sessionTitleGenerated || this.session.sessionName) return;
+		if (this.session.sessionManager.getBranch().some(isUserEntry)) return;
+		this.sessionTitleGenerated = true;
+		const name = line.replace(/\s+/g, " ").trim();
+		this.session.setSessionName(
+			name.length > PROMPT_COMMAND_NAME_MAX ? `${name.slice(0, PROMPT_COMMAND_NAME_MAX - 3)}...` : name,
+		);
+	}
+
+	/**
+	 * Name the session after its first input, whatever that input triggers (a
+	 * plain prompt, a `/goal` objective, a skill), with a fire-and-forget
+	 * sidecar call on the session's own model. A goal session journals no user
+	 * message, so without this its sidebar row has no title at all. A failure
+	 * is dropped. One attempt per open session, and a name set while it runs
+	 * (the user renamed) always wins.
 	 */
 	private maybeGenerateSessionTitle(text: string): void {
 		if (this.sessionTitleGenerated || this.session.sessionName) return;
 		// A user message already on the branch means this send is not the first prompt.
 		if (this.session.sessionManager.getBranch().some(isUserEntry)) return;
-		const input = sessionTitleInput(text);
+		const input = sessionTitleInput(text, (name) => this.slashCommandKind(name));
 		if (!input) return;
 		const model = this.session.model;
 		if (!model) return;
@@ -1329,10 +1583,25 @@ export class WebSession {
 			});
 	}
 
+	/**
+	 * What the kernel does with a leading `/name`, in its own dispatch order:
+	 * a registered command (extension commands, the kernel's built-in
+	 * live-context commands, and the reserved names the composer reaches) runs
+	 * first, then a prompt template expands; anything else is plain prompt text.
+	 */
+	private slashCommandKind(name: string): SlashCommandKind {
+		if (LIVE_CONTEXT_COMMANDS.has(name) || isReservedCommandName(name)) return "command";
+		if (this.session.extensionRunner.getCommand(name)) return "command";
+		if (this.session.promptTemplates.some((template) => template.name === name)) return "template";
+		return undefined;
+	}
+
 	/** Hand `text` to the running turn, read before its next model call; refused for extension commands. */
 	async steer(text: string, attachments: readonly WebAttachment[] = []): Promise<void> {
 		const images = imagesOf(attachments);
-		await this.session.steer(withTextAttachments(text, attachments), images.length ? images : undefined);
+		const sent = withTextAttachments(text, attachments);
+		this.recordPromptCommand(text, sent);
+		await this.session.steer(sent, images.length ? images : undefined);
 		const queued = this.session.getSteeringMessages().at(-1);
 		if (queued === undefined || !images.length) return;
 		// The kernel published the steer before its images were recorded here.
@@ -1371,6 +1640,8 @@ export class WebSession {
 	 * was in flight) and nothing is queued before it, it starts at once.
 	 */
 	enqueue(input: { text: string; attachments: readonly WebAttachment[]; files: readonly QueuedFile[] }): void {
+		// Shutdown is in progress: nothing queued now will ever run.
+		if (this.closing) return;
 		const item = this.queue.add(input);
 		if (!this.mustQueue() && this.queue.size === 1) this.dispatchQueued(item.id);
 	}
@@ -1388,6 +1659,8 @@ export class WebSession {
 	 * still wait. Its run's settle dispatches the one after it.
 	 */
 	private dispatchQueued(id?: string): boolean {
+		// Shutdown is in progress: a turn started now would be disposed mid-stream.
+		if (this.closing) return false;
 		if (this.mustQueue()) return false;
 		const item = id ? this.queue.take(id) : this.queue.shift();
 		if (!item) return false;
@@ -1580,9 +1853,6 @@ export class WebSession {
 		readonly feedbackId?: string;
 	}> {
 		const endpoint = resolveFeedbackEndpoint();
-		if (!endpoint) {
-			return { ok: false, message: "Feedback is not configured for this build." };
-		}
 		// An opt-out is a decision about sending anything at all, not just about
 		// the dialog: refuse here too, so a caller that skipped the preview cannot
 		// file a report the user disabled.
@@ -1619,7 +1889,7 @@ export class WebSession {
 			storageRootDir: resolveStepStorageRoot(),
 			sessionId: bundle?.status === "ready" ? bundle.bundle.sessionId : this.id,
 			endpoint,
-			...(bundleEndpoint ? { bundleEndpoint } : {}),
+			bundleEndpoint,
 			username: readFeedbackUsername(),
 			surface: this.feedbackSurface(),
 			env: process.env,
@@ -1666,9 +1936,6 @@ export class WebSession {
 			...(sessionFile ? { sessionFile } : { sessionId: this.id }),
 			cwd: this.cwd,
 			env: process.env,
-			// Nothing can receive the archive without a bundle endpoint; building it
-			// would read and compress up to 24 MiB and promise it on the review page.
-			withoutBundle: resolveFeedbackEndpoint(process.env, true) === undefined,
 			runtime: {
 				...(this.livePermission ? { permissionPreset: this.livePermission } : {}),
 				...(usage ? { contextUsed: usage.tokens, contextWindow: usage.contextWindow } : {}),
@@ -1694,7 +1961,6 @@ export class WebSession {
 	private assertFeedbackEnabled(): void {
 		const disabled = this.feedbackDisabledReason();
 		if (disabled) throw new Error(disabled);
-		if (!resolveFeedbackEndpoint()) throw new Error("Feedback is not configured for this build.");
 	}
 
 	/** Which product filed the report; Desktop runs this same host under Electron. */
@@ -1793,6 +2059,9 @@ export class WebSession {
 		this.holdQueue = true;
 		if (this.startingPrompt) this.startingPrompt.cancelled = true;
 		await this.session.abort();
+		// Closed while the abort was settling: the queue and status belong to a
+		// session nobody is reading any more.
+		if (this.closing) return;
 		const pending = this.session.clearQueue();
 		const steering = this.steeringImages.match(pending.steering);
 		this.steeringImages.clear();
@@ -1801,6 +2070,57 @@ export class WebSession {
 			...pending.followUp.map((text) => ({ text, attachments: [] })),
 		]);
 		this.setStatus("idle");
+	}
+
+	/**
+	 * Wait, bounded by `deadline`, for an accepted prompt to reach its run.
+	 *
+	 * `AgentSession.abort()` only cancels a run that has started: the prompt's
+	 * pre-run work (auth, compaction check, `before_agent_start` hooks such as MCP
+	 * reconciliation) happens first and leaves nothing to abort. Stopping during
+	 * that window used to dispose the session with the prompt still in memory.
+	 * Waiting for the run — not the whole turn — means the abort then lands on a
+	 * real controller; if the pre-run work outlasts the deadline there is nothing
+	 * left to wait for.
+	 */
+	private async awaitRunStart(deadline: number): Promise<void> {
+		while (this.pendingPrompts > 0 && !this.session.isStreaming) {
+			if (Date.now() >= deadline) return;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+	}
+
+	/**
+	 * `interrupt`, but the host stops waiting after `graceMs`.
+	 *
+	 * A turn that settles in time leaves its partial reply on disk. One that
+	 * does not is abandoned so shutdown can finish; the session is closed right
+	 * after, and a stream that ignored the abort has nothing left to write to.
+	 */
+	async stopTurnWithin(graceMs: number): Promise<void> {
+		if (!Number.isFinite(graceMs)) {
+			await this.awaitRunStart(Number.POSITIVE_INFINITY);
+			await this.interrupt();
+			return;
+		}
+		const deadline = Date.now() + graceMs;
+		await this.awaitRunStart(deadline);
+		const remaining = Math.max(0, deadline - Date.now());
+		let timer: NodeJS.Timeout | undefined;
+		const expiry = new Promise<"timeout">((resolveTimeout) => {
+			timer = setTimeout(() => resolveTimeout("timeout"), remaining);
+			timer.unref();
+		});
+		try {
+			const outcome = await Promise.race([this.interrupt().then(() => "stopped" as const), expiry]);
+			if (outcome === "timeout") {
+				console.error(
+					`Stopped waiting for a running turn after ${String(graceMs)} ms; closing the session anyway.`,
+				);
+			}
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+		}
 	}
 
 	async setModel(provider: string, modelId: string): Promise<void> {
@@ -1856,7 +2176,11 @@ export class WebSession {
 					: enabled
 						? `/goal ${(goal ?? "").trim()}`
 						: "/goal clear";
-		await this.session.prompt(prompt, { source: "rpc", streamingBehavior: "followUp" });
+		// Starting a goal is user input; the other toggles carry no text to title.
+		await this.promptTracked(() => {
+			if (mode === "goal" && enabled) this.maybeGenerateSessionTitle(prompt);
+			return this.session.prompt(prompt, { source: "rpc", streamingBehavior: "followUp" });
+		});
 	}
 
 	/**
@@ -1881,23 +2205,34 @@ export class WebSession {
 						: action === "resume"
 							? "/goal resume"
 							: "/goal clear";
-		await this.session.prompt(prompt, { source: "rpc", streamingBehavior: "followUp" });
+		await this.promptTracked(() => {
+			if (action === "start") this.maybeGenerateSessionTitle(prompt);
+			return this.session.prompt(prompt, { source: "rpc", streamingBehavior: "followUp" });
+		});
 	}
 
 	snapshot(): Record<string, unknown> {
 		const manager = this.session.sessionManager;
+		const branch = manager.getBranch();
 		return {
 			id: this.id,
 			cwd: this.cwd,
 			name: this.session.sessionName,
 			status: this.status,
 			unread: this.unread,
+			revision: this.revision,
 			sessionFile: manager.getSessionFile(),
 			archived: this.archived,
-			revertedTurns: revertedTurnIds(manager.getBranch()),
+			revertedTurns: revertedTurnIds(branch),
 			lastRunAborted: this.lastRunAborted,
+			// The newest turn was cut off (a stopped run, or a host that exited
+			// mid-stream). Entries carry it, so a page opened after a restart says
+			// the same thing the live page did. A turn still in flight is not
+			// interrupted: its reply simply has not arrived yet.
+			interruptedTurn: hasInterruptedTurn(branch, this.isBusy()),
 			compacting: this.session.isCompacting,
-			entries: projectEntries(manager.getBranch()),
+			entries: projectEntries(branch),
+			subagentLanes: [...this.subagentLanes.values()],
 			pendingApprovals: this.broker.pendingRequests(),
 			pendingClarifications: this.clarifications.pendingRequests(),
 			pendingSelections: this.selections.pendingRequests(),
@@ -1942,6 +2277,21 @@ export class WebSession {
 	skills(): WebSkill[] {
 		if (!this.session.settingsManager.getEnableSkillCommands()) return [];
 		return webSkills(this.session.resourceLoader.getSkills().skills);
+	}
+
+	/**
+	 * Prompt commands this session expands (plugin commands included). A
+	 * template named like a registered extension command never expands — the
+	 * command runs first — so it is not offered.
+	 */
+	commands(): WebPromptCommand[] {
+		const extensionCommands = new Set(
+			this.session.extensionRunner.getRegisteredCommands().map((command) => command.invocationName),
+		);
+		return webPromptCommands(
+			this.session.promptTemplates,
+			(name) => extensionCommands.has(name) || isReservedCommandName(name),
+		);
 	}
 
 	/**
@@ -1996,7 +2346,21 @@ export class WebSession {
 		);
 	}
 
+	/**
+	 * Stop accepting new work, without closing yet.
+	 *
+	 * Shutdown marks every session before it stops the running turns, so a queued
+	 * dispatch or a request racing the shutdown cannot start one more run in the
+	 * gap between the busy scan and `close`.
+	 */
+	beginClosing(): void {
+		this.closing = true;
+	}
+
 	async close(): Promise<void> {
+		// Refuse new work first: a queued dispatch or an in-flight request must not
+		// start a turn whose reply the disposed session could never persist.
+		this.closing = true;
 		if (this.startingPrompt) this.startingPrompt.cancelled = true;
 		this.clarifications.clear();
 		this.selections.clear();
@@ -2252,22 +2616,40 @@ export class WebSessionStore {
 	}
 
 	/**
-	 * Skills for a workspace without a session yet (a draft). An open session in
-	 * the same folder answers exactly (plugin skills included). Otherwise the
-	 * folder's resources are resolved as a session would (settings, user and
-	 * project skill folders, packages) without extensions and without starting
-	 * anything; only plugin skills, added by an extension, are missing.
+	 * Skills and prompt commands for a workspace without a session yet (a
+	 * draft): what a new session in that folder would load. The folder's
+	 * resources are resolved as a session would (settings, user and project
+	 * skill and prompt folders, packages) without starting anything, and
+	 * installed plugins' skills and commands are added from the same discovery
+	 * the plugin extension answers `resources_discover` with, so a plugin
+	 * installed a moment ago is offered before the draft's first send.
+	 *
+	 * An open session in the same folder is deliberately not reused: its
+	 * resources are fixed when it starts, so after an install it would describe
+	 * the old set.
 	 */
-	async skillsFor(cwd: string): Promise<WebSkill[]> {
-		const open = [...this.sessions.values()].find((session) => session.cwd === cwd);
-		if (open) return open.skills();
+	async slashResourcesFor(cwd: string): Promise<{ skills: WebSkill[]; commands: WebPromptCommand[] }> {
 		const agentDir = resolveStepAgentDir();
 		const configDirName = resolveStepConfigDir();
 		const settingsManager = createStepSettingsManager(cwd, agentDir, { configDirName });
-		if (!settingsManager.getEnableSkillCommands()) return [];
 		const loader = new DefaultResourceLoader({ cwd, agentDir, configDirName, settingsManager, noExtensions: true });
 		await loader.reload();
-		return webSkills(loader.getSkills().skills);
+		const plugins = await discoverStepPluginResourcePaths({
+			userDir: defaultStepPluginsDir(process.env),
+			projectDir: defaultStepPluginsDir(process.env, { cwd, project: true }),
+			projectTrusted: settingsManager.isProjectTrusted(),
+		});
+		const metadata = { source: "extension:step-plugins", scope: "temporary", origin: "top-level" } as const;
+		if (plugins.skillPaths.length > 0 || plugins.promptPaths.length > 0) {
+			loader.extendResources({
+				skillPaths: plugins.skillPaths.map((path) => ({ path, metadata })),
+				promptPaths: plugins.promptPaths.map((path) => ({ path, metadata })),
+			});
+		}
+		return {
+			skills: settingsManager.getEnableSkillCommands() ? webSkills(loader.getSkills().skills) : [],
+			commands: webPromptCommands(loader.getPrompts().prompts, isReservedCommandName),
+		};
 	}
 
 	async archive(id: string, archived: boolean): Promise<WebSession> {
@@ -2322,21 +2704,46 @@ export class WebSessionStore {
 
 	/**
 	 * Stop every running turn the way the Stop button does, then close all
-	 * sessions. Used by a Step sign-out: interrupting first records the turn as
-	 * aborted and keeps the prompt and partial reply on disk, which a bare
-	 * `close()` (disposal mid-stream) would lose. A session that fails to stop
-	 * is still closed.
+	 * sessions. Used by a Step sign-out and by host shutdown.
+	 *
+	 * Stopping first is what keeps the transcript complete: the kernel writes an
+	 * assistant message on `message_end`, and disposal mid-stream never produces
+	 * one, so a bare `close()` drops the reply the page had already been shown
+	 * (thinking included). An interrupted turn instead records an `aborted`
+	 * message carrying everything that streamed.
+	 *
+	 * `graceMs` bounds each stop: a provider that stops answering must not hold
+	 * process exit past the desktop's SIGKILL window, and an abandoned stream is
+	 * still better than a host that never exits. Unbounded without it, which is
+	 * what a sign-out wants.
 	 */
-	async interruptAndClose(): Promise<void> {
+	async interruptAndClose(options: { graceMs?: number; reason?: string } = {}): Promise<void> {
+		const reason = options.reason ?? "signing out";
 		await Promise.allSettled(this.openings.values());
+		// Refuse new work before the busy scan, so nothing can start a turn in the
+		// gap between looking and closing.
+		for (const session of this.sessions.values()) session.beginClosing();
 		const busy = [...this.sessions.values()].filter((session) => session.isBusy());
-		for (const result of await Promise.allSettled(busy.map((session) => session.interrupt()))) {
-			if (result.status === "rejected") console.error("Could not stop a turn before signing out:", result.reason);
+		const stops = busy.map((session) => session.stopTurnWithin(options.graceMs ?? Number.POSITIVE_INFINITY));
+		for (const result of await Promise.allSettled(stops)) {
+			if (result.status === "rejected") console.error(`Could not stop a turn before ${reason}:`, result.reason);
 		}
 		await this.close();
 	}
 }
 
+/** The first-use workspace, when the host prepared one in place of Desktop's home-folder fallback. */
+let launchWorkspaceOverride: string | undefined;
+
+/**
+ * Make `path` the launch folder. Called once at startup with the first-use
+ * workspace (see `WorkspaceRegistry.initializeDefault`), which only exists when
+ * Desktop had no folder of its own to launch in.
+ */
+export function setLaunchWorkspace(path: string): void {
+	launchWorkspaceOverride = path;
+}
+
 export function defaultWorkspace(): string {
-	return process.env.STEPCODE_WEB_CWD?.trim() || process.cwd();
+	return launchWorkspaceOverride ?? (process.env.STEPCODE_WEB_CWD?.trim() || process.cwd());
 }

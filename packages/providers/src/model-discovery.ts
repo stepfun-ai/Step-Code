@@ -306,7 +306,12 @@ export async function discoverModels(request: DiscoverModelsRequest): Promise<Di
 	const apiKey = request.apiKey?.trim();
 	if (api === "anthropic-messages") {
 		headers.set("anthropic-version", ANTHROPIC_VERSION);
-		if (apiKey) headers.set("x-api-key", apiKey);
+		if (apiKey) {
+			headers.set("x-api-key", apiKey);
+			// Anthropic-compatible gateways (e.g. StepFun) accept `x-api-key` on
+			// /messages but only Bearer on /models, so send both schemes.
+			if (!headers.has("authorization")) headers.set("authorization", `Bearer ${apiKey}`);
+		}
 	} else if (apiKey) {
 		headers.set("authorization", `Bearer ${apiKey}`);
 	}

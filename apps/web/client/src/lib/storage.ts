@@ -5,6 +5,7 @@
 
 /** Keys the legacy client persisted; kept verbatim so existing preferences survive. */
 export const STORAGE_KEYS = {
+	tagGroups: "stepcode.tagGroups",
 	theme: "stepcode.theme",
 	locale: "stepcode.locale",
 	previewWrap: "stepcode.previewWrap",
@@ -15,6 +16,10 @@ export const STORAGE_KEYS = {
 	lastModelByProvider: "stepcode.lastModelByProvider",
 	/** Model ids the user favourited; each pins to the top of its provider's list. */
 	pinnedModels: "stepcode.pinnedModels",
+	/** Session ids pinned in the sidebar; pinned rows lead their list. */
+	pinnedSessions: "stepcode.pinnedSessions",
+	/** Session ids in the order the user dragged them into the sidebar. */
+	sessionOrder: "stepcode.sessionOrder",
 } as const;
 
 export function readStorage(key: string): string | null {

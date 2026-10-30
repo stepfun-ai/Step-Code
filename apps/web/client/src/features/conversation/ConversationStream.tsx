@@ -6,6 +6,7 @@ import { setUi, useAppStore } from "../../state/store";
 import type { MessageTimelineItem, SteeringMessage, TimelineItem } from "../../state/types";
 import { Icon } from "../../ui";
 import { Composer } from "../composer";
+import { openSettings } from "../settings/actions";
 import { ClarificationPanel } from "./ClarificationPanel";
 import { CommandRow } from "./CommandRow";
 import { CompactionRow, CompactionRunningRow } from "./CompactionRow";
@@ -35,12 +36,26 @@ import { collectTurnFooters } from "./turn-footers";
  */
 function EmptyConversation() {
 	const t = useT();
+	const draft = useAppStore((state) => state.current === null);
 	return (
-		<div className="empty-state">
-			<span className="empty-mark" aria-hidden="true">
-				<Icon name="stepcode" />
-			</span>
-			<h1 className="empty-title">{t("emptyTitle")}</h1>
+		<div className="empty-conversation">
+			<div className="empty-state">
+				<span className="empty-mark" aria-hidden="true">
+					<Icon name="stepcode" />
+				</span>
+				<h1 className="empty-title">{t("emptyTitle")}</h1>
+			</div>
+			{draft ? (
+				<button
+					type="button"
+					id="emptySessionImport"
+					className="empty-session-import"
+					onClick={() => openSettings("migration")}
+				>
+					<Icon name="folder" size="sm" />
+					<span>{t("emptySessionImport")}</span>
+				</button>
+			) : null}
 		</div>
 	);
 }
@@ -90,9 +105,9 @@ export function ConversationStream() {
 	const compacting = useAppStore((state) => state.compacting);
 	const notices = useAppStore((state) => state.notices);
 	const revertedTurns = useAppStore((state) => state.current?.revertedTurns);
-	// Shown with a sent message's timestamp; the transcript stores no per-message model.
-	// An interrupted turn has no finished reply, so it gets no model and no time.
-	const lastRunAborted = useAppStore((state) => state.current?.lastRunAborted === true);
+	// The newest turn was cut off (a stopped run, or a host that exited mid-stream).
+	// The host derives it from the recorded entries, so a reopened session says it too.
+	const interrupted = useAppStore((state) => state.current?.interruptedTurn === true);
 	const reveal = useAppStore((state) => state.ui.revealEntry);
 	const running = status === "running";
 	const busy = running || status === "waiting";
@@ -111,6 +126,14 @@ export function ConversationStream() {
 		() => new Map(collectTurnFooters(items, status, pendingTurn !== null).map((turn) => [turn.lastIndex, turn])),
 		[items, status, pendingTurn],
 	);
+	const timestampOnly = useMemo(() => {
+		const actionTurns = new Set([...footerAfter.values()].map((turn) => turn.turnId));
+		return new Set(
+			collectTurnFooters(items, status, pendingTurn !== null, true)
+				.filter((turn) => !actionTurns.has(turn.turnId))
+				.map((turn) => turn.messages.at(-1)),
+		);
+	}, [items, status, pendingTurn, footerAfter]);
 	// Each delivery carries its own turn's change, so its card opens that turn's diff, not the file as it is now.
 	const artifactsAfter = useMemo(() => {
 		const changesByTurn = new Map(turns.map((turn) => [turn.turnId, turn]));
@@ -166,10 +189,6 @@ export function ConversationStream() {
 		}
 		stick.current = false;
 		target.scrollIntoView({ block: reveal.block ?? "center", behavior: reveal.behavior });
-		target.animate([{ backgroundColor: "var(--selection)" }, { backgroundColor: "transparent" }], {
-			duration: 1600,
-			easing: "ease-out",
-		});
 	}, [reveal, sessionId, items, t]);
 	// The live reply grows between store updates (smooth reveal), so watch the size too.
 	useEffect(() => {
@@ -203,6 +222,16 @@ export function ConversationStream() {
 		previousRows.current = next;
 		return next;
 	}, [items, running, breaks]);
+	// A layout-neutral scope bounds hover/focus to one user-delimited turn, including trailing processes.
+	const presentationTurns = useMemo(() => {
+		const scoped: { key: string; rows: (IndexedTimelineRow | ProcessGroupRow)[] }[] = [];
+		for (const row of presentation) {
+			if (!scoped.length || (!("kind" in row) && row.item.kind === "message" && row.item.role === "user"))
+				scoped.push({ key: row.key, rows: [] });
+			scoped[scoped.length - 1].rows.push(row);
+		}
+		return scoped;
+	}, [presentation]);
 	// Rewriting swaps the message for the compact edit composer, in place.
 	const editingPrompt = useAppStore((state) => state.ui.editingPrompt);
 	// A turn that starts under an open editor (a goal round fires at any idle
@@ -253,78 +282,96 @@ export function ConversationStream() {
 			aria-busy={opening || undefined}
 		>
 			<div className="stream-inner" id="streamInner" ref={innerRef}>
-				{items.length || pendingTurn || steering.length || compacting || sessionNotices.length ? (
+				{items.length || pendingTurn || steering.length || compacting || sessionNotices.length || interrupted ? (
 					<>
-						{presentation.map((row) => {
-							const card = cardAfter.get(row.lastIndex);
-							const footer = footerAfter.get(row.lastIndex);
-							// Always a fragment, so a card appearing under a row does not remount the row.
-							return (
-								<Fragment key={`${sessionId}:${row.key}`}>
-									{"kind" in row ? (
-										<ProcessGroup
-											group={row}
-											revealEntryId={reveal?.sessionId === sessionId ? reveal.entryId : undefined}
-										/>
-									) : row.item.kind === "message" ? (
-										editingEntryId !== "" && editingEntryId === row.item.entryId ? (
-											<div className="edit-prompt-slot">
-												<Composer variant="edit" />
-											</div>
-										) : (
-											<MessageItem
-												item={row.item}
-												attachments={
-													row.item.role === "assistant" ? attachmentsFor.get(row.item) : undefined
-												}
-												rewritableBefore={
-													!rewriteClosed && items[lastUserIndex] === row.item
-														? (rewriteBefore ?? "")
-														: undefined
-												}
-											/>
-										)
-									) : row.item.kind === "tool" ? (
-										<>
-											<ToolRow item={row.item} />
-											{row.item.planReview ? <PlanReviewCard review={row.item.planReview} /> : null}
-										</>
-									) : row.item.kind === "thinking" ? (
-										<ThinkingDisclosure item={row.item} active={running} />
-									) : row.item.kind === "retry" ? (
-										<RetryRow item={row.item} />
-									) : row.item.kind === "command" ? (
-										editingEntryId !== "" && editingEntryId === row.item.entryId ? (
-											<div className="edit-prompt-slot">
-												<Composer variant="edit" />
-											</div>
-										) : (
-											<CommandRow
-												item={row.item}
-												rewritableBefore={
-													!rewriteClosed && items[lastUserIndex] === row.item
-														? (rewriteBefore ?? "")
-														: undefined
-												}
-											/>
-										)
-									) : row.item.kind === "compaction" ? (
-										<CompactionRow item={row.item} />
-									) : row.item.kind === "goal-round" ? (
-										<GoalRoundRow item={row.item} />
-									) : (
-										<ApprovalCard approval={row.item.approval} />
-									)}
-									{card ? (
-										<TurnChangesCard turn={card} reverted={Boolean(revertedTurns?.includes(card.turnId))} />
-									) : null}
-									{footer ? (
-										<MessageActions key={footer.turnId} messages={footer.messages} aborted={lastRunAborted} />
-									) : null}
-								</Fragment>
-							);
-						})}
+						{presentationTurns.map((turn) => (
+							<div className="conversation-turn" key={`${sessionId}:${turn.key}`}>
+								{turn.rows.map((row) => {
+									const card = cardAfter.get(row.lastIndex);
+									const footer = footerAfter.get(row.lastIndex);
+									const timestampItem = footer?.messages.at(-1);
+									// Always a fragment, so a card appearing under a row does not remount the row.
+									return (
+										<Fragment key={`${sessionId}:${row.key}`}>
+											{"kind" in row ? (
+												<ProcessGroup
+													group={row}
+													revealEntryId={reveal?.sessionId === sessionId ? reveal.entryId : undefined}
+												/>
+											) : row.item.kind === "message" ? (
+												editingEntryId !== "" && editingEntryId === row.item.entryId ? (
+													<div className="edit-prompt-slot">
+														<Composer variant="edit" />
+													</div>
+												) : (
+													<MessageItem
+														item={row.item}
+														inlineTimestamp={timestampOnly.has(row.item)}
+														attachments={
+															row.item.role === "assistant" ? attachmentsFor.get(row.item) : undefined
+														}
+														rewritableBefore={
+															!rewriteClosed && items[lastUserIndex] === row.item
+																? (rewriteBefore ?? "")
+																: undefined
+														}
+													/>
+												)
+											) : row.item.kind === "tool" ? (
+												<>
+													<ToolRow item={row.item} />
+													{row.item.planReview ? <PlanReviewCard review={row.item.planReview} /> : null}
+												</>
+											) : row.item.kind === "thinking" ? (
+												<ThinkingDisclosure item={row.item} active={running} />
+											) : row.item.kind === "retry" ? (
+												<RetryRow item={row.item} />
+											) : row.item.kind === "command" ? (
+												editingEntryId !== "" && editingEntryId === row.item.entryId ? (
+													<div className="edit-prompt-slot">
+														<Composer variant="edit" />
+													</div>
+												) : (
+													<CommandRow
+														item={row.item}
+														rewritableBefore={
+															!rewriteClosed && items[lastUserIndex] === row.item
+																? (rewriteBefore ?? "")
+																: undefined
+														}
+													/>
+												)
+											) : row.item.kind === "compaction" ? (
+												<CompactionRow item={row.item} />
+											) : row.item.kind === "goal-round" ? (
+												<GoalRoundRow item={row.item} />
+											) : (
+												<ApprovalCard approval={row.item.approval} />
+											)}
+											{card ? (
+												<TurnChangesCard
+													turn={card}
+													reverted={Boolean(revertedTurns?.includes(card.turnId))}
+												/>
+											) : null}
+											{footer ? (
+												<MessageActions
+													key={footer.turnId}
+													messages={footer.messages}
+													timestampItem={timestampItem}
+												/>
+											) : null}
+										</Fragment>
+									);
+								})}
+							</div>
+						))}
 						{compacting ? <CompactionRunningRow /> : null}
+						{interrupted ? (
+							<div className="interrupted-row">
+								<span className="interrupted-label">{t("interruptedTurn")}</span>
+							</div>
+						) : null}
 						{steering.map((message, index) => (
 							<MessageItem
 								// Kernel texts carry no id; equal texts are interchangeable here.

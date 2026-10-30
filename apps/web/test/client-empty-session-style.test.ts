@@ -43,6 +43,22 @@ test("the stylesheet matches the markup the empty state renders", () => {
 	assert.doesNotMatch(css, /\.empty-wordmark/u, "the retired wordmark styles");
 });
 
+test("migration stays below the centred mark and question without an application subtitle", async () => {
+	assert.match(rule(".empty-conversation"), /flex-direction:\s*column/u);
+	assert.match(rule(".empty-conversation"), /align-items:\s*center/u);
+	assert.match(rule(".empty-state"), /flex:\s*0 0 auto/u);
+	assert.match(
+		component,
+		/className="empty-conversation">\s*<div className="empty-state">[\s\S]*?<h1 className="empty-title">[\s\S]*?<\/h1>\s*<\/div>\s*\{draft/u,
+	);
+	assert.doesNotMatch(component, /emptySessionImportSources/u);
+	assert.doesNotMatch(css, /\.empty-session-import small/u);
+	const messages = await readFile(new URL("../client/src/i18n/messages.ts", import.meta.url), "utf8");
+	assert.match(messages, /emptySessionImport: "迁移历史会话到 StepCode"/u);
+	assert.match(messages, /emptySessionImport: "Migrate sessions into StepCode"/u);
+	assert.doesNotMatch(messages, /emptySessionImportSources/u);
+});
+
 test("startup is not drawn as a centred new conversation", () => {
 	// Before bootstrap picks a session the timeline is empty, but that is loading,
 	// not a new conversation: painting it centred moved the composer into the middle

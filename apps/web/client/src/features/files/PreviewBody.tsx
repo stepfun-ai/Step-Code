@@ -3,17 +3,17 @@
  * `buildCodeView`; app.js 1771-1873).
  */
 
-import { type CSSProperties, type ReactNode, useLayoutEffect, useMemo, useRef } from "react";
-import { useT } from "../../i18n";
+import { type CSSProperties, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useMarkdownLabels, useT } from "../../i18n";
 import { localFileApi, workspaceApi } from "../../lib/api";
 import { basename, cx, formatBytes } from "../../lib/format";
-import { renderMarkdown } from "../../lib/markdown";
 import { copyText } from "../../state/session";
 import { type FilePreviewTab, type PreviewTab, type SideAnswerTab, useAppStore } from "../../state/store";
 import { Icon, MarkdownView, Spinner } from "../../ui";
 import { openFileReference } from "./actions";
 import { codeViewHtml, isMarkdownPath, PREVIEW_LINE_LIMIT } from "./highlight";
-import { sideAnswerHtml } from "./side-answer-html";
+
+const copyCode = (code: string) => copyText(code, null);
 
 /** The tab the preview shows, or undefined when there are no tabs. */
 export function useActiveTab(): PreviewTab | undefined {
@@ -65,6 +65,18 @@ function PreviewMessage({ children }: { readonly children: ReactNode }) {
 	return <div className="preview-message">{children}</div>;
 }
 
+/**
+ * The bytes of a previewed image. A load that fails anyway — the file grew past
+ * the host's image limit after the tab read it, or it was removed — replaces
+ * the broken-image icon with a message; the icon alone carries no reason.
+ */
+function PreviewImage({ path, src }: { readonly path: string; readonly src: string }) {
+	const t = useT();
+	const [failed, setFailed] = useState(false);
+	if (failed) return <PreviewMessage>{t("imageLoadFailed")}</PreviewMessage>;
+	return <img className="preview-image" alt={basename(path)} src={src} onError={() => setFailed(true)} />;
+}
+
 function CodeView({ content, path }: { readonly content: string; readonly path: string }) {
 	const t = useT();
 	const wrap = useAppStore((state) => state.preview.wrap);
@@ -83,10 +95,7 @@ function CodeView({ content, path }: { readonly content: string; readonly path: 
 
 function SideAnswer({ tab }: { readonly tab: SideAnswerTab }) {
 	const t = useT();
-	const html = useMemo(
-		() => sideAnswerHtml(tab.text, { code: t("code"), copy: t("copy"), table: t("markdownTable") }),
-		[tab.text, t],
-	);
+	const labels = useMarkdownLabels();
 	if (tab.pending) {
 		return (
 			<div className="side-answer" data-pending="true">
@@ -103,8 +112,10 @@ function SideAnswer({ tab }: { readonly tab: SideAnswerTab }) {
 			<p className="side-answer-question">{tab.question}</p>
 			<MarkdownView
 				className="side-answer-body message-body"
-				html={html}
-				onCopyCode={(code) => void copyText(code)}
+				source={tab.text}
+				labels={labels}
+				onCopyCode={copyCode}
+				copiedLabel={t("copied")}
 			/>
 			<p className="side-answer-note">{t("btwNotSaved")}</p>
 		</div>
@@ -113,6 +124,7 @@ function SideAnswer({ tab }: { readonly tab: SideAnswerTab }) {
 
 function PreviewContent({ tab }: { readonly tab: PreviewTab }) {
 	const t = useT();
+	const labels = useMarkdownLabels();
 	if (tab.kind === "btw") return <SideAnswer tab={tab} />;
 	const file = tab.file;
 	if (tab.loading) return <PreviewMessage>{t("loadingFile")}</PreviewMessage>;
@@ -120,9 +132,8 @@ function PreviewContent({ tab }: { readonly tab: PreviewTab }) {
 	if (!file) return null;
 	if (file.kind === "image")
 		return (
-			<img
-				className="preview-image"
-				alt={basename(file.path)}
+			<PreviewImage
+				path={file.path}
 				src={
 					tab.scope === "local"
 						? localFileApi("/raw", tab.path)
@@ -140,12 +151,11 @@ function PreviewContent({ tab }: { readonly tab: PreviewTab }) {
 		return (
 			<MarkdownView
 				className="preview-markdown message-body"
-				html={renderMarkdown(
-					file.content,
-					{ code: t("code"), copy: t("copy"), table: t("markdownTable") },
-					{ localFiles: true },
-				)}
-				onCopyCode={(code) => void copyText(code)}
+				source={file.content}
+				labels={labels}
+				localFiles
+				onCopyCode={copyCode}
+				copiedLabel={t("copied")}
 				onFileReference={(path) => void openFileReference(tab.cwd, path, tab.path)}
 			/>
 		);

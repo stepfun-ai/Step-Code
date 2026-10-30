@@ -52,7 +52,9 @@ export function groupProcessRows(
 			rows: pending,
 			running: pending.some(
 				({ item, index }) =>
-					active && index > lastUser && (item.kind === "thinking" ? item.running : item.state === "pending"),
+					active &&
+					index > lastUser &&
+					(item.kind === "thinking" ? item.running : !item.imported && item.state === "pending"),
 			),
 		});
 		pending = [];
@@ -68,8 +70,11 @@ export function groupProcessRows(
 				!SEPARATE_TOOLS.has(item.toolName) &&
 				!item.children?.length &&
 				!item.workflowRun &&
-				item.state !== "failed" &&
-				(item.state === "completed" || (active && index > lastUser && !awaiting.has(item.toolName))))
+				// A failed call is ordinary process output: it folds with its siblings and shows its state when opened.
+				(item.state === "completed" ||
+					item.state === "failed" ||
+					(item.imported && item.state === "unknown") ||
+					(active && index > lastUser && !awaiting.has(item.toolName))))
 		) {
 			pending.push({ ...row, item });
 		} else {
@@ -105,7 +110,7 @@ export function reuseUnchangedRows(
 	});
 }
 
-/** DFSC Simple uses the current tool subject, or the latest paragraph of live thinking. */
+/** Summarizes the current tool subject, or the latest paragraph of live thinking. */
 export function processGroupSummary(
 	group: ProcessGroup,
 	t: TranslateFn,
@@ -137,6 +142,10 @@ export function processGroupSummary(
 		};
 	}
 	if (!tools.length) return { label: t("processThinkingRecorded"), detail: "", icon: "brain" };
+	// Only unconfirmed outcomes (imported history) make the summary neutral; a failed call still finished.
+	if (tools.some((tool) => tool.state !== "completed" && tool.state !== "failed")) {
+		return { label: t("processRecordedTools", { count: tools.length }), detail: "", icon: "wrench" };
+	}
 	const counts = new Map<string, number>();
 	for (const tool of tools) {
 		const kind = toolKind(tool);

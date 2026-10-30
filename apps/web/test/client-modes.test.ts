@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { chooseMode, clearModes, modePrefix } from "../client/src/features/composer/actions.ts";
-import { commandLeadIcon, MODES, modeFromCommand } from "../client/src/features/composer/modes.ts";
+import { commandLeadIcon, MODES, modeFromCommand, PICKABLE_MODES } from "../client/src/features/composer/modes.ts";
 import { MESSAGES } from "../client/src/i18n/messages.ts";
 import { createInitialState, getState, setState, type ModeId } from "../client/src/state/store.ts";
 
@@ -88,6 +88,20 @@ test("each mode has its accent and lead theme in composer.css", () => {
 	assert.ok(css.includes(".prompt-command"), "no plain-command lead chip rule");
 	// Plain leading commands share the lead shape through their own class.
 	assert.ok(css.includes(".prompt-command"), "no plain-command lead class");
+});
+
+test("ultracode is hidden from the picker while its command keeps working", () => {
+	// Web and Desktop do not offer the mode until its interaction is finished,
+	// but nothing behind it was removed: the keyword still stages the same mode,
+	// the same kernel prefix, and its chip keeps its own label and placeholder.
+	assert.equal(MODES.find((mode) => mode.id === "ultraloop")?.hidden, true);
+	assert.deepEqual(
+		PICKABLE_MODES.map((mode) => mode.id),
+		["goal", "plan"],
+	);
+	assert.equal(modeFromCommand("ultracode"), "ultraloop");
+	assert.equal(modeFromCommand("ultraloop"), "ultraloop");
+	assert.equal(modePrefix("ultraloop"), "ultracode: ");
 });
 
 test("the mode commands stage their mode; the keyword form maps to the same mode", () => {

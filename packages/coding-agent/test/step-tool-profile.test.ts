@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import { createWriteToolDefinition, MAX_WRITE_PATCH_BYTES } from "../src/core/tools/write.ts";
 import { createStepToolProfile, stepToolNames } from "../src/step/tool-profile.ts";
 import { stepModel } from "./utilities.ts";
 
@@ -227,6 +228,51 @@ describe("Step tool profile", () => {
 			);
 			expect(changed.details).toMatchObject({ changed: true, charsWritten: 17 });
 			expect(await readFile(filePath, "utf8")).toBe("one\r\ntwo\r\nthree\r\n");
+			// Recorded like `write`: an LF patch, plus the overwritten file's line ending.
+			expect(changed.details).toMatchObject({
+				patch: expect.stringContaining("+three"),
+				previous: { lineEnding: "\r\n", bom: false },
+			});
+			expect((changed.details as { created?: boolean }).created).toBeUndefined();
+			expect((noOp.details as { patch?: string }).patch).toBeUndefined();
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("records write_file changes like write: created files, patches and untracked reasons", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-tool-profile-"));
+		try {
+			const write = createStepToolProfile(root).find((tool) => tool.name === "write_file")!;
+			const run = (id: string, path: string, content: string) =>
+				write.execute(id, { path, content }, undefined, undefined, undefined as never);
+
+			const created = await run("create", "demo.html", "<p>hi</p>\n");
+			expect(created.details).toMatchObject({
+				changed: true,
+				created: true,
+				patch: expect.stringMatching(/@@ -0,0 \+1(,1)? @@\n\+<p>hi<\/p>/),
+			});
+			await mkdir(join(root, "native"));
+			const native = await createWriteToolDefinition(join(root, "native")).execute(
+				"native",
+				{ path: "demo.html", content: "<p>hi</p>\n" },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+			// One change format for both tools, so clients diff and undo them alike.
+			expect((created.details as { patch?: string }).patch).toBe((native.details as { patch?: string }).patch);
+
+			await writeFile(join(root, "blob.bin"), Buffer.from([1, 0, 2]));
+			expect((await run("binary", "blob.bin", "text\n")).details).toMatchObject({
+				changed: true,
+				untracked: "binary",
+			});
+			expect((await run("large", "large.txt", "x".repeat(MAX_WRITE_PATCH_BYTES + 1))).details).toMatchObject({
+				changed: true,
+				untracked: "too_large",
+			});
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

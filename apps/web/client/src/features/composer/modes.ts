@@ -16,6 +16,12 @@ export const MODES: ReadonlyArray<{
 	readonly descKey: string;
 	/** The prompt's placeholder while the mode is staged: coaches what to type. */
 	readonly placeholderKey: string;
+	/**
+	 * Kept out of the picker while its interaction is unfinished; everything else
+	 * about the mode (typed command, lead chip, kernel prefix, message badge) keeps
+	 * working, so an existing message and a typed `ultracode:` still render.
+	 */
+	readonly hidden?: true;
 }> = [
 	{
 		id: "goal",
@@ -37,8 +43,14 @@ export const MODES: ReadonlyArray<{
 		labelKey: "modeUltraloop",
 		descKey: "modeUltraloopDesc",
 		placeholderKey: "modeUltraloopPlaceholder",
+		// Ultracode is hidden in Web and Desktop for now: its interaction is not
+		// finished. The mode itself, its keyword and its alias stay wired.
+		hidden: true,
 	},
 ];
+
+/** The modes the ＋ menu offers; a hidden mode stays usable through its command. */
+export const PICKABLE_MODES: ReadonlyArray<(typeof MODES)[number]> = MODES.filter((mode) => !mode.hidden);
 
 /* ── Leading commands ─────────────────────────────────────────────────────── */
 

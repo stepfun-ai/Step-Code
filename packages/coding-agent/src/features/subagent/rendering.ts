@@ -18,6 +18,7 @@ import {
 	type StepSubagentResultRecord,
 	type StepSubagentUsage,
 } from "../step-subagent.ts";
+import { totalResults } from "./helpers.ts";
 import { type AgentNotificationDetails, truncateText } from "./lane-events.ts";
 
 const COLLAPSED_OUTPUT_LINES = 8;
@@ -181,8 +182,17 @@ export function subagentListSignature(details: StepSubagentDetails): string {
 	const rows = details.results
 		.slice(0, WIDGET_MAX_ROWS)
 		.map((record) => [record.status, record.agent, record.task, record.usage.output].join("\u0000"));
-	return [details.results.length, ...rows].join("\u0001");
+	return [totalResults(details), ...rows].join("\u0001");
 }
+
+/**
+ * Tasks in the call, including any a byte-bounded live frame left out.
+ *
+ * Defined in the leaf helpers module so the lane notifications can use it
+ * without importing a renderer; re-exported here for the renderers below and
+ * their tests.
+ */
+export { totalResults };
 
 /**
  * Live list of a blocking subagent call's lanes, rendered under the editor.
@@ -218,12 +228,13 @@ export class SubagentListWidget implements Component {
 		const records = this.details.results;
 		if (records.length === 0) return [];
 		const theme = this.theme;
+		const total = totalResults(this.details);
 		const running = records.filter((record) => record.status === "running").length;
 		const completed = records.filter((record) => record.status === "completed").length;
 		const queued = records.filter((record) => record.status === "queued").length;
 		const skipped = records.filter((record) => record.status === "skipped").length;
 		const failed = records.length - running - completed - queued - skipped;
-		const summary = [`${completed}/${records.length} complete`];
+		const summary = [`${completed}/${total} complete`];
 		if (running > 0) summary.push(`${running} running`);
 		if (queued > 0) summary.push(`${queued} queued`);
 		if (failed > 0) summary.push(`${failed} failed`);
@@ -263,8 +274,8 @@ export class SubagentListWidget implements Component {
 			const row = `   ${statusIcon(record.status, theme)} ${theme.fg("accent", name)} ${theme.fg("toolOutput", title)}${" ".repeat(gap)}${theme.fg("dim", metric.padStart(metricWidth))}`;
 			lines.push(visibleWidth(row) > width ? truncateToWidth(row, width, "\u2026") : row);
 		}
-		if (records.length > shown.length) {
-			lines.push(`   ${theme.fg("dim", `... ${records.length - shown.length} more`)}`);
+		if (total > shown.length) {
+			lines.push(`   ${theme.fg("dim", `... ${total - shown.length} more`)}`);
 		}
 		return lines;
 	}
@@ -280,12 +291,14 @@ export function renderSubagentResult(
 		const text = result.content.find((block) => block.type === "text");
 		return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
 	}
+	const total = totalResults(details);
 	const running = details.results.filter((record) => record.status === "running").length;
 	const queued = details.results.filter((record) => record.status === "queued").length;
 	const completed = details.results.filter((record) => record.status === "completed").length;
+	const omitted = details.omittedResults ? `, ${details.omittedResults} not shown` : "";
 	const heading =
 		details.mode === "parallel"
-			? `${completed}/${details.results.length} complete${running > 0 ? `, ${running} running` : ""}${queued > 0 ? `, ${queued} queued` : ""}`
+			? `${completed}/${total} complete${running > 0 ? `, ${running} running` : ""}${queued > 0 ? `, ${queued} queued` : ""}${omitted}`
 			: details.mode === "chain"
 				? chainHeading(details.results)
 				: (details.results[0]?.status ?? "done");

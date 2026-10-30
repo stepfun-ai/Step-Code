@@ -15,6 +15,7 @@ async function main() {
 		cliPath: join(__dirname, "../dist/bundle/step.js"),
 		provider: "anthropic",
 		model: "claude-sonnet-4-20250514",
+		includeLiveEvents: true,
 		args: ["--no-session"],
 	});
 

@@ -1,4 +1,13 @@
-import { type CSSProperties, cloneElement, type ReactElement, type ReactNode, type Ref, useId } from "react";
+import {
+	type CSSProperties,
+	cloneElement,
+	type ReactElement,
+	type ReactNode,
+	type Ref,
+	useId,
+	useLayoutEffect,
+	useRef,
+} from "react";
 import { cx } from "../../lib/format";
 import { useMergedRef } from "../hooks/useMergedRef";
 import styles from "./Tooltip.module.css";
@@ -21,6 +30,11 @@ export interface TooltipProps {
 	/** Extra classes on the hint element, for feature-specific surface styles. */
 	readonly className?: string;
 	/**
+	 * `top` (default): centred above the trigger. `right`: beside the trigger, top edges aligned,
+	 * for a card describing a whole list row; it moves up or to the left when there is no room.
+	 */
+	readonly placement?: "top" | "right";
+	/**
 	 * Passed through to the trigger (merged with its own), so a wrapper that
 	 * clones its child, such as Popover, reaches the real element.
 	 */
@@ -29,8 +43,8 @@ export interface TooltipProps {
 }
 
 /**
- * Hover and keyboard-focus hint, placement "top": centered over its trigger and
- * shifted sideways only when a viewport edge leaves no room.
+ * Hover and keyboard-focus hint, placement "top" by default: centered over its trigger and
+ * shifted sideways only when a viewport edge leaves no room ("right" places it beside the trigger).
  *
  * The hint is rendered as the trigger's next sibling, not inside it and with no
  * wrapper, so the trigger's own layout and the selectors on it stay unchanged;
@@ -39,10 +53,16 @@ export interface TooltipProps {
  * (`:hover + hint`, `:focus-visible + hint`), so hovering costs no re-render.
  * It stays mounted while `content` is set.
  *
+ * The hint is a manual popover, opened on mount and again whenever its trigger
+ * is hovered or focused (a DOM move closes it). That only moves it to the top
+ * layer: no ancestor's stacking context, `overflow` or containment (`.main` is
+ * a size container) can paint a neighbouring panel over it or clip it. The CSS
+ * above still decides whether it is displayed.
+ *
  * `aria-describedby` points at the hint unless the hint repeats the trigger's
  * `aria-label` word for word, which would only make a screen reader say it twice.
  */
-export function Tooltip({ content, children, id, className, style, ref }: TooltipProps) {
+export function Tooltip({ content, children, id, className, placement = "top", style, ref }: TooltipProps) {
 	const autoId = useId();
 	const hintId = id ?? `tooltip-${autoId}`;
 	const anchorName = `--tooltip-${autoId.replace(/[^\w-]/g, "")}`;
@@ -50,6 +70,24 @@ export function Tooltip({ content, children, id, className, style, ref }: Toolti
 	const repeatsLabel = typeof content === "string" && content === children.props["aria-label"];
 	const describedBy = cx(children.props["aria-describedby"], shown && !repeatsLabel && hintId) || undefined;
 	const triggerRef = useMergedRef(ref, children.props.ref);
+	const hintRef = useRef<HTMLSpanElement>(null);
+	useLayoutEffect(() => {
+		const hint = hintRef.current;
+		// Browsers without the Popover API keep the in-flow fixed hint.
+		if (!shown || !hint || typeof hint.showPopover !== "function") return;
+		const open = () => {
+			if (hint.isConnected && !hint.matches(":popover-open")) hint.showPopover();
+		};
+		open();
+		// Moving a node in the DOM (a list reorder) closes its popover; reopen it before the hint shows.
+		const trigger = hint.previousElementSibling;
+		trigger?.addEventListener("pointerenter", open);
+		trigger?.addEventListener("focusin", open);
+		return () => {
+			trigger?.removeEventListener("pointerenter", open);
+			trigger?.removeEventListener("focusin", open);
+		};
+	}, [shown]);
 	const triggerStyle = { ...children.props.style, ...style };
 	// The trigger may carry another anchor name (a popover anchored to it); keep both.
 	const ownAnchor = triggerStyle.anchorName;
@@ -64,9 +102,11 @@ export function Tooltip({ content, children, id, className, style, ref }: Toolti
 			{trigger}
 			{shown ? (
 				<span
-					className={cx(styles.root, className)}
+					ref={hintRef}
+					className={cx(styles.root, placement === "right" && styles.right, className)}
 					id={hintId}
 					role="tooltip"
+					popover="manual"
 					style={{ positionAnchor: anchorName }}
 				>
 					{content}

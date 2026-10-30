@@ -251,6 +251,81 @@ test("a hand-written literal key in the declaration survives an edit and is repo
 	});
 });
 
+test("an edit keeps the model and provider fields the form does not show", async () => {
+	// `compat` decides how a request is built (adaptive vs budget thinking), and
+	// `cost`/`headers`/`samplingParams` are hand-written values this page never
+	// renders. Editing the provider — rotating its key, say — must not drop them.
+	await mkdir(join(home, ".stepcode"), { recursive: true });
+	await writeFile(
+		join(home, ".stepcode", "models.json"),
+		JSON.stringify({
+			providers: {
+				"gw-hidden": {
+					baseUrl: "https://gw.example",
+					api: "anthropic-messages",
+					headers: { "x-gw": "1" },
+					compat: { supportsStrictTools: true },
+					authHeader: true,
+					modelOverrides: { "m-keep": { contextWindow: 4096 } },
+					models: [
+						{
+							id: "m-keep",
+							reasoning: true,
+							thinkingLevelMap: { low: "low" },
+							maxTokens: 64000,
+							compat: { forceAdaptiveThinking: true },
+							cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0.5 },
+							headers: { "x-model": "1" },
+						},
+						{ id: "m-dropped", reasoning: true },
+					],
+				},
+			},
+		}),
+		"utf8",
+	);
+
+	await saveModelProvider(
+		"gw-hidden",
+		{
+			baseUrl: "https://gw.example",
+			api: "anthropic-messages",
+			apiKey: "sk-rotated",
+			models: [
+				{ id: "m-keep", reasoning: true, thinkingLevelMap: { low: "low" }, maxTokens: 8192 },
+				{ id: "m-added" },
+			],
+		},
+		{ replace: true },
+	);
+
+	const document = await onDisk();
+	assert.deepEqual((document.providers as Record<string, Record<string, unknown>>)["gw-hidden"], {
+		headers: { "x-gw": "1" },
+		compat: { supportsStrictTools: true },
+		authHeader: true,
+		modelOverrides: { "m-keep": { contextWindow: 4096 } },
+		baseUrl: "https://gw.example",
+		api: "anthropic-messages",
+		models: [
+			{
+				compat: { forceAdaptiveThinking: true },
+				cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0.5 },
+				headers: { "x-model": "1" },
+				// The form owns these, so its values win — including a lowered cap.
+				id: "m-keep",
+				reasoning: true,
+				thinkingLevelMap: { low: "low" },
+				maxTokens: 8192,
+			},
+			// A row the form no longer sends is gone: removing a model is an edit.
+			{ id: "m-added" },
+		],
+	});
+	assert.deepEqual((await authOnDisk())["gw-hidden"], { type: "api_key", key: "sk-rotated" });
+	await deleteModelProvider("gw-hidden");
+});
+
 test("deleting a provider removes its declaration and its stored key", async () => {
 	await saveModelProvider("gw-del", { baseUrl: "https://gw.example/v1", api: "openai-completions", apiKey: "sk-del" }, { replace: false });
 	await deleteModelProvider("gw-del");
@@ -396,6 +471,46 @@ test("discovery reports the failure the user can act on", async () => {
 	await rejectsWith(() => discoverProviderModels({ baseUrl: "https://gw.example/v1", api: "google-generative-ai" }), 400);
 	await rejectsWith(() => discoverProviderModels({ baseUrl: "not a url", api: "openai-completions" }), 400);
 	await rejectsWith(() => discoverProviderModels({ baseUrl: "", api: "openai-completions" }), 400);
+});
+
+test("discovery with a blank key uses the provider's stored key, and a typed key still wins", async () => {
+	const seen: (string | undefined)[] = [];
+	const endpoint = await mockEndpoint((_url, headers, response) => {
+		const key = typeof headers["x-api-key"] === "string" ? headers["x-api-key"] : undefined;
+		seen.push(key);
+		if (key !== "sk-stored" && key !== "sk-typed") {
+			jsonResponse(response, { error: "bad key" }, 401);
+			return;
+		}
+		jsonResponse(response, { data: [{ id: "claude-x" }] });
+	});
+	try {
+		await saveModelProvider(
+			"gw-discover",
+			{ baseUrl: endpoint.url, api: "anthropic-messages", apiKey: "sk-stored", models: [{ id: "claude-x" }] },
+			{ replace: false },
+		);
+		// Editing a saved provider: the key field is blank, the stored key answers.
+		const models = await discoverProviderModels({ providerId: "gw-discover", baseUrl: endpoint.url, api: "anthropic-messages" });
+		assert.deepEqual(models, [{ id: "claude-x", name: "claude-x" }]);
+		assert.equal(seen.at(-1), "sk-stored");
+
+		await discoverProviderModels({
+			providerId: "gw-discover",
+			baseUrl: endpoint.url,
+			api: "anthropic-messages",
+			apiKey: "sk-typed",
+		});
+		assert.equal(seen.at(-1), "sk-typed", "a typed key replaces the stored one for this request");
+
+		// No stored credential (unknown id, or the account provider) means no key at all.
+		await rejectsWith(() => discoverProviderModels({ providerId: "gw-unknown", baseUrl: endpoint.url, api: "anthropic-messages" }), 502);
+		await rejectsWith(() => discoverProviderModels({ providerId: "step", baseUrl: endpoint.url, api: "anthropic-messages" }), 502);
+		assert.equal(seen.at(-1), undefined);
+	} finally {
+		await deleteModelProvider("gw-discover");
+		await endpoint.close();
+	}
 });
 
 test("discovery refuses an over-large reply instead of truncating it", async () => {

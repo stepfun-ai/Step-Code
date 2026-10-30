@@ -124,7 +124,11 @@ The user sees one review page with the category, their comment, the identity fie
 
 ## Delivery and retry
 
+The collector route ships with the build: `https://api.stepfun.com/stepcliobserserver` plus `/api/v1/feedback` for the report and `/api/v1/feedback/bundle` for the archive. `STEPCODE_FEEDBACK_ENDPOINT` and `STEPCODE_FEEDBACK_BUNDLE_ENDPOINT` (or the values inlined by the bundle build) override them, so a dev collector, a test fixture or a private deployment needs no code change. The report is user-initiated, so unlike telemetry there is no unattended-egress reason to publish a route only on release.
+
 Two requests: the JSON report to the feedback endpoint, then the gzip archive to the bundle endpoint with `?feedbackId=`. A failed body is written under `<storage root>/feedback/` and re-sent by `step feedback --retry`; the archive is saved beside it and uploaded after the body succeeds. A pending report is reported as pending, never as submitted.
+
+A test run refuses to post to the built-in route (`assertNoRealCollectorUnderTest`): tests inject a local endpoint or `fetchImpl`. Any other caller reaches the real collector.
 
 A saved body is re-read strictly before retry: unknown fields, unsafe strings or mismatched ids make it invalid rather than sending something that changed on disk.
 

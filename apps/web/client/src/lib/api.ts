@@ -10,16 +10,27 @@
 
 type UnauthorizedHandler = () => void;
 
-/** A non-2xx response; `body` is the parsed JSON error payload (`error` plus any extra fields). */
+/**
+ * A non-2xx response; `body` is the parsed JSON error payload (`error` plus any extra fields).
+ */
 export class ApiError extends Error {
 	readonly status: number;
 	readonly body: Readonly<Record<string, unknown>>;
 
 	constructor(status: number, body: Readonly<Record<string, unknown>>) {
-		super(typeof body.error === "string" ? body.error : `HTTP ${status}`);
+		// Most routes answer `{ error }`, but a kernel rejection answers
+		// `{ ok: false, message }` (feedback). Reading only `error` turned those
+		// into a bare "HTTP 400" with no reason for the user.
+		super(errorText(body) ?? `HTTP ${status}`);
 		this.status = status;
 		this.body = body;
 	}
+}
+
+function errorText(body: Readonly<Record<string, unknown>>): string | undefined {
+	if (typeof body.error === "string" && body.error.trim()) return body.error;
+	if (typeof body.message === "string" && body.message.trim()) return body.message;
+	return undefined;
 }
 
 let unauthorizedHandler: UnauthorizedHandler | undefined;

@@ -23,10 +23,10 @@ import {IconSprite} from "/src/ui";
 import {Composer} from "/src/features/composer/index.tsx";
 import {ShellEffects} from "/src/features/shell/ShellEffects.tsx";
 import {createInitialState, getState, setState, setUi} from "/src/state/store.ts";
-import {promptFileQuery, promptFiles, promptText, replaceFileQuery} from "/src/features/composer/prompt-editor.ts";
+import {promptFileQuery, promptFiles, promptMessageText, promptText, replaceFileQuery} from "/src/features/composer/prompt-editor.ts";
 import {fileCompletionText} from "/src/features/composer/file-completion.ts";
 setState({...createInitialState(),bootstrapCwd:"/fixture",draftCwd:"/fixture",locale:"en-US"});
-window.fixture = {getState, setState, setUi, promptFileQuery, promptFiles, promptText, replaceFileQuery, fileCompletionText};
+window.fixture = {getState, setState, setUi, promptFileQuery, promptFiles, promptMessageText, promptText, replaceFileQuery, fileCompletionText};
 createRoot(document.getElementById("root")).render(<><IconSprite/><ShellEffects/><div className="composer-zone"><Composer/></div></>);
 `;
 let vite;
@@ -119,6 +119,7 @@ async function ready(page, path) {
 	}
 }
 const promptValue = (page) => page.evaluate(() => window.fixture.promptText(document.querySelector("#prompt")));
+const sentValue = (page) => page.evaluate(() => window.fixture.promptMessageText(document.querySelector("#prompt")).trim());
 
 test("@ opens file rows, arrows select, Tab/chevron drill, and Enter settles without submitting", { skip }, async () => {
 	const page = await pageFixture();
@@ -297,6 +298,49 @@ test("IME Enter never picks/sends, Shift+Enter keeps newlines, and mail text has
 		await page.waitForFunction(() => !document.querySelector("#slashMenu").hidden);
 		await page.keyboard.press("Enter");
 		assert.equal(await promptValue(page), "/plan ");
+		// A `/word` typed after other text opens the menu too; the pick moves to the
+		// front as the lead chip and the text typed before it stays as its arguments.
+		await setPrompt(page, "fix /pl");
+		await page.waitForFunction(() => !document.querySelector("#slashMenu").hidden);
+		await page.keyboard.press("Enter");
+		assert.equal(await promptValue(page), "/plan fix ");
+		await setPrompt(page, "and/or");
+		assert.equal(await page.locator("#slashMenu").isVisible(), false);
+		// Picked from the menu at the very start, a plain command and a skill
+		// lead exactly as before: one chip, sent unchanged.
+		await setPrompt(page, "/in");
+		await page.waitForFunction(() => !document.querySelector("#slashMenu").hidden);
+		await page.keyboard.press("Enter");
+		assert.equal(await promptValue(page), "/init ");
+		assert.equal(await sentValue(page), "/init");
+		assert.equal(await page.locator("#prompt .prompt-command").count(), 1);
+		await page.keyboard.type("go");
+		assert.equal(await sentValue(page), "/init go");
+		// A plain command picked mid-text stays where it was typed; the message
+		// sends it first, where the kernel runs it, with the words as arguments.
+		await setPrompt(page, "111 /in");
+		await page.waitForFunction(() => !document.querySelector("#slashMenu").hidden);
+		await page.keyboard.press("Enter");
+		assert.equal(await promptValue(page), "111 /init ");
+		assert.equal(await sentValue(page), "/init 111");
+		await page.keyboard.type("x");
+		assert.equal(await promptValue(page), "111 /init x");
+		assert.equal(await sentValue(page), "/init 111 x");
+		// With a command already leading, a second pick stays where it was typed:
+		// only the first command runs, so moving it would just reorder the words.
+		await setPrompt(page, "");
+		await page.keyboard.type("/compact ");
+		await page.waitForFunction(() => document.querySelector("#prompt .prompt-command"));
+		await page.keyboard.type("和 /in");
+		await page.waitForFunction(() => !document.querySelector("#slashMenu").hidden);
+		await page.keyboard.press("Enter");
+		assert.equal(await promptValue(page), "/compact 和 /init ");
+		// A command already leads: the message is sent as typed.
+		assert.equal(await sentValue(page), "/compact 和 /init");
+		assert.equal(await page.locator("#prompt .prompt-command").count(), 2);
+		// Typing continues right after the chip that was placed.
+		await page.keyboard.type("x");
+		assert.equal(await promptValue(page), "/compact 和 /init x");
 	} finally { await page.close(); }
 });
 

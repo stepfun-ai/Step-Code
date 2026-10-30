@@ -1,28 +1,26 @@
 /**
- * Create or edit an MCP server. The form covers the common fields; the JSON tab
- * takes the same declaration as text, including the `mcpServers` object other
- * clients export, so several servers can be imported at once.
- *
- * Fields the form does not show (tool allow/deny lists, env-sourced headers,
- * OAuth) ride along in `FormState.hidden`, so a form save or a form/JSON switch
- * writes them back instead of dropping them: losing `enabled_tools` would
- * expose every tool of the server.
+ * New declarations use form/JSON import. Existing declarations use explicit,
+ * revision-checked patches: protected values stay on the Host and omitted fields
+ * mean keep. Form/JSON transitions preserve tool restrictions and every operation.
  */
 
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { useT } from "../../i18n";
-import { apiSend, errorMessage } from "../../lib/api";
+import { apiSend } from "../../lib/api";
 import { cx } from "../../lib/format";
 import { showError } from "../../state/session";
 import type { SettingsEditor } from "../../state/store";
 import type { McpServerConfig, SettingsMcpServer } from "../../state/types";
-import { Icon, SegmentedControl } from "../../ui";
+import { Button, Icon, SegmentedControl } from "../../ui";
 import { SettingsSelect } from "./parts";
 
 type Transport = "stdio" | "http";
 
 /** Declaration fields with no form control, kept as loaded. */
-type HiddenFields = Pick<McpServerConfig, "enabled_tools" | "disabled_tools" | "env_http_headers" | "oauth">;
+type HiddenFields = Pick<
+	McpServerConfig,
+	"enabled_tools" | "disabled_tools" | "env_http_headers" | "oauth" | "shared" | "enabled"
+>;
 
 export interface FormState {
 	readonly name: string;
@@ -119,6 +117,8 @@ export function formFromConfig(name: string, config: McpServerConfig | undefined
 			disabled_tools: config.disabled_tools,
 			env_http_headers: config.env_http_headers,
 			oauth: config.oauth,
+			shared: config.shared,
+			enabled: config.enabled,
 		},
 	};
 }
@@ -129,6 +129,8 @@ export function configFromForm(form: FormState): McpServerConfig {
 		tool_timeout_sec: numberOrUndefined(form.toolTimeout),
 		enabled_tools: form.hidden.enabled_tools,
 		disabled_tools: form.hidden.disabled_tools,
+		shared: form.hidden.shared,
+		enabled: form.hidden.enabled,
 	};
 	if (form.transport === "http") {
 		return {
@@ -164,7 +166,7 @@ function compact(config: McpServerConfig): McpServerConfig {
 
 /**
  * Accept `{ "mcpServers": { name: config } }`, `{ name: config }` or a bare
- * config (named by the form). Claude-style `headers` becomes `http_headers`;
+ * config (named by the form). Compatible `headers` becomes `http_headers`;
  * the host drops fields it does not know, such as `type`.
  */
 export function serversFromJson(text: string, fallbackName: string): Array<[string, Record<string, unknown>]> {
@@ -185,28 +187,322 @@ export function serversFromJson(text: string, fallbackName: string): Array<[stri
 	});
 }
 
-export function McpEditor({
-	editor,
-	existing,
-	onDone,
-}: {
+const PATCH_FIELDS = [
+	"command",
+	"args",
+	"cwd",
+	"env",
+	"url",
+	"http_headers",
+	"oauth",
+	"bearer_token_env_var",
+	"env_http_headers",
+	"enabled_tools",
+	"disabled_tools",
+	"startup_timeout_sec",
+	"tool_timeout_sec",
+	"enabled",
+	"shared",
+] as const satisfies readonly (keyof McpServerConfig)[];
+type PatchField = (typeof PATCH_FIELDS)[number];
+type PatchOperation = "keep" | "set" | "remove";
+interface FieldDraft {
+	readonly operation: PatchOperation;
+	readonly text: string;
+}
+export interface McpPatchDraft {
+	readonly revision: string;
+	readonly transport: Transport;
+	readonly fields: Readonly<Record<PatchField, FieldDraft>>;
+}
+export interface McpEditPatch {
+	readonly revision: string;
+	readonly fields: Partial<
+		Record<PatchField, { operation: "keep" | "remove" } | { operation: "set"; value: unknown }>
+	>;
+}
+
+/** Protected values are never loaded, even if a stale host supplied them. */
+export function initialMcpPatchDraft(existing: SettingsMcpServer): McpPatchDraft {
+	const alwaysHidden: readonly PatchField[] = ["command", "args", "cwd", "env", "url", "http_headers", "oauth"];
+	const fields = Object.fromEntries(
+		PATCH_FIELDS.map((field) => {
+			const hidden = alwaysHidden.includes(field) || existing.protectedFields?.includes(field);
+			const value = hidden ? undefined : existing.config?.[field];
+			return [field, { operation: "keep", text: value === undefined ? "" : JSON.stringify(value, null, 2) }];
+		}),
+	) as Record<PatchField, FieldDraft>;
+	return { revision: existing.revision ?? "", transport: existing.transport, fields };
+}
+
+export function mcpPatchFromDraft(draft: McpPatchDraft): McpEditPatch {
+	if (!/^[a-f0-9]{64}$/u.test(draft.revision)) throw new Error("Invalid revision");
+	const fields: McpEditPatch["fields"] = {};
+	for (const field of PATCH_FIELDS) {
+		const change = draft.fields[field];
+		fields[field] =
+			change.operation === "set"
+				? { operation: "set", value: JSON.parse(change.text) as unknown }
+				: { operation: change.operation };
+	}
+	return { revision: draft.revision, fields };
+}
+
+/** A missing JSON field means keep, never deletion or a reset of a restriction. */
+export function mcpPatchDraftFromJson(text: string, existing: SettingsMcpServer): McpPatchDraft {
+	const patch: unknown = JSON.parse(text);
+	if (
+		!isRecord(patch) ||
+		patch.revision !== existing.revision ||
+		Object.keys(patch).some((key) => key !== "revision" && key !== "fields") ||
+		!isRecord(patch.fields)
+	) {
+		throw new Error("Invalid patch");
+	}
+	let draft = initialMcpPatchDraft(existing);
+	const fields = { ...draft.fields };
+	for (const [key, raw] of Object.entries(patch.fields)) {
+		if (!PATCH_FIELDS.some((field) => field === key) || !isRecord(raw)) throw new Error("Invalid field");
+		const field = key as PatchField;
+		if (raw.operation === "set" && Object.keys(raw).length === 2 && Object.hasOwn(raw, "value")) {
+			fields[field] = { operation: "set", text: JSON.stringify(raw.value, null, 2) };
+		} else if ((raw.operation === "keep" || raw.operation === "remove") && Object.keys(raw).length === 1) {
+			fields[field] = { operation: raw.operation, text: fields[field].text };
+		} else throw new Error("Invalid operation");
+	}
+	const transport =
+		fields.url.operation === "set" ? "http" : fields.command.operation === "set" ? "stdio" : existing.transport;
+	draft = { ...draft, fields, transport };
+	mcpPatchFromDraft(draft);
+	return draft;
+}
+
+/** A transport change explicitly removes incompatible fields, but never tool restrictions. */
+export function changeMcpPatchTransport(draft: McpPatchDraft, transport: Transport): McpPatchDraft {
+	if (transport === draft.transport) return draft;
+	const fields = { ...draft.fields };
+	const incompatible: readonly PatchField[] =
+		transport === "http"
+			? ["command", "args", "cwd", "env"]
+			: ["url", "http_headers", "oauth", "bearer_token_env_var", "env_http_headers"];
+	for (const field of incompatible) fields[field] = { ...fields[field], operation: "remove" };
+	const required = transport === "http" ? "url" : "command";
+	fields[required] = { ...fields[required], operation: "set" };
+	return { ...draft, fields, transport };
+}
+
+export function McpEditor(props: {
 	readonly editor: Extract<SettingsEditor, { kind: "mcp" }>;
 	readonly existing: SettingsMcpServer | undefined;
 	readonly onDone: (saved: boolean) => void;
 }) {
 	const t = useT();
+	if (!props.editor.name) return <CreateMcpEditor editor={props.editor} onDone={props.onDone} />;
+	if (!props.existing?.revision || !/^[a-f0-9]{64}$/u.test(props.existing.revision))
+		return (
+			<div className="settings-editor">
+				<div role="alert">{t("settingsMcpPatchReload")}</div>
+				<Button className="settings-btn" onClick={() => props.onDone(false)}>
+					{t("cancel")}
+				</Button>
+			</div>
+		);
+	return (
+		<ExistingMcpEditor
+			key={props.editor.name}
+			existing={props.existing}
+			jsonMode={Boolean(props.editor.json)}
+			onDone={props.onDone}
+		/>
+	);
+}
+
+function ExistingMcpEditor({
+	existing,
+	jsonMode,
+	onDone,
+}: {
+	readonly existing: SettingsMcpServer;
+	readonly jsonMode: boolean;
+	readonly onDone: (saved: boolean) => void;
+}) {
+	const t = useT();
+	const id = useId();
+	const [draft, setDraft] = useState(() => initialMcpPatchDraft(existing));
+	const [mode, setMode] = useState<"form" | "json">(jsonMode ? "json" : "form");
+	const [json, setJson] = useState(() => JSON.stringify(mcpPatchFromDraft(draft), null, 2));
+	const [error, setError] = useState<string>();
+	const [saving, setSaving] = useState(false);
+	const active = useRef(true);
+	useEffect(() => {
+		active.current = true;
+		return () => {
+			active.current = false;
+		};
+	}, []);
+	const keptValues = initialMcpPatchDraft(existing).fields;
+	const updateField = (field: PatchField, update: Partial<FieldDraft>) => {
+		setDraft((current) => ({
+			...current,
+			fields: { ...current.fields, [field]: { ...current.fields[field], ...update } },
+		}));
+	};
+	const switchMode = (next: "form" | "json") => {
+		if (next === mode) return;
+		try {
+			if (next === "json") setJson(JSON.stringify(mcpPatchFromDraft(draft), null, 2));
+			else setDraft(mcpPatchDraftFromJson(json, { ...existing, revision: draft.revision }));
+			setError(undefined);
+			setMode(next);
+		} catch {
+			setError(t("settingsMcpPatchInvalid"));
+		}
+	};
+	const save = async (event: FormEvent) => {
+		event.preventDefault();
+		let patch: McpEditPatch;
+		try {
+			patch = mcpPatchFromDraft(
+				mode === "json" ? mcpPatchDraftFromJson(json, { ...existing, revision: draft.revision }) : draft,
+			);
+		} catch {
+			setError(t("settingsMcpPatchInvalid"));
+			return;
+		}
+		setError(undefined);
+		setSaving(true);
+		try {
+			await apiSend(`/api/v1/settings/mcp/${encodeURIComponent(existing.name)}`, "PUT", { patch });
+			// A completed write belongs to this editor, not an editor opened while it was pending.
+			if (!active.current) return;
+			showError(t("settingsMcpSaved", { name: existing.name }), false);
+			onDone(true);
+		} catch {
+			if (active.current) setError(t("settingsMcpPatchFailed"));
+		} finally {
+			if (active.current) setSaving(false);
+		}
+	};
+	return (
+		<form className="settings-editor" id="settingsMcpEditor" onSubmit={(event) => void save(event)}>
+			<nav className="settings-breadcrumb" aria-label={t("settingsMcp")}>
+				<Button onClick={() => onDone(false)}>{t("settingsMcp")}</Button>
+				<Icon name="chevronRight" size="menu" />
+				<span>{existing.name}</span>
+			</nav>
+			<div className="settings-editor-head">
+				<div>
+					<h1 className="settings-page-title">{t("settingsMcpEditTitle")}</h1>
+					<p className="settings-page-desc">{t("settingsMcpPatchDesc")}</p>
+				</div>
+				<SegmentedControl
+					className="settings-mode-switch"
+					value={mode}
+					onChange={switchMode}
+					items={[
+						{ value: "form", label: t("settingsForm") },
+						{ value: "json", label: t("settingsMcpJsonLabel") },
+					]}
+				/>
+			</div>
+			<div className="settings-card settings-form">
+				{mode === "json" ? (
+					<textarea
+						className="settings-code-input"
+						aria-label={t("settingsMcpPatchJson")}
+						spellCheck={false}
+						rows={20}
+						value={json}
+						disabled={saving}
+						onChange={(event) => setJson(event.target.value)}
+					/>
+				) : (
+					<>
+						<div className="settings-field">
+							<span>{t("settingsMcpTransport")}</span>
+							<SettingsSelect<Transport>
+								value={draft.transport}
+								ariaLabel={t("settingsMcpTransport")}
+								options={[
+									{ value: "stdio", label: t("settingsMcpStdio") },
+									{ value: "http", label: t("settingsMcpHttp") },
+								]}
+								onChange={(transport) => setDraft((current) => changeMcpPatchTransport(current, transport))}
+							/>
+						</div>
+						<p className="settings-form-note">{t("settingsMcpPatchValues")}</p>
+						{PATCH_FIELDS.map((field) => {
+							const change = draft.fields[field];
+							const label = t("settingsMcpPatchField", { field });
+							return (
+								<div className="settings-field" key={field} data-mcp-patch-field={field}>
+									<label htmlFor={`${id}-${field}`}>{label}</label>
+									{existing.protectedFields?.includes(field) ? (
+										<span className="settings-form-note">{t("settingsMcpStoredHidden")}</span>
+									) : null}
+									<SettingsSelect<PatchOperation>
+										value={change.operation}
+										ariaLabel={t("settingsMcpPatchAction", { field })}
+										options={[
+											{ value: "keep", label: t("settingsMcpPatchKeep") },
+											{ value: "set", label: t("settingsMcpPatchSet") },
+											{ value: "remove", label: t("settingsMcpPatchRemove") },
+										]}
+										onChange={(operation) => updateField(field, { operation })}
+									/>
+									<textarea
+										id={`${id}-${field}`}
+										className="mono"
+										rows={2}
+										autoComplete="off"
+										spellCheck={false}
+										value={
+											change.operation === "set"
+												? change.text
+												: change.operation === "keep"
+													? keptValues[field].text
+													: ""
+										}
+										disabled={saving || change.operation !== "set"}
+										onChange={(event) => updateField(field, { text: event.target.value })}
+									/>
+								</div>
+							);
+						})}
+					</>
+				)}
+				{error ? (
+					<div className="settings-alert danger" role="alert">
+						{error}
+					</div>
+				) : null}
+				<div className="settings-form-footer">
+					<span className="settings-form-note">{t("settingsMcpAppliesNextMessage")}</span>
+					<Button className="settings-btn" onClick={() => onDone(false)}>
+						{t("cancel")}
+					</Button>
+					<Button type="submit" className="settings-btn primary" disabled={saving || !draft.revision}>
+						{saving ? t("settingsSaving") : t("settingsSave")}
+					</Button>
+				</div>
+			</div>
+		</form>
+	);
+}
+
+function CreateMcpEditor({
+	editor,
+	onDone,
+}: {
+	readonly editor: Extract<SettingsEditor, { kind: "mcp" }>;
+	readonly onDone: (saved: boolean) => void;
+}) {
+	const t = useT();
 	const ids = useId();
-	const editing = Boolean(editor.name);
 	const [mode, setMode] = useState<"form" | "json">(editor.json ? "json" : "form");
-	const [form, setForm] = useState<FormState>(() => formFromConfig(editor.name ?? "", existing?.config));
+	const [form, setForm] = useState<FormState>(() => formFromConfig("", undefined));
 	const [json, setJson] = useState(() =>
-		editor.json && !editing
-			? IMPORT_SAMPLE
-			: JSON.stringify(
-					{ [editor.name || "my-server"]: compact(existing?.config ?? { command: "", args: [] }) },
-					null,
-					2,
-				),
+		editor.json ? IMPORT_SAMPLE : JSON.stringify({ "my-server": { command: "", args: [] } }, null, 2),
 	);
 	const [error, setError] = useState<string>();
 	const [saving, setSaving] = useState(false);
@@ -220,9 +516,9 @@ export function McpEditor({
 		} else {
 			try {
 				const [first] = serversFromJson(json, form.name);
-				if (first) setForm(formFromConfig(editing ? form.name : first[0], first[1] as McpServerConfig));
-			} catch (caught) {
-				setError(t("settingsJsonInvalid", { reason: errorMessage(caught) }));
+				if (first) setForm(formFromConfig(first[0], first[1] as McpServerConfig));
+			} catch {
+				setError(t("settingsJsonInvalid", { reason: t("settingsMcpPatchInvalid") }));
 				return;
 			}
 		}
@@ -235,38 +531,29 @@ export function McpEditor({
 		let entries: Array<[string, unknown]>;
 		try {
 			entries = mode === "form" ? [[form.name.trim(), configFromForm(form)]] : serversFromJson(json, form.name);
-		} catch (caught) {
-			setError(t("settingsJsonInvalid", { reason: errorMessage(caught) }));
-			return;
-		}
-		if (editing && (entries.length !== 1 || (mode === "json" && entries[0]?.[0] !== editor.name))) {
-			setError(t("settingsMcpEditOne", { name: editor.name ?? "" }));
+		} catch {
+			setError(t("settingsJsonInvalid", { reason: t("settingsMcpPatchInvalid") }));
 			return;
 		}
 		setSaving(true);
 		const added: string[] = [];
 		try {
 			for (const [name, config] of entries) {
-				// Keep a server switched off when its declaration is edited.
-				const withState = existing?.enabled === false ? { ...(config as object), enabled: false } : config;
-				if (editing)
-					await apiSend(`/api/v1/settings/mcp/${encodeURIComponent(name)}`, "PUT", { config: withState });
-				else await apiSend("/api/v1/settings/mcp", "POST", { name, config: withState });
+				await apiSend("/api/v1/settings/mcp", "POST", { name, config });
 				added.push(name);
 			}
-			showError(
-				editing
-					? t("settingsMcpSaved", { name: editor.name ?? "" })
-					: t("settingsMcpAdded", { names: added.join(", ") }),
-				false,
-			);
+			showError(t("settingsMcpAdded", { names: added.join(", ") }), false);
 			onDone(true);
-		} catch (caught) {
+		} catch {
 			const failed = entries[added.length]?.[0] ?? "";
 			setError(
 				added.length > 0
-					? t("settingsMcpPartial", { added: added.join(", "), name: failed, reason: errorMessage(caught) })
-					: errorMessage(caught),
+					? t("settingsMcpPartial", {
+							added: added.join(", "),
+							name: failed,
+							reason: t("settingsMcpPatchInvalid"),
+						})
+					: t("settingsMcpPatchInvalid"),
 			);
 		} finally {
 			setSaving(false);
@@ -277,17 +564,15 @@ export function McpEditor({
 	return (
 		<form className="settings-editor" onSubmit={(event) => void save(event)} id="settingsMcpEditor">
 			<nav className="settings-breadcrumb" aria-label={t("settingsMcp")}>
-				<button type="button" onClick={() => onDone(false)}>
+				<Button type="button" onClick={() => onDone(false)}>
 					{t("settingsMcp")}
-				</button>
+				</Button>
 				<Icon name="chevronRight" size="menu" />
-				<span>{editing ? editor.name : editor.json ? t("settingsMcpImportJson") : t("settingsMcpNew")}</span>
+				<span>{editor.json ? t("settingsMcpImportJson") : t("settingsMcpNew")}</span>
 			</nav>
 			<div className="settings-editor-head">
 				<div>
-					<h1 className="settings-page-title">
-						{editing ? t("settingsMcpEditTitle") : editor.json ? t("settingsMcpImportJson") : t("settingsMcpNew")}
-					</h1>
+					<h1 className="settings-page-title">{editor.json ? t("settingsMcpImportJson") : t("settingsMcpNew")}</h1>
 					<p className="settings-page-desc">
 						{mode === "json" ? t("settingsMcpJsonDesc") : t("settingsMcpFormDesc")}
 					</p>
@@ -296,7 +581,7 @@ export function McpEditor({
 					className="settings-mode-switch"
 					items={[
 						{ value: "form", label: t("settingsForm") },
-						{ value: "json", label: "JSON" },
+						{ value: "json", label: t("settingsMcpJsonLabel") },
 					]}
 					value={mode}
 					onChange={switchMode}
@@ -307,7 +592,7 @@ export function McpEditor({
 				{mode === "json" ? (
 					<textarea
 						className="settings-code-input"
-						aria-label="JSON"
+						aria-label={t("settingsMcpJsonLabel")}
 						spellCheck={false}
 						rows={14}
 						value={json}
@@ -321,7 +606,6 @@ export function McpEditor({
 								<input
 									id={field("name")}
 									value={form.name}
-									disabled={editing}
 									placeholder="my-server"
 									autoComplete="off"
 									spellCheck={false}
@@ -454,12 +738,12 @@ export function McpEditor({
 				) : null}
 				<div className="settings-form-footer">
 					<span className="settings-form-note">{t("settingsMcpAppliesNextMessage")}</span>
-					<button type="button" className="settings-btn" onClick={() => onDone(false)}>
+					<Button type="button" className="settings-btn" onClick={() => onDone(false)}>
 						{t("cancel")}
-					</button>
-					<button type="submit" className={cx("settings-btn primary")} disabled={saving}>
+					</Button>
+					<Button type="submit" className={cx("settings-btn primary")} disabled={saving}>
 						{saving ? t("settingsSaving") : t("settingsSave")}
-					</button>
+					</Button>
 				</div>
 			</div>
 		</form>

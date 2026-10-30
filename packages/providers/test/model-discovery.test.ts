@@ -236,12 +236,24 @@ describe("discoverModels", () => {
 		});
 		expect(seen[1]?.["x-api-key"]).toBe("sk-2");
 		expect(seen[1]?.["anthropic-version"]).toBe("2023-06-01");
-		expect(seen[1]?.authorization).toBeUndefined();
+		// Anthropic-compatible gateways (e.g. StepFun) list models only for Bearer auth.
+		expect(seen[1]?.authorization).toBe("Bearer sk-2");
+
+		// A declared authorization header is not overridden.
+		await discoverModels({
+			baseUrl: "https://x.example/v1",
+			api: "anthropic-messages",
+			apiKey: "sk-2",
+			headers: { authorization: "Bearer gateway" },
+			fetch: capture,
+		});
+		expect(seen[2]?.["x-api-key"]).toBe("sk-2");
+		expect(seen[2]?.authorization).toBe("Bearer gateway");
 
 		// A keyless endpoint is still probeable: no auth header is invented.
 		await discoverModels({ baseUrl: "http://localhost:11434/v1", fetch: capture });
-		expect(seen[2]?.authorization).toBeUndefined();
-		expect(seen[2]?.["x-api-key"]).toBeUndefined();
+		expect(seen[3]?.authorization).toBeUndefined();
+		expect(seen[3]?.["x-api-key"]).toBeUndefined();
 	});
 
 	it("refuses an over-large reply instead of truncating it", async () => {

@@ -7,6 +7,32 @@
 
 import type { TagColor } from "../i18n/messages";
 
+export type {
+	MigrationAcknowledgement,
+	MigrationAction,
+	MigrationCandidate,
+	MigrationDiagnostic,
+	MigrationHolding,
+	MigrationItemResult,
+	MigrationJob,
+	MigrationKind,
+	MigrationLocation,
+	MigrationPlan,
+	MigrationPreview,
+	MigrationPreviewRequest,
+	MigrationReadiness,
+	MigrationRecoveryPreview,
+	MigrationRuleImpact,
+	MigrationScanRequest,
+	MigrationScanResult,
+	MigrationScope,
+	MigrationSelection,
+	MigrationSource,
+	MigrationSourceReport,
+	MigrationStartRequest,
+	MigrationTargetRequest,
+} from "./migration-types";
+
 /** Host-owned interactive shells; independent of Agent tool execution. */
 export interface TerminalInfo {
 	readonly id: string;
@@ -116,9 +142,49 @@ export interface SessionEntry {
 	readonly message?: AgentMessage;
 	readonly usage?: Usage;
 	readonly thinkingTimings?: ThinkingTimings;
+	/** On a user message: the prompt-command line it expanded from (runtime.ts `projectEntries`). */
+	readonly promptCommand?: string;
 	/** Lifecycle-only metadata on custom_message / agent-notification entries. */
 	readonly details?: unknown;
 	readonly [key: string]: unknown;
+}
+
+export interface ImportCandidate {
+	readonly id: string;
+	readonly source: "codex" | "claude-code" | "workbuddy" | "qoder";
+	readonly sessionId: string;
+	readonly title: string;
+	readonly cwd: string;
+	readonly modified: string;
+	readonly archived: boolean;
+	readonly version: string;
+	readonly sourcePath?: string;
+}
+
+export interface ImportPreview extends ImportCandidate {
+	readonly fingerprint: string;
+	readonly messageCount: number;
+	readonly toolCount: number;
+	readonly warnings: readonly { readonly code: string; readonly count: number }[];
+	readonly excerpt: string;
+}
+
+export interface ImportJob {
+	readonly id: string;
+	readonly createdAt: string;
+	readonly status: "running" | "completed" | "cancelled" | "interrupted";
+	readonly total: number;
+	readonly results: readonly {
+		readonly candidateId: string;
+		readonly source?: "codex" | "claude-code" | "workbuddy" | "qoder";
+		readonly sourcePath?: string;
+		readonly path?: string;
+		readonly title?: string;
+		readonly status: "imported" | "skipped" | "failed";
+		readonly sessionId?: string;
+		readonly error?: string;
+		readonly warning?: string;
+	}[];
 }
 
 /** A row of GET /api/v1/sessions. Snapshots are merged into these rows too. */
@@ -170,6 +236,8 @@ export interface SessionSnapshot extends SessionSummary {
 	readonly status: SessionStatus;
 	readonly sessionFile?: string;
 	readonly entries?: readonly SessionEntry[];
+	/** Live-only lane snapshots, replaced through SSE and never model messages. */
+	readonly subagentLanes?: readonly unknown[];
 	readonly model?: ModelRef;
 	readonly permissionPreset?: string;
 	readonly policies?: readonly PolicyPreset[];
@@ -194,6 +262,18 @@ export interface SessionSnapshot extends SessionSummary {
 	 * `lastRunAborted`). Such a turn has no finished reply to credit.
 	 */
 	readonly lastRunAborted?: boolean;
+	/**
+	 * The newest turn was cut off rather than finished (runtime.ts
+	 * `hasInterruptedTurn`): a prompt with no reply after a crash, or a reply the
+	 * kernel recorded as aborted. Derived from entries, so it survives a restart.
+	 */
+	readonly interruptedTurn?: boolean;
+	/**
+	 * The host's newest published revision when this snapshot was serialized
+	 * (runtime.ts `revision`). A read answered after a newer event describes an
+	 * older state and must not be painted over it.
+	 */
+	readonly revision?: number;
 	/** Messages sent during a turn, waiting for it to end (src/message-queue.ts). */
 	readonly queuedMessages?: readonly QueuedMessage[];
 	/** Steered messages the kernel has not delivered to the running turn yet. */
@@ -367,9 +447,14 @@ export interface MessageTimelineItem {
 	readonly timestamp?: string;
 	/** The model request failed (assistant `stopReason: "error"`); the provider's message. */
 	readonly error?: string;
+	/**
+	 * A user message the kernel expanded from a prompt command: `content` is the
+	 * line the user typed (`/<name> args`), not the template it became.
+	 */
+	readonly promptCommand?: boolean;
 }
 
-export type ToolState = "pending" | "completed" | "failed";
+export type ToolState = "pending" | "completed" | "failed" | "unknown";
 
 export interface ThinkingTiming {
 	readonly startedAt: number;
@@ -389,6 +474,7 @@ export interface ThinkingTimelineItem {
 }
 
 export interface ToolTimelineItem {
+	readonly imported?: boolean;
 	readonly itemId: string;
 	readonly kind: "tool";
 	readonly state: ToolState;
@@ -406,6 +492,9 @@ export interface ToolTimelineItem {
 	readonly children?: readonly ChildAgentLink[];
 	/** Validated presentation of the subagent tool's structured per-task records. */
 	readonly subagentTasks?: readonly SubagentTask[];
+	readonly subagentControl?: SubagentControl;
+	readonly subagentOmitted?: number;
+	readonly subagentLaneStatus?: SubagentStatus;
 	/** A workflow call's run id; its agents come from `GET /sessions/{id}/children?workflowRun=`. */
 	readonly workflowRun?: string;
 	/** An `exit_plan_mode` result awaiting the user's decision; see `PlanReview`. */
@@ -449,6 +538,8 @@ export interface SubagentTask {
 	readonly agent: string;
 	readonly task: string;
 	readonly status: SubagentStatus;
+	/** The last explicit per-task record, before lane-wide lifecycle overlays. */
+	readonly reportedStatus?: SubagentStatus;
 	readonly sessionId?: string;
 	readonly backgroundAgentId?: string;
 	readonly model?: string;
@@ -456,6 +547,27 @@ export interface SubagentTask {
 	/** Absent when the run reported no usage, or the details predate the field. */
 	readonly usage?: SubagentUsage;
 	readonly error?: string;
+	readonly activeText?: string;
+	readonly activeTool?: string;
+	readonly activeToolOutput?: string;
+	readonly completedOutputs?: ReadonlyArray<{ readonly id: string; readonly output: string }>;
+	readonly controls?: ReadonlyArray<{
+		readonly id: string;
+		readonly action: SubagentControl["action"];
+		readonly prompt?: string;
+		readonly output?: string;
+	}>;
+}
+
+export interface SubagentControl {
+	readonly action: "reply" | "stop" | "status";
+	readonly laneId?: string;
+	readonly prompt?: string;
+	readonly lanes: ReadonlyArray<{
+		readonly laneId: string;
+		readonly status: SubagentStatus;
+		readonly tasks: readonly SubagentTask[];
+	}>;
 }
 
 /** GET /api/v1/sessions/{id}/children/{childId} (child-sessions.ts `ChildTranscript`). */
@@ -598,6 +710,8 @@ export interface WebWorkspace {
 	readonly available: boolean;
 	/** Removed from workspace navigation without deleting sessions. */
 	readonly hidden?: boolean;
+	/** The first-use workspace the host created; shown as "默认工作区" instead of its folder name. */
+	readonly default?: boolean;
 }
 
 export interface LoginReport {
@@ -647,12 +761,31 @@ export interface BrowserLoginState {
 	readonly error?: string;
 }
 
+export interface DesktopOnboardingState {
+	readonly schemaVersion: 1;
+	readonly flowVersion: 1;
+	readonly revision: number;
+	readonly status: "unseen" | "offered" | "in_progress" | "completed" | "skipped";
+	readonly lastJobId?: string;
+	readonly updatedAt: string;
+}
+
 export interface BootstrapPayload {
 	readonly cwd: string;
+	/**
+	 * Where a new conversation starts when no workspace is on offer: the launch
+	 * folder, or the home folder when the launch folder was removed.
+	 */
+	readonly defaultCwd?: string;
+	/** `defaultCwd` is the home fallback because the launch folder was removed. */
+	readonly defaultCwdFallback?: boolean;
 	readonly directoryPicker?: string;
 	readonly login?: LoginReport | null;
 	/** A custom models.json model runs without a Step credential, so no sign-in gate is needed. */
 	readonly customModels?: boolean;
+	readonly migrationAvailable?: boolean;
+	readonly migrationSuggested?: boolean;
+	readonly desktopOnboarding?: DesktopOnboardingState;
 	/** The running build's product version, e.g. `0.1.0`. */
 	readonly version?: string;
 	/** When the installed build was produced; absent for a source checkout. */
@@ -713,6 +846,13 @@ export interface WebSkill {
 	readonly description: string;
 }
 
+/** The `commands` of the same routes: prompt templates the kernel expands from `/<name>` (prompt-commands.ts). */
+export interface WebPromptCommand {
+	readonly name: string;
+	readonly description: string;
+	readonly argumentHint?: string;
+}
+
 /** GET /api/v1/mcp (coding-agent `StepMcpStatus`). */
 export interface McpServerStatus {
 	readonly name: string;
@@ -757,6 +897,10 @@ export interface SettingsMcpServer {
 	readonly transport: "stdio" | "http";
 	readonly enabled: boolean;
 	readonly config?: McpServerConfig;
+	/** Fields omitted from config because their stored values must not be sent to the browser. */
+	readonly protectedFields?: readonly (keyof McpServerConfig)[];
+	/** Revision of the full declaration, including protected values and permission lists. */
+	readonly revision?: string;
 	readonly status?: McpServerStatus["status"];
 	readonly toolCount?: number;
 	readonly error?: string;

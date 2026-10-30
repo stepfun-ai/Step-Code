@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n";
-import { api, errorMessage } from "../../lib/api";
+import { ApiError, api, errorMessage } from "../../lib/api";
 import { cx } from "../../lib/format";
 import { activeRightPanel } from "../../state/right-panel";
 import { timelineFromEntries } from "../../state/session";
@@ -22,6 +22,7 @@ import { RetryRow } from "./RetryRow";
 import { SubagentStatusIcon } from "./SubagentStatusIcon";
 import { ThinkingDisclosure } from "./ThinkingDisclosure";
 import { ToolRow } from "./TimelineRows";
+import { collectTurnFooters } from "./turn-footers";
 
 /** A running parent may still have children writing; their transcripts are re-read this often. */
 const REFRESH_MS = 2000;
@@ -31,8 +32,14 @@ function childPath(parentId: string, childId: string): string {
 }
 
 /** Re-runs `load` every REFRESH_MS while `live`; the latest result wins. */
-function usePolled<T>(key: string | null, live: boolean, load: () => Promise<T>): { value?: T; error?: string } {
-	const [state, setState] = useState<{ key: string | null; value?: T; error?: string }>({ key: null });
+function usePolled<T>(
+	key: string | null,
+	live: boolean,
+	load: () => Promise<T>,
+): { value?: T; error?: string; missing?: boolean } {
+	const [state, setState] = useState<{ key: string | null; value?: T; error?: string; missing?: boolean }>({
+		key: null,
+	});
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `key` identifies what `load` reads.
 	useEffect(() => {
 		if (!key) return;
@@ -41,7 +48,13 @@ function usePolled<T>(key: string | null, live: boolean, load: () => Promise<T>)
 		const run = async () => {
 			await load().then(
 				(value) => !cancelled && setState({ key, value }),
-				(error: unknown) => !cancelled && setState({ key, error: errorMessage(error) }),
+				(error: unknown) =>
+					!cancelled &&
+					setState({
+						key,
+						error: errorMessage(error),
+						missing: error instanceof ApiError && error.status === 404,
+					}),
 			);
 			if (!cancelled && live) timer = setTimeout(run, REFRESH_MS);
 		};
@@ -249,6 +262,16 @@ export function ChildAgentView({ embedded = false }: { readonly embedded?: boole
 		() => items.filter((item) => !(item.kind === "message" && item.role === "user")),
 		[items],
 	);
+	// A terminal child can be inspected while its parent continues with other work.
+	const childBusy =
+		task?.status === "running" || task?.status === "queued" || ((!task || task.status === "unknown") && parentBusy);
+	const timestampReplies = useMemo(
+		() =>
+			new Set(
+				collectTurnFooters(items, childBusy ? "running" : "idle", false, true).map((turn) => turn.messages.at(-1)),
+			),
+		[items, childBusy],
+	);
 	/**
 	 * The run's token totals.
 	 *
@@ -271,24 +294,27 @@ export function ChildAgentView({ embedded = false }: { readonly embedded?: boole
 		? t("subagentNoTranscript")
 		: view?.toolItemId && !task
 			? t("subagentNoTranscript")
-			: transcript.error || agents.error
-				? transcript.error || agents.error
-				: workflowRun && agents.value?.length === 0
-					? t("childAgentNoneInRun")
-					: task && !childId
-						? t(
-								task.status === "queued" || task.status === "running"
-									? "subagentWaitingTranscript"
-									: // A rejected or aborted dispatch never created a child session;
-										// say so instead of waiting for a transcript that cannot arrive.
-										task.status === "failed" || task.status === "aborted"
-										? "subagentFailedBeforeStart"
-										: "subagentNoTranscript",
-							)
-						: transcript.value
-							? t("childAgentEmpty")
-							: t("childAgentLoading");
+			: task?.status === "running" && transcript.missing
+				? t("subagentTranscriptPending")
+				: transcript.error || agents.error
+					? transcript.error || agents.error
+					: workflowRun && agents.value?.length === 0
+						? t("childAgentNoneInRun")
+						: task && !childId
+							? t(
+									task.status === "queued" || task.status === "running"
+										? "subagentWaitingTranscript"
+										: // A rejected or aborted dispatch never created a child session;
+											// say so instead of waiting for a transcript that cannot arrive.
+											task.status === "failed" || task.status === "aborted"
+											? "subagentFailedBeforeStart"
+											: "subagentNoTranscript",
+								)
+							: transcript.value
+								? t("childAgentEmpty")
+								: t("childAgentLoading");
 	const overviewError = task?.error || dispatchError;
+	const omitted = selectedTool?.kind === "tool" ? (selectedTool.subagentOmitted ?? 0) : 0;
 
 	return (
 		<section
@@ -407,10 +433,44 @@ export function ChildAgentView({ embedded = false }: { readonly embedded?: boole
 					</section>
 					<section className="subagent-execution" aria-label={t("subagentExecution")}>
 						<h3 className="subagent-section-title">{t("subagentExecution")}</h3>
+						{omitted > 0 ? <p className="subagent-meta">{t("subagentOmitted", { count: omitted })}</p> : null}
+						{task?.controls?.length ? (
+							<section className="subagent-controls" aria-label={t("subagentControlHistory")}>
+								<h3 className="subagent-section-title">{t("subagentControlHistory")}</h3>
+								{task.controls.map((control) => (
+									<details key={control.id}>
+										<summary>{t(`subagentControl.${control.action}`)}</summary>
+										<pre className="subagent-task">
+											{[control.prompt, control.output].filter(Boolean).join("\n\n")}
+										</pre>
+									</details>
+								))}
+							</section>
+						) : null}
+						{task?.completedOutputs?.map((output, index) => (
+							<section key={output.id} className="subagent-completed-output">
+								<h3 className="subagent-section-title">
+									{t("subagentCompletedResponse", { index: index + 1 })}
+								</h3>
+								<pre className="subagent-task">{output.output}</pre>
+							</section>
+						))}
+						{task?.status === "running" && (task.activeText || task.activeTool || task.activeToolOutput) ? (
+							<section className="subagent-live-progress" aria-label={t("subagentLiveProgress")}>
+								<h3 className="subagent-section-title">{t("subagentLiveProgress")}</h3>
+								{task.activeTool ? <p className="subagent-meta">{task.activeTool}</p> : null}
+								<pre className="subagent-task">{task.activeText || task.activeToolOutput}</pre>
+							</section>
+						) : null}
 						{executionItems.length ? (
 							executionItems.map((item) =>
 								item.kind === "message" ? (
-									<MessageItem key={item.itemId} item={item} fileCwd={transcript.value?.cwd} />
+									<MessageItem
+										key={item.itemId}
+										item={item}
+										fileCwd={transcript.value?.cwd}
+										inlineTimestamp={timestampReplies.has(item)}
+									/>
 								) : item.kind === "tool" ? (
 									<ToolRow key={item.itemId} item={item} readOnly />
 								) : item.kind === "thinking" ? (
@@ -419,7 +479,9 @@ export function ChildAgentView({ embedded = false }: { readonly embedded?: boole
 									<RetryRow key={item.itemId} item={item} />
 								) : null,
 							)
-						) : (
+						) : task?.status === "running" &&
+							transcript.missing &&
+							(task.activeText || task.activeTool || task.activeToolOutput) ? null : (
 							<p
 								className={cx("child-agent-empty", dispatchError && "subagent-error")}
 								role={dispatchError ? "alert" : undefined}

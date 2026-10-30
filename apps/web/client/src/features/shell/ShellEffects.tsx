@@ -12,15 +12,19 @@ import {
 	closeRenameSession,
 	interruptCurrent,
 	refreshSessionStatuses,
+	refreshSessions,
+	refreshWorkspaces,
 } from "../../state/session";
 import { type AppState, getState, setUi, useAppStore } from "../../state/store";
+import { handleTagGroupBeforeUnload } from "../../state/tag-group-persistence";
 import { answerSelection, answerTextInput, pendingSelection, pendingTextInput } from "../composer/actions";
 import { openTree, setPreviewOpen } from "../files/actions";
+import { handleMigrationEscape } from "../migration/actions";
 import { closeTopmostSettingsLayer } from "../settings/actions";
 import { closeSearch, closeWorkspaceMenu, openSearch } from "../sidebar/actions";
 import { toggleTerminalDock } from "../terminal/actions";
 import { requestVoiceStop, voiceRecording } from "../voice/actions";
-import { chooseWorkspaceFolder, closeWorkspaceRemoval } from "../workspace/actions";
+import { chooseWorkspaceFolder, closeWorkspaceBrowser, closeWorkspaceRemoval } from "../workspace/actions";
 import { closeLogoutConfirm, confirmLogout, toggleSidebar, watchSystemTheme } from "./actions";
 
 /**
@@ -55,7 +59,8 @@ function handleEscape(): void {
 	else if (ui.changesMenu) setUi({ changesMenu: null });
 	else if (ui.rightPanelMenu) setUi({ rightPanelMenu: false });
 	else if (ui.searchOpen) closeSearch();
-	else if (ui.workspaceBrowserOpen) setUi({ workspaceBrowserOpen: false });
+	else if (ui.workspaceBrowserOpen) closeWorkspaceBrowser();
+	else if (handleMigrationEscape()) return;
 	else if (closeTopmostSettingsLayer()) return;
 	else if (ui.workspacePopoverOpen) setUi({ workspacePopoverOpen: false });
 	else if (ui.branchCreateOpen) setUi({ branchCreateOpen: false });
@@ -135,13 +140,48 @@ function handleKeydown(event: KeyboardEvent): void {
 
 /** How often the rows of sessions running in the background are re-read. */
 const BACKGROUND_STATUS_POLL_MS = 2000;
+/** One focus can fire `focus` and `visibilitychange` back to back; read the lists once. */
+const LIST_REFRESH_MIN_INTERVAL_MS = 1000;
+
+export function watchTagGroupUnload(): () => void {
+	window.addEventListener("beforeunload", handleTagGroupBeforeUnload);
+	return () => window.removeEventListener("beforeunload", handleTagGroupBeforeUnload);
+}
 
 export function ShellEffects() {
+	useEffect(() => watchTagGroupUnload(), []);
 	useEffect(() => {
 		document.addEventListener("keydown", handleKeydown);
 		return () => document.removeEventListener("keydown", handleKeydown);
 	}, []);
 	useEffect(() => watchSystemTheme(), []);
+	// Desktop and Web are separate Host processes over one `~/.stepcode`. A
+	// conversation the other one starts (or archives) is only on disk, so the
+	// lists this page loaded at bootstrap never hear about it; re-read them when
+	// the window comes back into use.
+	useEffect(() => {
+		let last = 0;
+		let inFlight = false;
+		const refresh = () => {
+			if (document.visibilityState === "hidden") return;
+			const now = Date.now();
+			if (inFlight || now - last < LIST_REFRESH_MIN_INTERVAL_MS) return;
+			last = now;
+			inFlight = true;
+			// A failed read keeps the lists the page already has; the next focus retries.
+			void Promise.all([refreshWorkspaces(), refreshSessions()])
+				.catch(() => {})
+				.finally(() => {
+					inFlight = false;
+				});
+		};
+		window.addEventListener("focus", refresh);
+		document.addEventListener("visibilitychange", refresh);
+		return () => {
+			window.removeEventListener("focus", refresh);
+			document.removeEventListener("visibilitychange", refresh);
+		};
+	}, []);
 	// The page follows only the open session's stream; a run left in another
 	// session is polled until it ends, so its row turns from the running pulse
 	// into the unread dot without a click.

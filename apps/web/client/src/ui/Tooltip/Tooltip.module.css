@@ -1,12 +1,27 @@
 /*
  * Placement "top": centered over the trigger's anchor. Fixed, so an ancestor's
- * overflow does not clip it. `top center` shifts it sideways only when a
- * viewport edge leaves no room to center it (keeping an 8px margin), and
- * `flip-block` moves it below only when there is no room above.
+ * overflow does not clip it. `top` spans the full width above the anchor and
+ * centers the hint on it (`anchor-center`), shifting it sideways only when a
+ * viewport edge leaves no room (keeping an 8px margin). `flip-block` moves it
+ * below only when there is no room above. Do not narrow the area to
+ * `top center`: that area is only as wide as the trigger, so any wider hint
+ * overflows both it and its flipped twin, the fallback never applies, and a
+ * trigger near the window top gets a hint pinned over its own upper half.
+ * Tooltip.tsx opens it as a manual popover (top layer); the declarations below
+ * also override the UA popover styles (inset, margin, border, overflow, colors).
+ *
+ * `app-region` is inherited, so a hint whose trigger sits in a desktop title-bar
+ * band (`-webkit-app-region: drag`, e.g. the right panel's header) would itself
+ * be a drag region while shown. On macOS a drag region under the pointer takes
+ * the pointer from the page: the trigger loses `:hover`, the hint hides, the
+ * pointer is back over the trigger and the hint shows again, a flicker loop.
+ * The hint never drags the window.
  */
 .root {
+	-webkit-app-region: no-drag;
 	position: fixed;
-	position-area: top center;
+	overflow: visible;
+	position-area: top;
 	position-try-fallbacks: flip-block;
 	inset: auto;
 	z-index: 40;
@@ -31,4 +46,19 @@
 :hover + .root,
 :focus-visible + .root {
 	display: block;
+}
+
+/*
+ * Placement "right": beside the anchor, its top edge on the anchor's top
+ * (`span-bottom` grows downward from there). Near the window bottom it grows
+ * upward instead (`flip-block`); with no room on the right it moves left
+ * (`flip-inline`, which also mirrors the gap margin).
+ */
+.right {
+	position-area: right span-bottom;
+	position-try-fallbacks:
+		flip-block,
+		flip-inline,
+		flip-block flip-inline;
+	margin: 0 0 0 8px;
 }

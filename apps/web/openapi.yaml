@@ -6,6 +6,375 @@ info:
 servers:
   - url: http://127.0.0.1:3077
 paths:
+  /api/v1/migrations/scan:
+    post:
+      security: [{ HostCookie: [] }]
+      description: >-
+        Offline discovery of sessions, skills, MCP and rules on the Host. No Step account or model
+        required. Inherits Host cookie, allowed-Origin and fetch-metadata checks; loopback only.
+        Source projects are explicitly selected existing canonical directories; selecting one neither registers
+        nor trusts it. Scanning
+        never registers or trusts them. MCP discovery parses config; this is not a metadata-only scan.
+        All migration URLs reject query strings, trailing slashes and encoded path segments. JSON bodies
+        are limited to 65536 bytes; unknown fields are rejected. No resource is applied by scanning.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MigrationScanRequest" }
+      responses:
+        "200":
+          description: Candidates and per-source reports; partial resource discovery can be truncated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MigrationScanResult" }
+        "400": { $ref: "#/components/responses/MigrationInvalid" }
+        "401": { $ref: "#/components/responses/HostAuthorizationRequired" }
+        "409": { $ref: "#/components/responses/MigrationConflict" }
+        "413": { $ref: "#/components/responses/MigrationBodyTooLarge" }
+        "415": { $ref: "#/components/responses/MigrationContentType" }
+        "503": { $ref: "#/components/responses/MigrationUnavailable" }
+  /api/v1/migrations/preview:
+    post:
+      security: [{ HostCookie: [] }]
+      description: >-
+        Retain an immutable read-only preview for 15 minutes, subject to cache limits and Host restart.
+        Target scope, name, action, source/target fingerprints, rule impact and required acknowledgements
+        are bound together. Changing any choice requires another preview. MCP text is redacted even
+        with literal-value consent. Ordinary MCP is global only; sessions require a selected project.
+        Skills copy complete SKILL.md packages, not arbitrary Markdown documents. Does not apply changes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MigrationPreviewRequest" }
+      responses:
+        "200":
+          description: Preview, including allowed actions, warnings and blockers
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MigrationPreview" }
+        "400": { $ref: "#/components/responses/MigrationInvalid" }
+        "401": { $ref: "#/components/responses/HostAuthorizationRequired" }
+        "404": { $ref: "#/components/responses/MigrationNotFound" }
+        "409": { $ref: "#/components/responses/MigrationConflict" }
+        "413": { $ref: "#/components/responses/MigrationBodyTooLarge" }
+        "415": { $ref: "#/components/responses/MigrationContentType" }
+        "429": { $ref: "#/components/responses/MigrationLimit" }
+        "503": { $ref: "#/components/responses/MigrationUnavailable" }
+  /api/v1/migrations/plans:
+    post:
+      security: [{ HostCookie: [] }]
+      description: >-
+        Confirm 1–200 previews with every required acknowledgement; revalidate and retain an immutable
+        plan/digest. No resource writes yet. Duplicate selections and overlapping targets are rejected;
+        at most one non-skipped rules write per plan. Rule actions are create for a missing target or
+        append/replace for an existing target, never a mutable option supplied at start.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [selections]
+              properties:
+                selections: { type: array, minItems: 1, maxItems: 200, items: { $ref: "#/components/schemas/MigrationSelection" } }
+      responses:
+        "200":
+          description: Confirmed immutable plan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MigrationPlan" }
+        "400": { $ref: "#/components/responses/MigrationInvalid" }
+        "401": { $ref: "#/components/responses/HostAuthorizationRequired" }
+        "404": { $ref: "#/components/responses/MigrationNotFound" }
+        "409": { $ref: "#/components/responses/MigrationConflict" }
+        "413": { $ref: "#/components/responses/MigrationBodyTooLarge" }
+        "415": { $ref: "#/components/responses/MigrationContentType" }
+        "429": { $ref: "#/components/responses/MigrationLimit" }
+        "503": { $ref: "#/components/responses/MigrationUnavailable" }
+  /api/v1/migrations:
+    get:
+      security: [{ HostCookie: [] }]
+      description: List durable migration jobs; unfinished previous-Host jobs are reconciled as interrupted. No query parameters.
+      responses:
+        "200":
+          description: Persisted jobs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobs]
+                properties:
+                  jobs: { type: array, items: { $ref: "#/components/schemas/MigrationJob" } }
+        "400": { $ref: "#/components/responses/MigrationInvalid" }
+        "401": { $ref: "#/components/responses/HostAuthorizationRequired" }
+        "503": { $ref: "#/components/responses/MigrationUnavailable" }
+    post:
+      security: [{ HostCookie: [] }]
+      description: >-
+        Start only a confirmed plan using its digest and idempotency key. Revalidate before publishing;
+        source/target/impact changes invalidate consent (409). One active job per migration store.
+        Same key and digest return the recorded job; different digest with the same key is a 409.
+        Each unit is journaled; a failed/uncertain unit stops remaining work, without automatic retry
+        or rollback. Poll the job for per-item outcomes; acceptance is not completion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MigrationStartRequest" }
+      responses:
+        "202":
+          description: Accepted or previously recorded job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MigrationJob" }
+        "400": { $ref: "#/components/responses/MigrationInvalid" }
+        "401": { $ref: "#/components/responses/HostAuthorizationRequired" }
+        "404": { $ref: "#/components/responses/MigrationNotFound" }
+        "409": { $ref: "#/components/responses/MigrationConflict" }
+        "413": { $ref: "#/components/responses/MigrationBodyTooLarge" }
+        "415": { $ref: "#/components/responses/MigrationContentType" }
+        "503": { $ref: "#/components/responses/MigrationUnavailable" }
+  /api/v1/migrations/{jobId}:
+    parameters:
+      - { $ref: "#/components/parameters/MigrationJobId" }
+    get:
+      security: [{ HostCookie: [] }]
+      description: Read current durable job state and monotonic job revision. No query parameters.
+      responses:
+        "200": { $ref: "#/components/responses/MigrationJobResponse" }
+        "400": { $ref: "#/components/responses/MigrationInvalid" }
+        "401": { $ref: "#/components/responses/HostAuthorizationRequired" }
+        "404": { $ref: "#/components/responses/MigrationNotFound" }
+        "503": { $ref: "#/components/responses/MigrationUnavailable" }
+  /api/v1/migrations/{jobId}/cancel:
+    parameters:
+      - { $ref: "#/components/parameters/MigrationJobId" }
+    post:
+      security: [{ HostCookie: [] }]
+      description: Request stopping between items. Already published items remain; cancellation is not rollback. Poll until settled.
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, maxProperties: 0 }
+      responses:
+        "200": { $ref: "#/components/responses/MigrationJobResponse" }
+        "400": { $ref: "#/components/responses/MigrationInvalid" }
+        "401": { $ref: "#/components/responses/HostAuthorizationRequired" }
+        "404": { $ref: "#/components/responses/MigrationNotFound" }
+        "413": { $ref: "#/components/responses/MigrationBodyTooLarge" }
+        "415": { $ref: "#/components/responses/MigrationContentType" }
+        "503": { $ref: "#/components/responses/MigrationUnavailable" }
+  /api/v1/migrations/recoveries/preview:
+    post:
+      security: [{ HostCookie: [] }]
+      description: >-
+        Preview restoring the backup of an existing rules file modified by append/replace. Not a general
+        job undo: skills, MCP, sessions and newly created rules have no recovery here. Target
+        and backup must match journal hashes; project must be selected again after restart. Does not write.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [jobId, itemId]
+              properties:
+                jobId: { $ref: "#/components/schemas/MigrationId" }
+                itemId: { $ref: "#/components/schemas/MigrationId" }
+      responses:
+        "200":
+          description: Guarded recovery preview, expiring in 15 minutes
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MigrationRecoveryPreview" }
+        "400": { $ref: "#/components/responses/MigrationInvalid" }
+        "401": { $ref: "#/components/responses/HostAuthorizationRequired" }
+        "404": { $ref: "#/components/responses/MigrationNotFound" }
+        "409": { $ref: "#/components/responses/MigrationConflict" }
+        "413": { $ref: "#/components/responses/MigrationBodyTooLarge" }
+        "415": { $ref: "#/components/responses/MigrationContentType" }
+        "503": { $ref: "#/components/responses/MigrationUnavailable" }
+  /api/v1/migrations/recoveries/apply:
+    post:
+      security: [{ HostCookie: [] }]
+      description: >-
+        Restore only the immutable recovery preview after rules-impact acknowledgement. Rechecks target,
+        backup and effective rule impact under locks; changes return 409. Does not reload active sessions
+        or revert already assembled context. External editors do not share these locks; this is guarded
+        replacement, not a transactional filesystem rollback.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MigrationSelection" }
+      responses:
+        "200":
+          description: Backup restored
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [restored]
+                properties:
+                  restored: { type: boolean, const: true }
+        "400": { $ref: "#/components/responses/MigrationInvalid" }
+        "401": { $ref: "#/components/responses/HostAuthorizationRequired" }
+        "409": { $ref: "#/components/responses/MigrationConflict" }
+        "413": { $ref: "#/components/responses/MigrationBodyTooLarge" }
+        "415": { $ref: "#/components/responses/MigrationContentType" }
+        "503": { $ref: "#/components/responses/MigrationUnavailable" }
+  /api/v1/desktop-onboarding:
+    get:
+      security: [{ HostCookie: [] }]
+      description: >-
+        Host-owned Desktop invitation state, independent of credentials, sessions and browser storage.
+        A missing file is a read-only unseen revision-zero state. No Step account is required.
+      responses:
+        "200": { $ref: "#/components/responses/DesktopOnboardingResponse" }
+        "401": { $ref: "#/components/responses/HostAuthorizationRequired" }
+        "409": { $ref: "#/components/responses/DesktopOnboardingConflict" }
+        "503": { $ref: "#/components/responses/DesktopOnboardingUnavailable" }
+    patch:
+      security: [{ HostCookie: [] }]
+      description: >-
+        Persist the invitation decision with expectedRevision. completed/skipped are sticky for
+        flowVersion 1 across restart, upgrade and logout. Completion does not assert all items imported.
+        lastJobId is an optional durable pointer, not job authority; omission preserves the old pointer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DesktopOnboardingPatch" }
+      responses:
+        "200": { $ref: "#/components/responses/DesktopOnboardingResponse" }
+        "400":
+          description: invalid-onboarding-data or invalid-onboarding-job-id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DesktopOnboardingError" }
+        "401": { $ref: "#/components/responses/HostAuthorizationRequired" }
+        "409": { $ref: "#/components/responses/DesktopOnboardingConflict" }
+        "503": { $ref: "#/components/responses/DesktopOnboardingUnavailable" }
+  /api/v1/session-imports/scan:
+    post:
+      description: Read-only discovery on the Host machine. Archived directories and child sessions are excluded by default. Symlinks are not traversed.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              description: Scans configured default source directories only. Custom path overrides are rejected.
+              properties:
+                includeArchived: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Candidates with opaque IDs and per-source scan errors
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [existingCount, roots, candidates, errors]
+                properties:
+                  existingCount: { type: integer, minimum: 0, description: "Matching sessions already in the current candidate list." }
+                  roots:
+                    type: object
+                    description: Actual resolved source directories, including empty scanned directories.
+                    additionalProperties: { type: string }
+                  candidates: { type: array, items: { $ref: "#/components/schemas/ImportCandidate" } }
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      required: [source, message]
+                      properties:
+                        source: { type: string }
+                        message: { type: string }
+        "400": { description: Invalid input }
+  /api/v1/session-imports/preview:
+    post:
+      description: Parse and retain an immutable read-only snapshot for 15 minutes (subject to bounded cache eviction and host restart). Does not create a session, start an agent or invoke a model.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidateId]
+              properties:
+                candidateId: { type: string }
+      responses:
+        "200":
+          description: Snapshot fingerprint, bounded excerpt and compatibility warnings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportPreview" }
+        "400": { description: Unsupported or invalid source }
+        "409": { description: Candidate expired or source changed }
+  /api/v1/session-imports:
+    get:
+      description: List persisted import jobs. Previous-host unfinished jobs are marked interrupted.
+      responses:
+        "200":
+          description: Job history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs: { type: array, items: { $ref: "#/components/schemas/ImportJob" } }
+    post:
+      description: Import the exact retained preview snapshots, not later source changes, as new native sessions. Missing or expired previews require a new preview (409). Submitted snapshots are pinned until settlement. Identical source snapshots are skipped; newly previewed changed snapshots create new copies.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [selections]
+              properties:
+                selections:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [candidateId, fingerprint, cwd]
+                    properties:
+                      candidateId: { type: string }
+                      fingerprint: { type: string, pattern: "^[a-f0-9]{64}$" }
+                      cwd: { type: string, description: Existing absolute destination project directory }
+      responses:
+        "202":
+          description: Accepted job; poll the job resource for per-session results
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportJob" }
+        "400": { description: Invalid selection }
+  /api/v1/session-imports/{jobId}:
+    parameters:
+      - { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      responses:
+        "200":
+          description: Current or persisted job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportJob" }
+        "404": { description: Unknown job }
+    delete:
+      description: Request cancellation between sessions. Already published sessions remain; poll until the job settles.
+      responses:
+        "200":
+          description: Current job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportJob" }
+        "404": { description: Unknown job }
   /api/v1/terminals:
     get:
       description: List Host-owned terminal metadata for a known workspace. Requires the Host cookie and allowed Origin; never starts a shell.
@@ -326,6 +695,17 @@ paths:
                 type: object
                 properties:
                   cwd: { type: string, description: Launch working directory }
+                  defaultCwd:
+                    type: string
+                    description: |
+                      Where a new conversation starts when no workspace is on offer.
+                      The launch folder, or the home folder when the launch folder
+                      was removed from workspace navigation.
+                  defaultCwdFallback:
+                    type: boolean
+                    description: |
+                      True when `defaultCwd` is the home fallback because the launch
+                      folder was removed. The page names that folder "默认项目".
                   directoryPicker: { type: string, enum: [native, browse] }
                   login: { $ref: "#/components/schemas/LoginReport" }
                   customModels:
@@ -334,6 +714,18 @@ paths:
                       A custom (bring-your-own-key) model from models.json is usable
                       without a Step credential. Checked offline. When true, the
                       page does not open the sign-in gate.
+                  migrationAvailable:
+                    type: boolean
+                    description: Offline migration service initialized; local migration requires no Step account or model.
+                  migrationSuggested:
+                    type: boolean
+                    description: >-
+                      Service available, onboarding unseen, no existing sessions and no hidden registered
+                      workspaces. The client offers this first-use invitation only in Desktop; this is not
+                      evidence of external candidates and does not trigger a scan or apply.
+                  desktopOnboarding:
+                    $ref: "#/components/schemas/DesktopOnboardingState"
+                    description: Omitted if onboarding state is unavailable; explicit API reports errors.
                   version:
                     type: string
                     description: |
@@ -473,7 +865,7 @@ paths:
   /api/v1/workspaces:
     get:
       responses:
-        "200": { description: "Workspace navigation entries: path, name, available, optional hidden=true for explicitly removed folders. Hidden entries persist across reload; chats remain searchable and appear under Recent. Adding the folder clears hidden." }
+        "200": { description: "Workspace navigation entries (workspaces: path, name, available, optional hidden=true for explicitly removed folders) plus defaultCwd and defaultCwdFallback, which report the folder a new conversation uses when no workspace is on offer. Hidden entries persist across reload; chats remain searchable and appear under Recent. Adding the folder clears hidden." }
     post:
       requestBody:
         required: true
@@ -827,12 +1219,31 @@ paths:
             settings (a "this session" Full Access grant is not persisted).
             `goal` is the running goal the client steers from the summary board (absent when the session has none), and
             `planMode` reports whether plan mode is active; both are read from the session branch, not from UI state.
+            `revision` is the newest event revision the host had published when this snapshot was serialized; a client
+            that has already applied a newer stream event must ignore this answer.
+            `interruptedTurn` is true when the newest recorded turn was cut off — a prompt with no reply, or a reply the
+            kernel recorded as `aborted` — and false while a turn is still running.
           content:
             application/json:
               schema:
                 type: object
                 properties:
+                  revision:
+                    type: integer
+                    description: Newest published event revision at serialization time (see the SSE `agent`/`status` events)
+                  interruptedTurn:
+                    type: boolean
+                    description: >-
+                      The newest turn did not finish (runtime.ts `hasInterruptedTurn`): derived from the session
+                      entries, so it survives a host restart. False while a turn runs or is starting.
+                  lastRunAborted:
+                    type: boolean
+                    description: The last run was stopped by the user (runtime.ts `lastRunAborted`), so it has no finished reply to credit.
                   permissionPreset: { type: string, enum: [ask, approve-for-me, full-access] }
+                  subagentLanes:
+                    type: array
+                    description: Latest bounded live lane snapshots for reconnects; process memory, not model context or resumed execution.
+                    items: { $ref: "#/components/schemas/SubagentLaneSnapshot" }
                   goal:
                     type: object
                     description: The session's goal (runtime.ts `projectGoal`); absent when there is none.
@@ -858,6 +1269,11 @@ paths:
                     items:
                       type: object
                       properties:
+                        customType:
+                          type: string
+                          description: On a custom step-subagent-response entry, identifies a durable completed child answer.
+                        data:
+                          $ref: "#/components/schemas/CompletedSubagentResponse"
                         details:
                           description: >-
                             Lifecycle projection on custom_message / agent-notification entries only.
@@ -880,6 +1296,12 @@ paths:
                             the flow's round separators from it.
                         thinkingTimings:
                           $ref: "#/components/schemas/ThinkingTimings"
+                        promptCommand:
+                          type: string
+                          description: >-
+                            On a user message only: the prompt-command line (`/<template> args`) the user typed,
+                            when this message is its expansion. Paired by content from a host-recorded
+                            `stepcode-web.prompt-command` custom entry; never part of the model's context.
                   policies:
                     type: array
                     items: { $ref: "#/components/schemas/PolicyPreset" }
@@ -979,7 +1401,10 @@ paths:
         "200":
           description: >-
             SSE snapshot and agent/status/approval/clarification_required/clarification_resolved/selection_required/
-            selection_resolved/text_input_required/text_input_resolved/notice/side-answer/queue events.
+            selection_resolved/text_input_required/text_input_resolved/notice/side-answer/queue/subagent_lane events.
+            subagent_lane carries lane (a SubagentLaneSnapshot, or null when this runtime shuts down).
+            This live-only frame replaces that lane's state and does not steer the model or persist progress.
+            Completed answers are separate step-subagent-response custom entries carrying customType and data.
             clarification_required carries clarification and selection_required carries selection; the resolved events
             carry id. text_input_required carries `input` (id, sessionId, title, placeholder) and
             text_input_resolved carries id. side-answer carries `answer` (id, question, text, model, unavailable,
@@ -990,6 +1415,9 @@ paths:
             a message. queue carries a QueueState (queued, steering).
             Agent envelopes optionally carry thinkingTimings, keyed by original content-block index, with host-observed
             epoch-millisecond startedAt/endedAt fields. Live intervals may omit endedAt; saved intervals are complete.
+            A user message_start envelope may carry promptCommand: the prompt-command line its text expanded from.
+            Every event (and the session snapshot) carries `revision`, monotonic per bound session; a snapshot whose
+            revision is older than an event the page has already applied describes a state it has left.
   /api/v1/sessions/{id}/messages:
     post:
       parameters:
@@ -1189,12 +1617,16 @@ paths:
         "404": { description: Approval no longer pending }
   /api/v1/sessions/{id}/skills:
     get:
-      description: Skills the composer offers as `/skill:<name>` (empty when skill commands are disabled).
+      description: >-
+        What the composer's slash menu offers for this session: skills as `/skill:<name>` (empty when skill
+        commands are disabled) and prompt commands as `/<name>` — prompt templates, plugin `commands/*.md`
+        included, that the kernel expands on send. A template named like a registered extension command or a
+        Web surface (`mcp`, `btw`, `feedback`) never expands and is not listed.
       parameters:
         - { $ref: "#/components/parameters/SessionId" }
       responses:
         "200":
-          description: Skills by name
+          description: Skills and prompt commands, each by name
           content:
             application/json:
               schema:
@@ -1207,11 +1639,21 @@ paths:
                       properties:
                         name: { type: string }
                         description: { type: string }
+                  commands:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, description]
+                      properties:
+                        name: { type: string }
+                        description: { type: string }
+                        argumentHint: { type: string, description: "The template's `argument-hint` frontmatter" }
   /api/v1/workspace/skills:
     get:
       description: >-
-        Skills for a folder without a session yet. Uses an open session in the same folder; otherwise resolves
-        the folder's skill resources as a session would, without extensions (plugin skills are then missing).
+        Skills and prompt commands for a folder without a session yet: what a new session there would load. The
+        folder's resources are resolved as a session would, without extensions; installed plugins' skills and
+        commands are added from plugin discovery, so a plugin installed a moment ago is listed at once.
       parameters:
         - { name: cwd, in: query, required: true, schema: { type: string } }
       responses:
@@ -1242,9 +1684,11 @@ paths:
   /api/v1/settings/mcp:
     get:
       description: >-
-        MCP servers as the settings screen lists them: the user's entries from config.toml, then the servers
-        installed plugins declare, each with the host's last known connection state (absent until a session
-        has started the server).
+        MCP servers in global settings only: user declarations followed by plugin declarations and
+        the Host's last known connection state. User config is safe metadata only, never stored commands,
+        arguments, paths, URLs, literal environment/header values or OAuth secrets. protectedFields names
+        omitted fields; omission does not mean empty or removed. revision binds edits to the full stored
+        declaration. Plugin rows have no editable config/revision. Errors are generic connection diagnostics.
       responses:
         "200":
           description: Configured servers
@@ -1276,20 +1720,45 @@ paths:
     parameters:
       - { name: name, in: path, required: true, schema: { type: string } }
     put:
-      description: Replace the declaration of an existing user server. Plugins' servers cannot be replaced.
+      description: >-
+        Edit an existing global user declaration with a revision-checked patch, not a replacement config.
+        Omitted fields and keep operations preserve authoritative stored values, including secrets and
+        empty tool allow lists. set supplies a new value; remove explicitly deletes a field. Transport
+        switches must remove incompatible fields explicitly. Plugin declarations cannot be edited here.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [config]
+              additionalProperties: false
+              required: [patch]
               properties:
-                config: { $ref: "#/components/schemas/McpServerConfig" }
+                patch: { $ref: "#/components/schemas/McpSettingsPatch" }
       responses:
-        "200": { description: Saved }
-        "400": { description: Invalid declaration }
+        "200":
+          description: Saved under the global config lock
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean, const: true }
+        "401": { $ref: "#/components/responses/HostAuthorizationRequired" }
+        "400": { description: Invalid declaration or patch (mcp_settings_invalid internally); wire response contains only error }
         "404": { description: No such user server }
+        "409":
+          description: >-
+            mcp_settings_changed internally. The current Host translates it to error text only, with
+            no code field; reload the safe DTO/revision before editing again.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string, const: "MCP configuration changed; reload before editing" }
     patch:
       description: >-
         Turn a server on or off. For a plugin server this writes an override entry
@@ -1530,7 +1999,9 @@ paths:
       description: >-
         Ask one endpoint which models it advertises, for the form's "fetch available models" action. The
         body carries the draft the user is editing rather than a saved provider, so the address, protocol
-        and key are used as given and nothing is stored. The address is normalized as on save, then
+        and key are used as given and nothing is stored. A blank key falls back to the stored credential
+        for `providerId` (the credential file, then the declaration's own key), as on save and in the
+        connection test. The address is normalized as on save, then
         OpenAI-shaped protocols list at `{baseUrl}/models` with bearer auth; Anthropic Messages at
         `{baseUrl}/v1/models` with `x-api-key`. A reply over 4 MiB is refused.
       requestBody:
@@ -1541,6 +2012,7 @@ paths:
               type: object
               required: [baseUrl]
               properties:
+                providerId: { type: string, description: "Provider whose stored key is used when apiKey is blank" }
                 baseUrl: { type: string }
                 api: { type: string }
                 apiKey: { type: string, description: "Used for this request only" }
@@ -1872,8 +2344,9 @@ paths:
     post:
       description: >-
         File feedback about this session. The kernel assembles the body and the session archive, redacts them, and
-        delivers both; the host never assembles its own payload. Without a feedback endpoint configured the host
-        answers 400 with the reason.
+        delivers both; the host never assembles its own payload. The built-in collector route is used unless
+        `STEPCODE_FEEDBACK_ENDPOINT` overrides it. A report the kernel rejects (unknown category, invalid body) answers
+        400 with the reason.
       parameters:
         - { $ref: "#/components/parameters/SessionId" }
       requestBody:
@@ -1890,7 +2363,7 @@ paths:
                 token: { type: string, description: "The token of the evidence the dialog displayed" }
       responses:
         "200": { description: Submitted; `message` states the feedback id and any skipped archive }
-        "400": { description: "Feedback is not configured, the category is unknown, or the kernel rejected the body" }
+        "400": { description: "The kernel rejected the report, or delivery failed and the outcome is not a submission" }
   /api/v1/sessions/{id}/model:
     patch:
       parameters:
@@ -1916,7 +2389,645 @@ paths:
       responses:
         "200": { description: Workspace file contents }
 components:
+  securitySchemes:
+    HostCookie:
+      type: apiKey
+      in: cookie
+      name: stepcode_web
+      description: >-
+        Signed HttpOnly SameSite=Strict launch cookie. APIs also enforce allowed Origin when present
+        and reject Sec-Fetch-Site same-site/cross-site. Missing Origin alone is allowed for local clients.
+        This authorizes local Host access, not a Step account; the Host listens on 127.0.0.1 only.
+  responses:
+    HostAuthorizationRequired:
+      description: Invalid/missing Host cookie, disallowed supplied Origin or refused fetch metadata; no Step account is required for local migration.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: { type: string, const: "Authentication required" }
+    MigrationJobResponse:
+      description: Current job; inspect per-item results and poll stopping jobs
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MigrationJob" }
+    MigrationInvalid:
+      description: Invalid request, identifiers, path, selection, scope, missing acknowledgement or unsupported action
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MigrationError" }
+    MigrationConflict:
+      description: >-
+        source-changed, target-changed, preview-changed, preview-expired, plan-expired, migration-blocked,
+        batch-target-conflict, rule-batch-impact-conflict, idempotency-conflict, migration-busy,
+        recovery-target-changed, recovery-impact-changed, recovery-preview-expired, publication-conflict,
+        or a journal/session-reservation conflict. Re-preview changed inputs; never retry publication blindly.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MigrationError" }
+    MigrationNotFound:
+      description: candidate-not-found, preview-not-found, plan-not-found, job-not-found, recovery-unavailable or migration-route-not-found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MigrationError" }
+    MigrationBodyTooLarge:
+      description: migration-body-too-large (over 65536 bytes, declared or streamed)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MigrationError" }
+    MigrationContentType:
+      description: invalid-content-type (when supplied, Content-Type must be application/json)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MigrationError" }
+    MigrationLimit:
+      description: preview-limit (500 entries/128 MiB weighted cache) or plan-limit (100 cached plans)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MigrationError" }
+    MigrationUnavailable:
+      description: migration-unavailable or migration-closed; optional migration state cannot disable existing chats
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MigrationError" }
+    DesktopOnboardingResponse:
+      description: Durable invitation state
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/DesktopOnboardingState" }
+    DesktopOnboardingConflict:
+      description: >-
+        onboarding-revision-conflict, onboarding-flow-finished, onboarding-locked,
+        onboarding-revision-exhausted, unsafe-onboarding-path, invalid-onboarding-file or onboarding-read-failed.
+        A leftover writer lock is reported, not stolen.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/DesktopOnboardingError" }
+    DesktopOnboardingUnavailable:
+      description: onboarding-unavailable, onboarding-directory-unavailable or onboarding-write-failed
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/DesktopOnboardingError" }
   schemas:
+    CompletedSubagentResponse:
+      type: object
+      required: [laneId, agent, task, taskIndex, sessionId, timestamp, output]
+      properties:
+        laneId: { type: string }
+        agent: { type: string }
+        task: { type: string }
+        taskIndex: { type: integer, minimum: 0 }
+        sessionId: { type: string }
+        timestamp: { type: number, description: "Child answer completion time, epoch milliseconds" }
+        output: { type: string, description: "Complete answer, or bounded preview with the full retained-output file path" }
+        outputHash: { type: string, description: "SHA-256 of the unabridged trimmed answer; optional for old entries" }
+    SubagentLaneSnapshot:
+      type: object
+      required: [laneId, status, details]
+      properties:
+        laneId: { type: string }
+        status: { type: string, enum: [running, completed, failed, aborted] }
+        details:
+          type: object
+          required: [mode, agentScope, userAgentsDir, projectAgentsDir, agentId, results]
+          properties:
+            mode: { type: string, enum: [single, parallel, chain] }
+            agentScope: { type: string, enum: [user, project, both] }
+            userAgentsDir: { type: string }
+            projectAgentsDir: { type: [string, "null"] }
+            agentId: { type: string, description: "Same identity as laneId" }
+            status: { type: string, enum: [running, completed, failed, aborted] }
+            startedAt: { type: number }
+            updatedAt: { type: number }
+            omittedResults: { type: integer, minimum: 0 }
+            results:
+              type: array
+              description: Bounded replacement roster; no child transcript or accumulated completed answers.
+              items:
+                type: object
+                required: [agent, agentSource, task, status, exitCode, messages, stderr, usage]
+                properties:
+                  agent: { type: string }
+                  agentSource: { type: string, enum: [builtin, user, project, unknown] }
+                  task: { type: string }
+                  status: { type: string, enum: [queued, running, completed, failed, aborted, skipped] }
+                  exitCode: { type: number }
+                  messages: { type: array, maxItems: 0 }
+                  stderr: { type: string }
+                  sessionId: { type: string }
+                  sessionFile: { type: string }
+                  model: { type: string }
+                  stopReason: { type: string }
+                  errorMessage: { type: string }
+                  activeText: { type: string }
+                  activeTool: { type: string }
+                  activeToolArgs: { type: string }
+                  activeToolOutput: { type: string }
+                  lastEvent: { type: string }
+                  startedAt: { type: number }
+                  updatedAt: { type: number }
+                  step: { type: number }
+                  worktreePath: { type: string }
+                  worktreeBranch: { type: string }
+                  pendingReply: { type: boolean }
+                  cancelledPrompts: { type: array, items: { type: string } }
+                  usage:
+                    type: object
+                    required: [input, output, cacheRead, cacheWrite, cost, contextTokens, turns]
+                    properties:
+                      input: { type: number, minimum: 0 }
+                      output: { type: number, minimum: 0 }
+                      cacheRead: { type: number, minimum: 0 }
+                      cacheWrite: { type: number, minimum: 0 }
+                      cost: { type: number, minimum: 0 }
+                      contextTokens: { type: number, minimum: 0 }
+                      turns: { type: number, minimum: 0 }
+    MigrationId:
+      type: string
+      minLength: 1
+      maxLength: 256
+      pattern: '^[a-zA-Z0-9_-]+$'
+    MigrationText:
+      type: string
+      minLength: 1
+      maxLength: 512
+      pattern: '^[^\x00-\x1f\x7f]+$'
+    MigrationKind: { type: string, enum: [sessions, skills, mcp, rules] }
+    MigrationSource: { type: string, enum: [claude-code, codex, workbuddy, qoder, shared, stepcode, plugin] }
+    MigrationAction: { type: string, enum: [copy, import, create, append, replace, skip] }
+    MigrationAcknowledgement: { type: string, enum: [rules-impact, scope-expansion, independent-copy, sensitive-values] }
+    MigrationActivation: { type: string, enum: [history, disabled, next-resource-load, unchanged] }
+    MigrationScope:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [kind]
+          properties:
+            kind: { type: string, const: global }
+        - type: object
+          additionalProperties: false
+          required: [kind, cwd]
+          properties:
+            kind: { type: string, const: project }
+            cwd:
+              type: string
+              minLength: 1
+              maxLength: 4096
+              pattern: '^[^\x00-\x1f\x7f]+$'
+              description: Explicit existing absolute destination, canonicalized by Host and pinned by the service without adding it to source scans.
+      discriminator: { propertyName: kind }
+    MigrationTargetRequest:
+      oneOf:
+        - $ref: "#/components/schemas/MigrationScope"
+        - type: object
+          additionalProperties: false
+          required: [kind, cwd, create]
+          properties:
+            kind: { type: string, const: project }
+            cwd: { type: string, minLength: 1, maxLength: 4096 }
+            create: { type: boolean, const: true }
+    MigrationScanRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        kinds: { type: array, maxItems: 5, items: { $ref: "#/components/schemas/MigrationKind" } }
+        projectCwds:
+          type: array
+          maxItems: 30
+          description: >-
+            Explicit registered source projects; HTTP and service limit 30.
+            Omission retains the service's previous choice; [] clears it.
+            Paths are canonicalized, but choosing a project does not register it or grant trust.
+          items: { type: string, minLength: 1, maxLength: 4096, pattern: '^[^\x00-\x1f\x7f]+$' }
+        sessionOptions:
+          type: object
+          additionalProperties: false
+          properties:
+            range: { type: string, enum: [all, '7', '30', '90'], default: all, description: Source file modification-time window }
+            limit: { type: [integer, 'null'], enum: [30, 50, 100, null], default: 100, description: Global candidate display limit; null does not remove safety limits }
+            includeArchived: { type: boolean, default: false }
+        mcpSourcePaths:
+          type: object
+          additionalProperties: false
+          description: Explicit absolute MCP configuration files only; omission resets MCP sources to defaults, without affecting other scan roots.
+          properties:
+            claude-code: { type: string, minLength: 1, maxLength: 4096, pattern: '^[^\x00-\x1f\x7f]+$' }
+            codex: { type: string, minLength: 1, maxLength: 4096, pattern: '^[^\x00-\x1f\x7f]+$' }
+    MigrationPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [candidateId]
+      properties:
+        candidateId: { $ref: "#/components/schemas/MigrationId" }
+        target: { $ref: "#/components/schemas/MigrationTargetRequest" }
+        action: { $ref: "#/components/schemas/MigrationAction" }
+        targetName:
+          type: string
+          minLength: 1
+          maxLength: 255
+          pattern: '^[^\x00-\x1f\x7f]+$'
+          description: >-
+            Adapter limit 255; service resource names are at most 64 ASCII alphanumeric/underscore/hyphen
+            starting alphanumeric, excluding __proto__, constructor and prototype. Skills require lowercase
+            alphanumeric segments separated by hyphens. Rules may only name AGENTS.md. Sessions retain the
+            source title.
+        includeSensitiveValues:
+          type: boolean
+          default: true
+          description: MCP headers, environment values and API keys migrate by default; false strips literals. OAuth is never migrated and DTO text stays redacted.
+    MigrationError:
+      type: object
+      required: [error, code]
+      description: Migration dispatcher errors repeat the same safe code in error and code; Host authorization failures use the Host error envelope.
+      properties:
+        error: { $ref: "#/components/schemas/MigrationCode" }
+        code: { $ref: "#/components/schemas/MigrationCode" }
+    MigrationCode:
+      type: string
+      description: Known migration diagnostics, blockers and service/adapter error codes; values never include configuration contents.
+      enum:
+        - acknowledgement-required
+        - batch-target-conflict
+        - candidate-not-found
+        - direct-reference
+        - duplicate-selection
+        - idempotency-conflict
+        - independent-copy-needs-new-name
+        - invalid-acknowledgements
+        - invalid-backup
+        - invalid-config-namespace
+        - invalid-content-type
+        - invalid-document
+        - invalid-journal
+        - invalid-journal-target
+        - invalid-kinds
+        - invalid-migration-id
+        - invalid-migration-json
+        - invalid-migration-path
+        - invalid-migration-request
+        - invalid-migration-url
+        - invalid-path
+        - invalid-plugin-config
+        - invalid-preview-request
+        - invalid-projects
+        - invalid-resource
+        - invalid-resource-name
+        - invalid-rule-target
+        - invalid-scope
+        - invalid-selections
+        - invalid-skill
+        - invalid-skill-name
+        - invalid-source-config
+        - invalid-start-request
+        - invalid-target-config
+        - invalid-trust-store
+        - job-not-found
+        - journal-changed
+        - journal-limit
+        - journal-write-failed
+        - mcp-configured-equal
+        - invalid-mcp-sources
+        - mcp-unsupported-transport
+        - mcp-incomplete-config
+        - mcp-invalid-tool-filter
+        - mcp-remote-env-unsupported
+        - mcp-name-normalized
+        - mcp-name-conflict
+        - mcp-duplicate
+        - mcp-name-exhausted
+        - mcp-fields-not-translated
+        - mcp-global-only
+        - migration-blocked
+        - migration-body-too-large
+        - migration-body-unreadable
+        - migration-busy
+        - migration-closed
+        - migration-io-error
+        - migration-lock-invalid
+        - migration-lock-lost
+        - migration-route-not-found
+        - migration-unavailable
+        - plan-expired
+        - plan-limit
+        - plan-not-found
+        - plugin-managed
+        - plugin-provided
+        - preview-changed
+        - preview-expired
+        - preview-limit
+        - preview-not-found
+        - project-mcp-source-unsupported
+        - project-not-selected
+        - publication-conflict
+        - publication-reconciled
+        - publication-uncertain
+        - recovery-future-loads-only
+        - recovery-impact-changed
+        - recovery-not-applied
+        - recovery-outcome-uncertain
+        - recovery-preview-expired
+        - recovery-reconciled
+        - recovery-target-changed
+        - recovery-unavailable
+        - relative-mcp-path-unsupported
+        - reserved-prompt-name
+        - resource-inspection-incomplete
+        - resource-limit
+        - resource-load-timing-only
+        - resource-unknown
+        - resource-unsupported
+        - resource-untrusted
+        - rule-batch-impact-conflict
+        - rule-context-inspection-unsupported
+        - rule-higher-priority-override
+        - rules-default-model-context
+        - rules-no-active-reload
+        - sensitive-values-omitted
+        - session-preview-failed
+        - session-project-required
+        - session-publication-failed
+        - session-publication-warning
+        - session-reservation-failed
+        - session-reservation-missing
+        - session-scan-failed
+        - session-source-read-error
+        - skill-manual-invocation-only
+        - skill-name-conflict
+        - skill-name-shadowed
+        - source-changed
+        - standalone-skill-copy-unsupported
+        - target-activation-unknown
+        - target-changed
+        - target-conflict
+        - target-disabled
+        - target-untrusted
+        - unsafe-file-size-or-type
+        - unsafe-link
+        - unsafe-plugin-path
+        - unsafe-state-directory
+        - unsupported-action
+        - unsupported-mcp-config
+        - unsupported-mcp-url
+        - unsupported-prompt-syntax
+        - attachment_missing
+        - branch_parent_missing
+        - child_history_excluded
+        - claude_compaction
+        - encrypted_reasoning_excluded
+        - rolled_back_history
+        - source_compaction
+        - source_instructions_excluded
+        - tool_arguments_as_text
+        - tool_call_missing
+        - tool_result_missing
+        - unsupported_content
+        - unsupported_item
+    MigrationDiagnostic:
+      type: object
+      required: [code]
+      properties:
+        code: { $ref: "#/components/schemas/MigrationCode" }
+        count: { type: number }
+        path: { type: string, description: Safe path metadata, never configuration values or source text }
+    MigrationCandidate:
+      type: object
+      required: [id, kind, source, name, sourcePath, sourceScope, holding, readiness, needsMigration, diagnostics]
+      properties:
+        id: { type: string, description: Opaque scanned identity; not an arbitrary file-read capability }
+        kind: { $ref: "#/components/schemas/MigrationKind" }
+        source: { $ref: "#/components/schemas/MigrationSource" }
+        name: { type: string }
+        sourcePath: { type: string }
+        sourceScope: { $ref: "#/components/schemas/MigrationScope" }
+        holding: { type: string, enum: [external, reference, stepcode, plugin] }
+        readiness: { type: string, enum: [ready, disabled, shadowed, untrusted, unsupported, unknown] }
+        needsMigration: { type: boolean, description: False for already configured, direct references and plugin-owned resources; do not auto-copy them }
+        diagnostics: { type: array, items: { $ref: "#/components/schemas/MigrationDiagnostic" } }
+        modified: { type: string }
+        mcpTransport: { type: string, enum: [stdio, http], description: Safe connection type; never a command or URL }
+        targetPath: { type: string, description: Rules only; the AGENTS.md a default preview writes. The preview target is authoritative }
+        sourceSessionId: { type: string, description: Source metadata only }
+        messageCount: { type: integer, minimum: 0, description: Non-empty source records found during discovery; never source content }
+        messageCountCapped: { type: boolean, description: True when the count is a lower bound }
+    MigrationSourceReport:
+      type: object
+      required: [kind, source, scope, path, status, diagnostics]
+      properties:
+        kind: { $ref: "#/components/schemas/MigrationKind" }
+        source: { $ref: "#/components/schemas/MigrationSource" }
+        scope: { $ref: "#/components/schemas/MigrationScope" }
+        path: { type: string }
+        status: { type: string, enum: [ok, missing, empty, partial, error, unsupported] }
+        diagnostics: { type: array, items: { $ref: "#/components/schemas/MigrationDiagnostic" } }
+    MigrationScanResult:
+      type: object
+      required: [candidates, sources, truncated]
+      properties:
+        candidates: { type: array, items: { $ref: "#/components/schemas/MigrationCandidate" } }
+        sources: { type: array, items: { $ref: "#/components/schemas/MigrationSourceReport" } }
+        truncated: { type: boolean, description: Non-session resource candidate limit reached (2000); session scanner has separate bounds }
+    MigrationLocation:
+      type: object
+      required: [scope, path, name]
+      properties:
+        scope: { $ref: "#/components/schemas/MigrationScope" }
+        path: { type: string, description: Host-resolved physical target, not a client-supplied write path }
+        name: { type: string }
+    MigrationRuleImpact:
+      type: object
+      required: [before, after, shadowed, fingerprint, backupRequired]
+      properties:
+        before: { type: array, items: { type: string }, description: Effective default-loader rule paths before the write }
+        after: { type: array, items: { type: string }, description: Effective default-loader rule paths after the write }
+        shadowed: { type: array, items: { type: string } }
+        fingerprint: { type: string, description: Binds effective rule files and absent higher-priority candidates to consent }
+        backupRequired: { type: boolean }
+    MigrationPreview:
+      type: object
+      required: [id, candidate, fingerprint, expiresAt, target, action, allowedActions, sourceText, requiredAcknowledgements, warnings, blockers, activation]
+      properties:
+        id: { type: string }
+        candidate: { $ref: "#/components/schemas/MigrationCandidate" }
+        fingerprint: { type: string }
+        expiresAt: { type: string, format: date-time }
+        target: { $ref: "#/components/schemas/MigrationLocation" }
+        action: { $ref: "#/components/schemas/MigrationAction" }
+        allowedActions: { type: array, items: { $ref: "#/components/schemas/MigrationAction" } }
+        sourceText: { type: string, description: Bounded excerpt/content; MCP declarations are always redacted }
+        targetText: { type: string }
+        resultText: { type: string }
+        files:
+          type: array
+          items:
+            type: object
+            required: [path, bytes]
+            properties:
+              path: { type: string, description: Relative skill package file }
+              bytes: { type: integer, minimum: 0 }
+        ruleImpact: { $ref: "#/components/schemas/MigrationRuleImpact" }
+        requiredAcknowledgements: { type: array, items: { $ref: "#/components/schemas/MigrationAcknowledgement" } }
+        warnings: { type: array, items: { $ref: "#/components/schemas/MigrationDiagnostic" } }
+        blockers: { type: array, items: { $ref: "#/components/schemas/MigrationDiagnostic" } }
+        activation: { $ref: "#/components/schemas/MigrationActivation" }
+    MigrationSelection:
+      type: object
+      additionalProperties: false
+      required: [previewId, acknowledged]
+      properties:
+        previewId: { $ref: "#/components/schemas/MigrationId" }
+        acknowledged: { type: array, maxItems: 4, items: { $ref: "#/components/schemas/MigrationAcknowledgement" } }
+    MigrationPlan:
+      type: object
+      required: [id, digest, expiresAt, items]
+      properties:
+        id: { type: string }
+        digest: { type: string }
+        expiresAt: { type: string, format: date-time }
+        items: { type: array, items: { $ref: "#/components/schemas/MigrationPreview" } }
+    MigrationStartRequest:
+      type: object
+      additionalProperties: false
+      required: [planId, digest, idempotencyKey]
+      properties:
+        planId: { $ref: "#/components/schemas/MigrationId" }
+        digest: { $ref: "#/components/schemas/MigrationText" }
+        idempotencyKey:
+          type: string
+          pattern: '^[a-zA-Z0-9_-]{1,128}$'
+          description: Service limit 128 ASCII alphanumeric/underscore/hyphen (adapter text limit 512).
+    LegacyMigrationKind:
+      type: string
+      enum: [sessions, skills, mcp, rules, prompts]
+      description: Historical job results may contain prompts; current scans and previews accept only MigrationKind.
+    MigrationItemResult:
+      type: object
+      required: [id, candidateId, kind, source, name, sourceScope, requestedTarget, action, status, diagnostics, activation]
+      properties:
+        id: { type: string }
+        candidateId: { type: string }
+        kind: { $ref: "#/components/schemas/LegacyMigrationKind" }
+        source: { $ref: "#/components/schemas/MigrationSource" }
+        name: { type: string }
+        sourceScope: { $ref: "#/components/schemas/MigrationScope" }
+        requestedTarget: { $ref: "#/components/schemas/MigrationLocation" }
+        actualTarget: { $ref: "#/components/schemas/MigrationLocation" }
+        action: { $ref: "#/components/schemas/MigrationAction" }
+        status: { type: string, enum: [pending, running, imported, skipped, failed, not-run] }
+        diagnostics: { type: array, items: { $ref: "#/components/schemas/MigrationDiagnostic" } }
+        activation: { $ref: "#/components/schemas/MigrationActivation" }
+        sessionId: { type: string }
+        backupId: { type: string }
+    MigrationJob:
+      type: object
+      required: [id, createdAt, revision, status, items]
+      properties:
+        id: { type: string }
+        createdAt: { type: string, format: date-time }
+        revision: { type: integer, minimum: 0 }
+        status: { type: string, enum: [queued, running, stopping, completed, cancelled, interrupted] }
+        items: { type: array, items: { $ref: "#/components/schemas/MigrationItemResult" } }
+    MigrationRecoveryPreview:
+      type: object
+      required: [id, jobId, itemId, target, currentText, restoredText, expiresAt, requiredAcknowledgements, diagnostics]
+      properties:
+        id: { type: string }
+        jobId: { type: string }
+        itemId: { type: string }
+        target: { $ref: "#/components/schemas/MigrationLocation" }
+        currentText: { type: string }
+        restoredText: { type: string }
+        expiresAt: { type: string, format: date-time }
+        requiredAcknowledgements: { type: array, items: { $ref: "#/components/schemas/MigrationAcknowledgement" } }
+        diagnostics: { type: array, items: { $ref: "#/components/schemas/MigrationDiagnostic" } }
+    DesktopOnboardingStatus: { type: string, enum: [unseen, offered, in_progress, completed, skipped] }
+    DesktopOnboardingState:
+      type: object
+      required: [schemaVersion, flowVersion, revision, status, updatedAt]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        flowVersion: { type: integer, const: 1 }
+        revision: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        status: { $ref: "#/components/schemas/DesktopOnboardingStatus" }
+        lastJobId: { type: string, pattern: '^[a-zA-Z0-9_-]{1,128}$' }
+        updatedAt: { type: string, format: date-time }
+    DesktopOnboardingPatch:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, status]
+      properties:
+        expectedRevision: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        status: { $ref: "#/components/schemas/DesktopOnboardingStatus" }
+        lastJobId: { type: string, pattern: '^[a-zA-Z0-9_-]{1,128}$' }
+    DesktopOnboardingError:
+      type: object
+      required: [error, code]
+      properties:
+        error: { $ref: "#/components/schemas/DesktopOnboardingErrorCode" }
+        code: { $ref: "#/components/schemas/DesktopOnboardingErrorCode" }
+    DesktopOnboardingErrorCode:
+      type: string
+      enum: [invalid-onboarding-data, invalid-onboarding-job-id, invalid-onboarding-path, unsafe-onboarding-path, onboarding-directory-unavailable, invalid-onboarding-file, onboarding-read-failed, onboarding-write-failed, onboarding-locked, onboarding-revision-conflict, onboarding-flow-finished, onboarding-revision-exhausted, onboarding-unavailable]
+    ImportCandidate:
+      type: object
+      required: [id, source, sessionId, title, cwd, modified, archived, version]
+      properties:
+        id: { type: string }
+        source: { type: string, enum: [codex, claude-code, workbuddy, qoder] }
+        sessionId: { type: string }
+        title:
+          type: string
+          description: Readable bounded scan title; explicit source title, first user text, or project/source plus ID fallback. Preview may refine a fallback.
+        cwd: { type: string, description: Source project directory from discovered metadata }
+        sourcePath: { type: string, description: Absolute source JSONL path on the host }
+        modified: { type: string, format: date-time }
+        archived: { type: boolean }
+        version: { type: string }
+    ImportPreview:
+      allOf:
+        - { $ref: "#/components/schemas/ImportCandidate" }
+        - type: object
+          required: [fingerprint, messageCount, toolCount, warnings, excerpt]
+          properties:
+            fingerprint: { type: string }
+            messageCount: { type: integer }
+            toolCount: { type: integer }
+            excerpt: { type: string, maxLength: 12000 }
+            warnings:
+              type: array
+              items:
+                type: object
+                required: [code, count]
+                properties:
+                  code: { type: string }
+                  count: { type: integer }
+    ImportJob:
+      type: object
+      required: [id, createdAt, status, total, results]
+      properties:
+        id: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        status: { type: string, enum: [running, completed, cancelled, interrupted] }
+        total: { type: integer }
+        results:
+          type: array
+          items:
+            type: object
+            required: [candidateId, status]
+            properties:
+              candidateId: { type: string }
+              source: { type: string, enum: [codex, claude-code, workbuddy, qoder], description: Source client; legacy recovery uses validated provenance only }
+              sourcePath: { type: string, description: Absolute source JSONL path on the host when known }
+              title: { type: string, description: Reviewed title or bounded native-header recovery for older results; absent when unknown }
+              cwd:
+                type: string
+                description: Selected absolute destination for imported, skipped or failed selections. Older results may recover native header cwd; absent when unknown or for batch-level journal failures.
+              status: { type: string, enum: [imported, skipped, failed] }
+              sessionId: { type: string }
+              path: { type: string }
+              error: { type: string }
+              warning: { type: string, description: "Session publication succeeded, but a secondary notification failed" }
     TerminalInfo:
       type: object
       required: [id, cwd, title, shell, status, cols, rows]
@@ -2066,18 +3177,149 @@ components:
             scopes: { type: array, items: { type: string } }
             callback_port: { type: integer }
         enabled: { type: boolean }
-    SettingsMcpServer:
+    McpSettingsField:
+      type: string
+      enum: [command, args, cwd, env, url, bearer_token_env_var, http_headers, env_http_headers, enabled, startup_timeout_sec, tool_timeout_sec, enabled_tools, disabled_tools, shared, oauth]
+    McpSettingsPatch:
       type: object
+      additionalProperties: false
+      required: [revision, fields]
+      description: >-
+        Full stored declaration hash, then explicit per-field intent. Unknown patch/field/change keys
+        are rejected. Values are validated after applying changes under the config lock; the complete
+        result must contain exactly one valid transport. Omitted or keep fields remain unchanged.
+      properties:
+        revision: { type: string, pattern: '^[a-f0-9]{64}$' }
+        fields:
+          type: object
+          additionalProperties: false
+          properties:
+            command: { $ref: "#/components/schemas/McpStringChange" }
+            args: { $ref: "#/components/schemas/McpStringListChange" }
+            cwd: { $ref: "#/components/schemas/McpStringChange" }
+            env: { $ref: "#/components/schemas/McpStringMapChange" }
+            url: { $ref: "#/components/schemas/McpStringChange" }
+            bearer_token_env_var: { $ref: "#/components/schemas/McpStringChange" }
+            http_headers: { $ref: "#/components/schemas/McpStringMapChange" }
+            env_http_headers: { $ref: "#/components/schemas/McpStringMapChange" }
+            enabled: { $ref: "#/components/schemas/McpBooleanChange" }
+            startup_timeout_sec: { $ref: "#/components/schemas/McpNumberChange" }
+            tool_timeout_sec: { $ref: "#/components/schemas/McpNumberChange" }
+            enabled_tools: { $ref: "#/components/schemas/McpStringListChange" }
+            disabled_tools: { $ref: "#/components/schemas/McpStringListChange" }
+            shared: { $ref: "#/components/schemas/McpBooleanChange" }
+            oauth: { $ref: "#/components/schemas/McpOauthChange" }
+    McpKeepOrRemove:
+      type: object
+      additionalProperties: false
+      required: [operation]
+      properties:
+        operation: { type: string, enum: [keep, remove] }
+    McpStringChange:
+      oneOf:
+        - { $ref: "#/components/schemas/McpKeepOrRemove" }
+        - type: object
+          additionalProperties: false
+          required: [operation, value]
+          properties:
+            operation: { type: string, const: set }
+            value: { type: string }
+    McpStringListChange:
+      oneOf:
+        - { $ref: "#/components/schemas/McpKeepOrRemove" }
+        - type: object
+          additionalProperties: false
+          required: [operation, value]
+          properties:
+            operation: { type: string, const: set }
+            value: { type: array, items: { type: string } }
+    McpStringMapChange:
+      oneOf:
+        - { $ref: "#/components/schemas/McpKeepOrRemove" }
+        - type: object
+          additionalProperties: false
+          required: [operation, value]
+          properties:
+            operation: { type: string, const: set }
+            value: { type: object, additionalProperties: { type: string } }
+    McpBooleanChange:
+      oneOf:
+        - { $ref: "#/components/schemas/McpKeepOrRemove" }
+        - type: object
+          additionalProperties: false
+          required: [operation, value]
+          properties:
+            operation: { type: string, const: set }
+            value: { type: boolean }
+    McpNumberChange:
+      oneOf:
+        - { $ref: "#/components/schemas/McpKeepOrRemove" }
+        - type: object
+          additionalProperties: false
+          required: [operation, value]
+          properties:
+            operation: { type: string, const: set }
+            value: { type: number, exclusiveMinimum: 0 }
+    McpOauthChange:
+      oneOf:
+        - { $ref: "#/components/schemas/McpKeepOrRemove" }
+        - type: object
+          additionalProperties: false
+          required: [operation, value]
+          properties:
+            operation: { type: string, const: set }
+            value:
+              type: object
+              properties:
+                client_id: { type: string }
+                client_secret: { type: string, writeOnly: true }
+                scopes: { type: array, items: { type: string } }
+                callback_port: { type: integer, minimum: 1, maximum: 65535 }
+    McpSafeConfig:
+      type: object
+      additionalProperties: false
+      description: Read-only metadata projection, never a stored declaration to write back wholesale.
+      properties:
+        enabled: { type: boolean }
+        shared: { type: boolean }
+        startup_timeout_sec: { type: number, exclusiveMinimum: 0 }
+        tool_timeout_sec: { type: number, exclusiveMinimum: 0 }
+        enabled_tools: { type: array, items: { type: string } }
+        disabled_tools: { type: array, items: { type: string } }
+        bearer_token_env_var: { type: string, pattern: '^[A-Za-z_][A-Za-z0-9_]{0,127}$' }
+        env_http_headers:
+          type: object
+          propertyNames: { pattern: '^[A-Za-z0-9_-]{1,128}$' }
+          additionalProperties: { type: string, pattern: '^[A-Za-z_][A-Za-z0-9_]{0,127}$' }
+    SettingsMcpServer:
+      oneOf:
+        - allOf:
+            - { $ref: "#/components/schemas/SettingsMcpServerBase" }
+            - type: object
+              required: [source, config, protectedFields, revision]
+              properties:
+                source: { type: string, const: user }
+                config: { $ref: "#/components/schemas/McpSafeConfig" }
+                protectedFields: { type: array, items: { $ref: "#/components/schemas/McpSettingsField" } }
+                revision: { type: string, pattern: '^[a-f0-9]{64}$' }
+        - allOf:
+            - { $ref: "#/components/schemas/SettingsMcpServerBase" }
+            - type: object
+              required: [source, pluginName]
+              properties:
+                source: { type: string, const: plugin }
+                pluginName: { type: string }
+      discriminator: { propertyName: source }
+    SettingsMcpServerBase:
+      type: object
+      required: [name, transport, enabled]
       properties:
         name: { type: string }
-        source: { type: string, enum: [user, plugin] }
-        pluginName: { type: string }
         transport: { type: string, enum: [stdio, http] }
         enabled: { type: boolean }
-        config: { $ref: "#/components/schemas/McpServerConfig" }
         status: { type: string, enum: [connecting, connected, failed, disabled] }
         toolCount: { type: integer }
-        error: { type: string }
+        error: { type: string, description: Generic safe connection diagnostic }
     SettingsMarketplace:
       type: object
       properties:
@@ -2309,6 +3551,11 @@ components:
         customModels: { type: boolean, description: "A custom models.json model is still usable, so the page stays in the app instead of the sign-in gate" }
         login: { $ref: "#/components/schemas/LoginReport" }
   parameters:
+    MigrationJobId:
+      name: jobId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/MigrationId" }
     SessionId:
       name: id
       in: path

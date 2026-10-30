@@ -13,13 +13,13 @@ import {
 	type ReactNode,
 	useCallback,
 	useEffect,
-	useMemo,
+	useLayoutEffect,
 	useRef,
 	useState,
 } from "react";
-import { useT } from "../../i18n";
+import { useMarkdownLabels, useT } from "../../i18n";
 import { api, errorMessage } from "../../lib/api";
-import { renderMarkdown } from "../../lib/markdown";
+import { releaseUnusedComposerDraft, retainComposerDraftWork, updateDraftModes } from "../../state/composer-drafts";
 import {
 	activeCwd,
 	copyText,
@@ -29,7 +29,7 @@ import {
 	timelineFromEntries,
 } from "../../state/session";
 import { getState, type ModeId, setUi, useAppStore } from "../../state/store";
-import type { SessionSnapshot, TreeEntry } from "../../state/types";
+import type { Attachment, SessionSnapshot, TreeEntry } from "../../state/types";
 import { Icon, IconButton, MarkdownView, Tooltip } from "../../ui";
 import { openFeedback } from "../conversation";
 import { rewritePrompt } from "../conversation/actions";
@@ -37,6 +37,7 @@ import { askSideQuestion } from "../files";
 import { MicButton } from "../voice";
 import { AttachmentList } from "./Attachments";
 import {
+	addAttachments,
 	type ContextPackage,
 	chooseMode,
 	clearModes,
@@ -44,11 +45,13 @@ import {
 	packageSessionContext,
 	type StagedPick,
 	sendMessage,
+	stageCommandAtSlashToken,
 	stageCommandLead,
 	syncStagedModeLead,
 	turnActive,
 	updateQueued,
 } from "./actions";
+import { type ComposerDraft, composerDraft } from "./drafts";
 import { FileMenu, type FileMenuHandle } from "./FileMenu";
 import { type FileQuery, fileCompletionText, sameFileQuery } from "./file-completion";
 import { ModelMenu } from "./ModelMenu";
@@ -59,16 +62,21 @@ import { PlusMenu } from "./PlusMenu";
 import { PolicyMenu } from "./PolicyMenu";
 import { PromptInput } from "./PromptInput";
 import {
+	clearPromptBody,
 	insertLineBreak,
 	insertModeLead,
 	insertTextAtCaret,
 	placeCaretAtEnd,
+	promptBodyText,
 	promptFileQuery,
 	promptFiles,
+	promptMessageText,
+	promptSlashToken,
 	promptText,
 	removeModeLead,
+	removeSlashToken,
 	replaceFileQuery,
-	restorePrompt,
+	restoreFailedPrompt,
 	setPromptText,
 	snapshotPrompt,
 	waitForUploads,
@@ -102,7 +110,19 @@ export interface ComposerProps {
 /** The three listbox popovers; only one is open at a time (legacy `setupPopover` `open()`). */
 type ComposerMenu = "policy" | "plus" | "model";
 
-export function Composer({ workspaceControl, branchControl, variant = "full" }: ComposerProps) {
+export function Composer(props: ComposerProps) {
+	const id = useAppStore((state) => state.composerDraftId);
+	// A rewrite has its own input and never reads or writes the main draft cache.
+	const edit = props.variant === "edit";
+	return <ComposerInput key={edit ? "edit" : id} {...props} draft={edit ? undefined : composerDraft(id)} />;
+}
+
+function ComposerInput({
+	workspaceControl,
+	branchControl,
+	variant = "full",
+	draft,
+}: ComposerProps & { readonly draft?: ComposerDraft }) {
 	const t = useT();
 	const form = useRef<HTMLFormElement | null>(null);
 	const prompt = useRef<HTMLDivElement | null>(null);
@@ -137,9 +157,27 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 	/** Shift+Enter leaves the preview: the editor gets the newline it asked for once it is visible. */
 	const newlineOnReturn = useRef(false);
 	/** Picked other-session contexts, one removable chip each, sent with the next message. */
-	const [contextPackages, setContextPackages] = useState<readonly ContextPackage[]>([]);
+	const [contextPackages, setContextPackages] = useState<readonly ContextPackage[]>(draft?.contextPackages ?? []);
 	/** Picked skills and plugins, one light-purple icon chip each, sent with the next message. */
-	const [stagedPicks, setStagedPicks] = useState<readonly StagedPick[]>([]);
+	const [stagedPicks, setStagedPicks] = useState<readonly StagedPick[]>(draft?.stagedPicks ?? []);
+	const [rewriteImages, setRewriteImages] = useState<readonly Attachment[]>([]);
+	const rewriteImageReads = useRef<Promise<void>[]>([]);
+	const rewriteAttachments = useRef<readonly Attachment[]>([]);
+	const stageRewriteImages = useCallback((files: readonly File[]) => {
+		const read = addAttachments(files, (attachment) => {
+			rewriteAttachments.current = [...rewriteAttachments.current, attachment];
+			setRewriteImages(rewriteAttachments.current);
+		});
+		rewriteImageReads.current.push(read);
+		void read.finally(() => {
+			rewriteImageReads.current = rewriteImageReads.current.filter((pending) => pending !== read);
+		});
+	}, []);
+	useLayoutEffect(() => {
+		if (!draft) return;
+		draft.contextPackages = contextPackages;
+		draft.stagedPicks = stagedPicks;
+	}, [draft, contextPackages, stagedPicks]);
 	// Single-select and single-shot: at most one mode rides the next message.
 	const modes = useAppStore((state) => state.modes);
 	const activeMode = (Object.keys(modes) as ModeId[]).find((id) => modes[id]);
@@ -154,7 +192,7 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 	 */
 	useEffect(() => {
 		const editor = prompt.current;
-		if (!editor) return;
+		if (!editor || variant === "edit") return;
 		if (activeModeMeta)
 			insertModeLead(editor, {
 				id: activeModeMeta.id,
@@ -163,7 +201,7 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 				command: modePrefix(activeModeMeta.id).trim(),
 			});
 		else removeModeLead(editor);
-	}, [activeModeMeta, t]);
+	}, [activeModeMeta, t, variant]);
 	/** Back to the editor, caret after the draft. */
 	const closePreview = useCallback(() => {
 		previewing.current = false;
@@ -204,6 +242,24 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 		if (text.trim()) setPreviewSource(text);
 		else closePreview();
 	}, [closePreview]);
+	useLayoutEffect(() => {
+		const editor = prompt.current;
+		if (!draft || !editor) return;
+		draft.editor = editor;
+		draft.refresh = () => {
+			syncHasText();
+			setContextPackages(draft.contextPackages);
+			setStagedPicks(draft.stagedPicks);
+		};
+		editor.replaceChildren(...draft.parked.childNodes);
+		syncHasText();
+		return () => {
+			draft.parked.replaceChildren(...editor.childNodes);
+			draft.editor = null;
+			draft.refresh = undefined;
+			releaseUnusedComposerDraft(draft.id);
+		};
+	}, [draft, syncHasText]);
 	useEffect(() => {
 		if (previewOpen) {
 			previewRef.current?.focus();
@@ -280,7 +336,7 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 	const onValueInput = useCallback(
 		(value: string) => {
 			// Backspacing over the staged mode's lead chip drops the mode, like deleting its command.
-			if (prompt.current) syncStagedModeLead(prompt.current);
+			if (prompt.current && variant !== "edit") syncStagedModeLead(prompt.current);
 			setHasText(Boolean(value.trim()));
 			if (previewing.current) {
 				// An undo can empty the draft while the preview owns the screen; it closes rather
@@ -288,14 +344,19 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 				if (value.trim()) setPreviewSource(value);
 				else closePreview();
 			}
-			const next = slashQuery(value);
+			if (variant === "edit") return;
+			// A `/word` at the caret opens the menu wherever it is typed: at the start,
+			// after the staged lead chips (commands stack), or after a space mid-text.
+			// Without a caret in the editor (a programmatic fill) the whole body decides.
+			const token = prompt.current ? promptSlashToken(prompt.current) : null;
+			const next = token ? token.query : slashQuery(prompt.current ? promptBodyText(prompt.current) : value);
 			setQuery(next);
 			const view = getState().ui.slashMenu;
 			if (next !== null) setUi({ slashMenu: "commands", fileCompletionOpen: false });
 			else if (view) setUi({ slashMenu: null });
 			syncFileQuery();
 		},
-		[syncFileQuery, closePreview],
+		[syncFileQuery, closePreview, variant],
 	);
 
 	const onCompositionChange = useCallback((active: boolean) => {
@@ -343,28 +404,46 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 			setPathQuery(null);
 			lastPathQuery.current = null;
 			setUi({ fileCompletionOpen: false });
-			if (item.kind === "mcp") {
-				// A status view, not a prompt: nothing is sent.
-				setPromptText(editor, "");
-				setHasText(false);
-				setUi({ slashMenu: "mcp" });
-				clearModes();
-			} else if (item.kind === "feedback") {
-				// The product's own feedback dialog, which POSTs to the same kernel
-				// submission the `/feedback` command uses. Nothing is sent as a prompt.
-				setPromptText(editor, "");
-				setHasText(false);
-				setUi({ slashMenu: null });
-				clearModes();
-				openFeedback();
+			// The `/word` being completed, at the caret; without one (a programmatic
+			// fill) the body as a whole was the query.
+			const token = promptSlashToken(editor);
+			/** Remove only the typed `/word`; true when the rest of the prompt keeps text. */
+			const dropTypedWord = (): boolean => {
+				if (!token || !removeSlashToken(editor, token)) clearPromptBody(editor);
+				return Boolean(promptBodyText(editor).trim());
+			};
+			if (item.kind === "mcp" || item.kind === "feedback") {
+				// A status view or the product's own feedback dialog: nothing is sent.
+				// What the user wrote around a mid-text `/mcp` stays; a prompt that was
+				// only the command is cleared, as before.
+				if (!dropTypedWord()) {
+					setPromptText(editor, "");
+					clearModes();
+				}
+				syncHasText();
+				setUi({ slashMenu: item.kind === "mcp" ? "mcp" : null });
+				if (item.kind === "feedback") openFeedback();
 			} else {
-				// The kernel runs `/<command> [args]` and expands `/skill:<name> [request]`
-				// into the skill's instructions on send. The pick becomes the prompt's
-				// lead chip — the same chip typing that command produces.
-				setPromptText(editor, "");
-				stageCommandLead(editor, item.kind === "command" ? `/${item.key}` : `/skill:${item.key}`);
+				// The kernel runs `/<command> [args]`, expands a prompt command
+				// `/<name> [args]` into its template and `/skill:<name> [request]` into
+				// the skill's instructions on send — only at the start of the message.
+				// A `/word` typed mid-text after a leading command stays where it was
+				// typed (only the first command runs, so moving it would only reorder
+				// the words); otherwise the pick becomes the prompt's lead chip, and the
+				// text typed before it (as in `fix /commit`) becomes its arguments.
+				const command = item.kind === "skill" ? `/skill:${item.key}` : `/${item.key}`;
+				const placed = token ? stageCommandAtSlashToken(editor, token, command) : false;
+				if (!placed) {
+					clearPromptBody(editor);
+					stageCommandLead(editor, command);
+				}
 				syncHasText();
 				setUi({ slashMenu: null });
+				// The caret stays just after the chip it placed, where typing continues.
+				if (placed) {
+					editor.focus();
+					return;
+				}
 			}
 			editor.focus();
 			placeCaretAtEnd(editor);
@@ -376,12 +455,19 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 	const sending = useRef(false);
 	const submit = async (steer: boolean) => {
 		const editor = prompt.current;
-		if (!editor || sending.current) return;
+		if (!editor || sending.current || draft?.sending) return;
+		const owner = getState().composerDraftId;
+		const release = draft ? retainComposerDraftWork(owner) : () => {};
 		sending.current = true;
+		if (draft) draft.sending = true;
 		try {
 			// A chip has its upload id only once its upload settles; a failed one is removed.
-			await waitForUploads();
-			const text = promptText(editor).trim();
+			await waitForUploads(editor);
+			if (edit) await Promise.all(rewriteImageReads.current);
+			// A navigation while uploads settle leaves the original draft intact; it does not submit the new input.
+			if (!editor.isConnected || getState().composerDraftId !== owner || getState().ui.openingSession) return;
+			// A command chip placed mid-text is sent first, where the kernel runs it.
+			const text = promptMessageText(editor).trim();
 			const files = promptFiles(editor);
 			if (!text) return;
 			// A send starts from the draft, not from its render: the preview goes either way.
@@ -395,7 +481,7 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 				setQuery(null);
 				setUi({ slashMenu: null });
 				// The prompt (and the mode lead in it) is gone; the mode does not survive it.
-				clearModes();
+				if (!edit) clearModes();
 				void askSideQuestion(sideQuestion);
 				return;
 			}
@@ -413,7 +499,7 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 				setQuery(null);
 				setUi({ slashMenu: null });
 				openFeedback(undefined, feedbackCommand[1]?.trim() ?? "");
-				clearModes();
+				if (!edit) clearModes();
 				openFeedback();
 				return;
 			}
@@ -423,10 +509,11 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 			 * The lead chips' own commands ride IN the text: every chip carries
 			 * its exact command line, so stacked commands keep their order.
 			 */
-			const lead = stagedPicks.find((pick) => pick.prefix);
+			const inputPicks = draft ?? { contextPackages, stagedPicks };
+			const lead = inputPicks.stagedPicks.find((pick) => pick.prefix);
 			const tail = [
-				...stagedPicks.filter((pick) => pick.note).map((pick) => pick.note),
-				...contextPackages.map((item) => item.block),
+				...inputPicks.stagedPicks.filter((pick) => pick.note).map((pick) => pick.note),
+				...inputPicks.contextPackages.map((item) => item.block),
 			].join("\n\n");
 			// Lead chips serialize their own commands into `text` in staged order,
 			// so a stacked input (plan + skill + prompt) keeps its built order.
@@ -436,23 +523,54 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 			setPathQuery(null);
 			lastPathQuery.current = null;
 			setUi({ slashMenu: null, fileCompletionOpen: false });
-			const draft = snapshotPrompt(editor);
+			const snapshot = snapshotPrompt(editor);
+			const savedPicks = { contextPackages: inputPicks.contextPackages, stagedPicks: inputPicks.stagedPicks };
+			const savedModes = getState().modes;
 			setPromptText(editor, "");
 			setHasText(false);
-			const sent =
-				edit && editingPrompt
-					? await rewritePrompt(editingPrompt.before, outgoing, files)
-					: await sendMessage(outgoing, files, steer);
-			if (!sent) {
-				restorePrompt(editor, draft);
-				syncHasText();
-			} else {
+			if (!edit) {
 				setContextPackages([]);
 				setStagedPicks([]);
+				if (draft) {
+					draft.contextPackages = [];
+					draft.stagedPicks = [];
+				}
 				clearModes();
+			}
+			const sent =
+				edit && editingPrompt
+					? await rewritePrompt(editingPrompt.before, outgoing, files, rewriteAttachments.current)
+					: await sendMessage(outgoing, files, steer);
+			if (!sent) {
+				const target = draft ? (draft.editor ?? draft.parked) : editor;
+				restoreFailedPrompt(target, snapshot);
+				if (draft) {
+					draft.contextPackages = [
+						...savedPicks.contextPackages.filter(
+							(item) => !draft.contextPackages.some((newer) => newer.sessionId === item.sessionId),
+						),
+						...draft.contextPackages,
+					];
+					draft.stagedPicks = [
+						...savedPicks.stagedPicks.filter(
+							(item) =>
+								!draft.stagedPicks.some(
+									(newer) =>
+										(item.prefix && newer.prefix) || (newer.kind === item.kind && newer.name === item.name),
+								),
+						),
+						...draft.stagedPicks,
+					];
+					updateDraftModes(draft.id, (modes) => (Object.values(modes).some(Boolean) ? modes : savedModes));
+					draft.refresh?.();
+				} else if (target.isConnected) {
+					syncHasText();
+				}
 			}
 		} finally {
 			sending.current = false;
+			if (draft) draft.sending = false;
+			release();
 		}
 	};
 
@@ -507,20 +625,27 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 	);
 
 	/** A session picked in `#plusMenu`: package its context into a chip above the prompt. */
-	const pickSession = useCallback(async (id: string) => {
-		try {
-			const snapshot = await api<SessionSnapshot>(`/api/v1/sessions/${id}`);
-			const title = sessionTitle(snapshot);
-			setContextPackages((packages) => [
-				// One chip per session: picking again replaces, not stacks.
-				...packages.filter((item) => item.sessionId !== id),
-				{ sessionId: id, title, block: packageSessionContext(title, timelineFromEntries(snapshot.entries)) },
-			]);
-			prompt.current?.focus();
-		} catch (error) {
-			showError(errorMessage(error));
-		}
-	}, []);
+	const pickSession = useCallback(
+		async (id: string) => {
+			const release = draft ? retainComposerDraftWork(draft.id) : () => {};
+			try {
+				const snapshot = await api<SessionSnapshot>(`/api/v1/sessions/${id}`);
+				const title = sessionTitle(snapshot);
+				if (!draft) return;
+				draft.contextPackages = [
+					...draft.contextPackages.filter((item) => item.sessionId !== id),
+					{ sessionId: id, title, block: packageSessionContext(title, timelineFromEntries(snapshot.entries)) },
+				];
+				draft.refresh?.();
+				draft.editor?.focus();
+			} catch (error) {
+				showError(errorMessage(error));
+			} finally {
+				release();
+			}
+		},
+		[draft],
+	);
 
 	/** Cmd/Ctrl+Enter during a turn: steer the typed text, or with an empty prompt every queued message. */
 	const steer = () => {
@@ -536,10 +661,7 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 		if (queuedCount) void updateQueued({ kind: "steer" });
 	};
 
-	const previewHtml = useMemo(
-		() => renderMarkdown(previewSource, { code: t("code"), copy: t("copy"), table: t("markdownTable") }),
-		[previewSource, t],
-	);
+	const markdownLabels = useMarkdownLabels();
 	/** In the preview, Enter sends and Cmd/Ctrl+Enter steers exactly as in the editor. */
 	const onPreviewKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
 		const mod = event.metaKey || event.ctrlKey;
@@ -613,7 +735,19 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 						: activeMode) ?? undefined
 				}
 			>
-				<AttachmentList />
+				{edit ? (
+					<AttachmentList
+						attachments={rewriteImages}
+						onRemove={(index) => {
+							rewriteAttachments.current = rewriteAttachments.current.filter(
+								(_, position) => position !== index,
+							);
+							setRewriteImages(rewriteAttachments.current);
+						}}
+					/>
+				) : (
+					<AttachmentList />
+				)}
 				{contextPackages.length || stagedPicks.length ? (
 					<div className="attachment-list" id="contextChipList">
 						{/* The mode is no chip here: it rides the prompt as its leading
@@ -671,6 +805,9 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 						promptRef={prompt}
 						id={edit ? "editPrompt" : "prompt"}
 						ignoreFocusRequest={edit}
+						inlineRewrite={edit}
+						onImages={edit ? stageRewriteImages : undefined}
+						onUploadSettled={draft ? () => draft.refresh?.() : undefined}
 						disabled={waiting}
 						onSubmit={() => form.current?.requestSubmit()}
 						onSteer={steer}
@@ -698,11 +835,13 @@ export function Composer({ workspaceControl, branchControl, variant = "full" }: 
 						<MarkdownView
 							ref={previewRef}
 							className="prompt-preview message-body"
-							html={previewHtml}
+							source={previewSource}
+							labels={markdownLabels}
 							role="region"
 							aria-label={t("markdownPreview")}
 							tabIndex={0}
-							onCopyCode={(code) => void copyText(code)}
+							onCopyCode={(code) => copyText(code, null)}
+							copiedLabel={t("copied")}
 							onKeyDown={onPreviewKeyDown}
 							onClick={onPreviewClick}
 						/>

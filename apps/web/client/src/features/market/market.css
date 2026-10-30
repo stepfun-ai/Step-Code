@@ -24,7 +24,7 @@
 }
 /* The floating show-sidebar button sits over the bar's start, as on the session header. */
 .app.sidebar-hidden .market-header {
-	padding-left: 60px;
+	padding-left: var(--sidebar-show-clearance);
 }
 .market-header strong {
 	font-size: 14px;

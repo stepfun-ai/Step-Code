@@ -128,16 +128,13 @@
 }
 
 /*
- * While a subagent's read-only record is open, the parent prompt deck steps
- * aside. A subagent runs on context the main agent handed it, so the reader is
- * only looking; leaving the composer beside the record made it read as that
- * record's input — the field this surface deliberately does not have. Closing
- * the panel restores the parent's composer.
+ * The child record is read-only, not the conversation that opened it.
+ *
+ * While this panel is open the parent composer stays mounted below the stream,
+ * so typing, stop and queued messages remain reachable. Do not hide
+ * `.composer-zone` from here: the panel carries no field of its own, and its
+ * "read-only" badge already marks it as a record.
  */
-.app:has(#childAgentView.open) .composer-zone {
-	display: none;
-}
-
 .main {
 	container-type: inline-size;
 	container-name: conversation;

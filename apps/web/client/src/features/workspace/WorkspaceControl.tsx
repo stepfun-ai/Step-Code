@@ -1,6 +1,5 @@
 import { useT } from "../../i18n";
-import { basename } from "../../lib/format";
-import { knownWorkspaces, startDraft } from "../../state/session";
+import { knownWorkspaces, startDraft, workspaceLabel } from "../../state/session";
 import { shallowEqual, useAppStore } from "../../state/store";
 import { EmptyState, Icon, Popover } from "../../ui";
 import { chooseWorkspaceFolder, closeWorkspacePopover, openWorkspacePopover } from "./actions";
@@ -13,8 +12,10 @@ import { chooseWorkspaceFolder, closeWorkspacePopover, openWorkspacePopover } fr
  * there, it opens upward instead of running off screen.
  *
  * Hidden while a session is open. Before bootstrap there is no folder yet, and
- * `basename()` would render its "recent" placeholder as if it were a workspace
- * name, so the neutral "Workspace" label stays until a real path arrives.
+ * `workspaceLabel()` would render its "recent" placeholder as if it were a
+ * workspace name, so the neutral "Workspace" label stays until a real path
+ * arrives. With no workspace on offer the label is "默认项目" — the folder new
+ * work falls back to — not the folder's own last path segment.
  */
 export function WorkspaceControl() {
 	const t = useT();
@@ -22,6 +23,9 @@ export function WorkspaceControl() {
 		(state) => ({
 			hidden: Boolean(state.current),
 			cwd: state.draftCwd || state.bootstrapCwd,
+			// "默认项目" while no workspace is on offer, so the pill never names
+			// the fallback folder after the last user or claims there is none.
+			label: state.draftCwd || state.bootstrapCwd ? workspaceLabel(state, state.draftCwd || state.bootstrapCwd) : "",
 			draftCwd: state.draftCwd,
 			open: state.ui.workspacePopoverOpen,
 		}),
@@ -40,12 +44,15 @@ export function WorkspaceControl() {
 				closeOnEscape={false}
 				content={
 					<>
-						<div className="workspace-popover-title">{t("recentFolders")}</div>
+						{/* An empty list has no folders to title: the reason is the state itself. */}
+						{workspaces.length ? <div className="workspace-popover-title">{t("recentFolders")}</div> : null}
+						{/* Keep the list's own name: the empty row inside it states the condition,
+						    and a label repeating it would be announced twice. */}
 						<div id="workspaceRecentList" role="listbox" aria-label={t("recentFolders")}>
 							{workspaces.map((path) => (
 								<RecentItem key={path} path={path} selected={path === view.draftCwd} />
 							))}
-							{workspaces.length ? null : <EmptyState>{t("emptyDirectory")}</EmptyState>}
+							{workspaces.length ? null : <EmptyState>{t("noWorkspaces")}</EmptyState>}
 						</div>
 						<div className="workspace-popover-divider" />
 						<button
@@ -69,11 +76,11 @@ export function WorkspaceControl() {
 					type="button"
 					aria-haspopup="listbox"
 					aria-expanded={view.open}
-					aria-label={`${t("workspacePickerLabel")}: ${view.cwd || "Workspace"}`}
+					aria-label={`${t("workspacePickerLabel")}: ${view.cwd ? view.label : "Workspace"}`}
 					onClick={() => (view.open ? closeWorkspacePopover() : openWorkspacePopover())}
 				>
 					<Icon name="folder" size="sm" />
-					<span id="workspaceButtonName">{view.cwd ? basename(view.cwd) : "Workspace"}</span>
+					<span id="workspaceButtonName">{view.cwd ? view.label : "Workspace"}</span>
 					<Icon name="chevronDown" size="2xs" className="chevron" />
 				</button>
 			</Popover>
@@ -81,8 +88,9 @@ export function WorkspaceControl() {
 	);
 }
 
-/** One workspace: its folder name; the full path is the tooltip, for same-named folders. */
+/** One workspace: its name; the full path is the tooltip, for same-named folders. */
 function RecentItem({ path, selected }: { readonly path: string; readonly selected: boolean }) {
+	const label = useAppStore((state) => workspaceLabel(state, path));
 	return (
 		<button
 			type="button"
@@ -96,7 +104,7 @@ function RecentItem({ path, selected }: { readonly path: string; readonly select
 			}}
 		>
 			<Icon name="folder" size="sm" />
-			<span>{basename(path)}</span>
+			<span>{label}</span>
 			{selected ? <Icon name="check" size="sm" className="workspace-check" /> : null}
 		</button>
 	);

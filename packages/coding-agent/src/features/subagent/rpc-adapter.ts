@@ -65,8 +65,12 @@ export interface SubagentRpcLineHandlers {
 		error?: string;
 		data?: Record<string, unknown>;
 	}) => void;
-	/** `{"type":"extension_ui_request"}` dialogs; blocking ones must be answered or the child hangs. */
-	onUiRequest?: (request: { id: string; method: string; title?: string }) => void;
+	/**
+	 * `{"type":"extension_ui_request"}` dialogs; blocking ones must be answered
+	 * or the child hangs. `message` is the dialog body, which for a permission
+	 * prompt carries the summarized tool input.
+	 */
+	onUiRequest?: (request: { id: string; method: string; title?: string; message?: string }) => void;
 	/** `{"type":"extension_error"}` diagnostics. */
 	onExtensionError?: (message: string) => void;
 	/** `{"type":"progress-report"}`: the child wants the parent's attention (needs-input nag). */
@@ -102,6 +106,7 @@ export function routeSubagentRpcLine(line: string, handlers: SubagentRpcLineHand
 				id: parsed.id,
 				method: parsed.method,
 				...(typeof parsed.title === "string" ? { title: parsed.title } : {}),
+				...(typeof parsed.message === "string" ? { message: parsed.message } : {}),
 			});
 		}
 		return;
@@ -260,7 +265,10 @@ export async function createSubagentRpcSession(
 	sessionId: string,
 ): Promise<StepSubagentRpcSession> {
 	const tempDir = await mkdtemp(path.join(os.tmpdir(), "stepcode-subagent-"));
-	const args = ["--mode", "rpc", "--session-id", sessionId];
+	// The child's stdout is a pipe this process reads frame by frame, not a log
+	// file: live progress belongs here, and the parent renders it in the lane
+	// list. Serialized transports default to durable events, so ask for them.
+	const args = ["--mode", "rpc", "--session-id", sessionId, "--include-live-events"];
 	const model = input.agent.model ?? input.model;
 	if (model) args.push("--model", model);
 	if (input.thinkingLevel && !input.agent.model) args.push("--thinking", input.thinkingLevel);
@@ -431,6 +439,29 @@ export async function createSubagentRpcSession(
 		});
 	};
 
+	/**
+	 * Ask the host for the user's verdict on a child's confirmation prompt and
+	 * return it. A handler that fails, or a turn that ends while the card is up,
+	 * answers "no": the call stays unexecuted rather than running unattended.
+	 */
+	const answerChildConfirm = async (
+		request: { id: string; title?: string; message?: string },
+		approval: NonNullable<StepSubagentRunInput["requestApproval"]>,
+	): Promise<void> => {
+		let approved = false;
+		try {
+			approved = await approval({
+				title: request.title ?? "Approve subagent action",
+				message: request.message ?? "",
+				...(turn?.input.signal ? { signal: turn.input.signal } : {}),
+			});
+		} catch {
+			approved = false;
+		}
+		// A child that already gave up on this dialog drops the late answer.
+		send({ type: "extension_ui_response", id: request.id, confirmed: approved });
+	};
+
 	const handleLine = (line: string): void => {
 		routeSubagentRpcLine(line, {
 			onResponse: (response) => {
@@ -456,6 +487,14 @@ export async function createSubagentRpcSession(
 				appendStderr(`${failure}\n`);
 			},
 			onUiRequest: (request) => {
+				// A confirmation belongs to the user, not to the lane: a host that can
+				// show the card answers it here. Asked before the auto-cancel below so
+				// a subagent's write is approved instead of silently denied.
+				const approval = turn?.input.requestApproval ?? input.requestApproval;
+				if (request.method === "confirm" && approval) {
+					void answerChildConfirm(request, approval);
+					return;
+				}
 				// Auto-cancel blocking dialogs: a headless lane has nobody to answer
 				// and the child would hang forever (there is no default timeout).
 				if (RPC_UI_DIALOG_METHODS.has(request.method)) {

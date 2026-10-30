@@ -4,9 +4,12 @@ import type { AttachedFile } from "../lib/attached-files";
 import { readStorage, STORAGE_KEYS } from "../lib/storage";
 import { isDesktopHost } from "../platform/host";
 import type { PerformanceRun } from "./performance";
+import { readSessionPreferences } from "./session-order";
+import { readInitialTagGroups } from "./tag-groups";
 import type {
 	AccountReport,
 	Attachment,
+	DesktopOnboardingState,
 	DirectoryListing,
 	DraftModels,
 	LoginReport,
@@ -148,7 +151,7 @@ export interface PreviewState {
 }
 
 /** Pages of the settings view, in menu order. */
-export type SettingsPage = "general" | "account" | "appearance" | "models" | "plugins" | "mcp" | "skills";
+export type SettingsPage = "general" | "account" | "appearance" | "models" | "plugins" | "mcp" | "skills" | "migration";
 
 /**
  * What a settings editor edits. `mcp` with a name edits that server, without one
@@ -192,6 +195,7 @@ export interface UiState {
 	readonly branchCreateOpen: boolean;
 	/** `#workspaceBrowserModal` visible */
 	readonly workspaceBrowserOpen: boolean;
+	readonly workspaceBrowserPurpose: "workspace" | "resource";
 	readonly workspaceRemoval: { readonly path: string; readonly pending: boolean } | null;
 	/** `#settingsView`: the open settings page, or null while the workspace shows. */
 	readonly settingsPage: SettingsPage | null;
@@ -218,6 +222,7 @@ export interface UiState {
 	readonly logoutConfirm: { readonly pending: boolean } | null;
 	/** `#loginGate` visible: no model can run yet (no Step credential, no custom model), and the app waits behind it. */
 	readonly loginRequired: boolean;
+	readonly migrationInvitation: boolean;
 	/** Incremented to ask the composer to focus `#prompt` (legacy `$("#prompt").focus()`). */
 	readonly promptFocusRequest: number;
 	/** The user message being rewritten in place: its entry, the fork point, and its text. */
@@ -295,6 +300,12 @@ export interface AppState {
 	readonly current: SessionSnapshot | null;
 	/** Current selection's locally observed run; cleared on replacement or stream interruption. */
 	readonly performanceRun: PerformanceRun | null;
+	/**
+	 * The open session's context fill, from the inspector read the composer's
+	 * performance bar already polls; the right rail's context ring draws it.
+	 * Keyed by session so a switch never shows the previous session's fill.
+	 */
+	readonly contextFill: { readonly sessionId: string; readonly percent: number } | null;
 	readonly timelineItems: readonly TimelineItem[];
 	/** `ui.notify` output for this page load, shown after the timeline and never persisted. */
 	readonly notices: readonly NoticeItem[];
@@ -308,10 +319,24 @@ export interface AppState {
 	readonly pendingTurn: PendingTurn | null;
 	readonly bootstrapCwd: string;
 	/**
+	 * The host's default workspace: where a new conversation starts when no
+	 * workspace is on offer. It is the launch folder unless that folder was
+	 * removed from workspace navigation, in which case the host reports the home
+	 * fallback — a removed folder must not become the target of new work.
+	 */
+	readonly defaultCwd: string;
+	/**
+	 * `defaultCwd` is the home fallback because the launch folder was removed,
+	 * so the page names it "默认项目" instead of the last path segment.
+	 */
+	readonly defaultCwdFallback: boolean;
+	/**
 	 * The first bootstrap pass finished: a session or a draft has been chosen.
 	 * Until then the pane is still loading, not an empty new conversation.
 	 */
 	readonly booted: boolean;
+	/** Independent page-local input identity, retained when its first send creates a session. */
+	readonly composerDraftId: string;
 	readonly draftCwd: string;
 	readonly draftPolicy: string;
 	/**
@@ -340,12 +365,20 @@ export interface AppState {
 	readonly statusById: ReadonlyMap<string, SessionStatus>;
 	readonly unreadById: ReadonlyMap<string, boolean>;
 	readonly foldedProjects: ReadonlySet<string>;
+	/** Workspace groups showing every conversation instead of the first few (`features/sidebar/collapse.ts`). */
+	readonly expandedProjects: ReadonlySet<string>;
 	readonly groups: readonly TagGroup[];
 	/** session id -> tag colour */
 	readonly tags: ReadonlyMap<string, TagColor>;
+	/** Session ids pinned in the sidebar, most recently pinned first: a pinned row leads the list it belongs to. */
+	readonly pinnedSessions: readonly string[];
+	/** Session ids in the order the user dragged them into the sidebar (see `state/session-order.ts`). */
+	readonly sessionOrder: readonly string[];
 	readonly currentView: ConversationView;
 	readonly currentFilter: TagColor | null;
 	readonly login: LoginReport | null;
+	readonly desktopOnboarding: DesktopOnboardingState | null;
+	readonly migrationAvailable: boolean;
 	/** The signed-in account's name and avatar; null until the host answers. */
 	readonly account: AccountReport | null;
 	/** The in-page workspace browser (legacy workspaceBrowserPath/Parent, workspaceDirectories). */
@@ -371,6 +404,8 @@ export interface AppState {
 	readonly theme: ThemeChoice;
 	readonly locale: Locale;
 	readonly ui: UiState;
+	readonly tagGroupsLoadError: string | null;
+	readonly tagGroupsSaveError: string | null;
 	readonly toast: ToastState | null;
 }
 
@@ -389,7 +424,7 @@ export function emptyTree(cwd = ""): TreeState {
 
 function initialTheme(): ThemeChoice {
 	const stored = readStorage(STORAGE_KEYS.theme);
-	return stored === "light" || stored === "dark" ? stored : "system";
+	return stored === "light" || stored === "dark" || stored === "violet" ? stored : "system";
 }
 
 /**
@@ -406,16 +441,21 @@ function initialLocale(): Locale {
 }
 
 export function createInitialState(): AppState {
+	const arrangement = readSessionPreferences();
 	return {
 		sessions: [],
 		current: null,
 		performanceRun: null,
+		contextFill: null,
 		timelineItems: [],
 		notices: [],
 		compacting: false,
 		pendingTurn: null,
 		bootstrapCwd: "",
+		defaultCwd: "",
+		defaultCwdFallback: false,
 		booted: false,
+		composerDraftId: `draft:${crypto.randomUUID()}`,
 		draftCwd: "",
 		draftPolicy: "approve-for-me",
 		draftSelection: null,
@@ -427,11 +467,15 @@ export function createInitialState(): AppState {
 		statusById: new Map(),
 		unreadById: new Map(),
 		foldedProjects: new Set(),
-		groups: [],
-		tags: new Map(),
+		expandedProjects: new Set(),
+		...readInitialTagGroups(),
+		pinnedSessions: arrangement.pinnedSessions,
+		sessionOrder: arrangement.sessionOrder,
 		currentView: "project",
 		currentFilter: null,
 		login: null,
+		desktopOnboarding: null,
+		migrationAvailable: false,
 		account: null,
 		workspaceBrowser: { path: "", parent: "", directories: [] },
 		directoryPicker: "browse",
@@ -472,6 +516,7 @@ export function createInitialState(): AppState {
 			branchPopoverOpen: false,
 			branchCreateOpen: false,
 			workspaceBrowserOpen: false,
+			workspaceBrowserPurpose: "workspace",
 			workspaceRemoval: null,
 			settingsPage: null,
 			settingsEditor: null,
@@ -484,6 +529,7 @@ export function createInitialState(): AppState {
 			renameSession: null,
 			logoutConfirm: null,
 			loginRequired: false,
+			migrationInvitation: false,
 			promptFocusRequest: 0,
 			editingPrompt: null,
 			midView: null,
@@ -497,6 +543,8 @@ export function createInitialState(): AppState {
 			childView: null,
 			imagePreview: null,
 		},
+		tagGroupsLoadError: null,
+		tagGroupsSaveError: null,
 		toast: null,
 	};
 }

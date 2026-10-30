@@ -6,7 +6,7 @@ import { displayPath, parsedPatch } from "../../lib/turn-changes";
 import { copyText } from "../../state/session";
 import { useAppStore } from "../../state/store";
 import type { FileChange, ToolArgs, ToolTimelineItem } from "../../state/types";
-import { DiffStat, Icon, type IconName, Tooltip } from "../../ui";
+import { DiffStat, Icon, type IconName, Tooltip, useCopiedFlag } from "../../ui";
 import { openFile } from "../files/actions";
 import { fileLanguage, highlightLines } from "../files/index";
 import { openChildAgent, openWorkflowAgents } from "./actions";
@@ -82,9 +82,9 @@ export const ToolRow = memo(function ToolRow({
 	const call = callPath(item.args, cwd);
 	const shown = call.shown;
 	// Only a file opens in the preview; a search or list path is usually a folder.
-	const openable = FILE_KINDS.has(toolKind(item)) ? call.openable : null;
+	const openable = !item.imported && FILE_KINDS.has(toolKind(item)) ? call.openable : null;
 	const copyValue = toolKind(item) === "bash" ? (item.args?.command ?? "") : output;
-	const card = toolKind(item) === "edit" || toolKind(item) === "write";
+	const card = !item.imported && (toolKind(item) === "edit" || toolKind(item) === "write");
 	if (!readOnly && item.toolName === "subagent" && item.subagentTasks?.length && item.state !== "failed") {
 		return <SubagentLane item={item} />;
 	}
@@ -119,7 +119,8 @@ export const ToolRow = memo(function ToolRow({
 					<span className="tool-dot" aria-hidden="true">
 						·
 					</span>
-					{/* No "failed" tag: every failed verb already says so ("运行命令失败"), beside a red glyph. */}
+					{/* No "failed" tag: every failed verb already says so ("运行命令失败"), beside a red glyph,
+					    so a failed call folded into a process group stays as quiet as its siblings. */}
 					{stale ? <span className="tool-failed">{t("toolInterrupted")}</span> : null}
 					<RowSubject item={item} path={shown} openable={openable} />
 					{item.change?.patch ? <DiffStatRow item={item} /> : null}
@@ -283,7 +284,13 @@ function CardHead({
 				</Tooltip>
 			) : null}
 			<Tooltip content={copyLabel}>
-				<button type="button" className="tool-cx-action" aria-label={copyLabel} onClick={onCopy}>
+				<button
+					type="button"
+					className="tool-cx-action"
+					aria-label={copyLabel}
+					data-copied={copied || undefined}
+					onClick={onCopy}
+				>
 					<Icon name={copied ? "check" : "copy"} size="xs" />
 				</button>
 			</Tooltip>
@@ -304,12 +311,10 @@ function ToolCard({
 	readonly copyValue: string;
 }) {
 	const t = useT();
-	const [copied, setCopied] = useState(false);
+	const [copied, flashCopied] = useCopiedFlag();
 	const [wrap, setWrap] = useState(false);
 	const copy = async () => {
-		await copyText(copyValue);
-		setCopied(true);
-		setTimeout(() => setCopied(false), 1200);
+		if (await copyText(copyValue, null)) flashCopied();
 	};
 	const command = toolKind(item) === "bash";
 	const head = command ? item.args?.command || item.inputSummary : path || item.inputSummary;
@@ -402,13 +407,11 @@ function ChangeCard({
 	readonly openable: string | null;
 }) {
 	const t = useT();
-	const [copied, setCopied] = useState(false);
+	const [copied, flashCopied] = useCopiedFlag();
 	const patch = item.change?.patch;
 	const diff = useMemo(() => (patch ? diffRows(patch, path) : null), [patch, path]);
 	const copy = async () => {
-		await copyText(patch ?? item.inputDetail ?? "");
-		setCopied(true);
-		setTimeout(() => setCopied(false), 1200);
+		if (await copyText(patch ?? item.inputDetail ?? "", null)) flashCopied();
 	};
 	return (
 		<>

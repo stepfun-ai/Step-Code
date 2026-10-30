@@ -25,7 +25,7 @@ import {
 	SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS,
 } from "../step/settings-manager.ts";
 import type { StepTelemetryReporter } from "../step/telemetry.ts";
-import { formatBuiltinAgentGuidance, type StepAgentConfig, type StepAgentScope } from "./step-subagent-agents.ts";
+import type { StepAgentConfig, StepAgentScope } from "./step-subagent-agents.ts";
 import { executeSubagent, prepareSubagentRun, runPreparedSubagent } from "./subagent/execute.ts";
 import {
 	allocateStepWorktree,
@@ -48,6 +48,7 @@ import {
 	subagentListSignature,
 } from "./subagent/rendering.ts";
 import { createSubagentRpcSession } from "./subagent/rpc-adapter.ts";
+import { buildSubagentToolDescription } from "./subagent/tool-description.ts";
 import { clampWorkflowConcurrency } from "./workflow/budget.ts";
 
 // Lane-notification primitives moved to ./subagent/lane-events.ts; re-exported
@@ -138,6 +139,28 @@ export interface StepSubagentRunResult {
 	cancelledPrompts?: string[];
 }
 
+/**
+ * A confirmation a child process raised through its own extension UI — in
+ * practice the Step permission controller asking whether a tool call may write
+ * or execute.
+ *
+ * A child runs with `--mode rpc`, where no terminal or browser belongs to it, so
+ * a host that can show the question (Web/Desktop) supplies a handler and answers
+ * it with the user's verdict. Without one the prompt is cancelled, which the
+ * child's policy reads as a denial: the call is never executed.
+ */
+export interface StepSubagentApprovalPrompt {
+	/** Dialog title, e.g. `Approve write_file [1a2b3c4d]`. */
+	readonly title: string;
+	/** Dialog body: the decision's reason and the summarized tool input. */
+	readonly message: string;
+	/** Aborts when the parent turn is cancelled or the lane is stopped. */
+	readonly signal?: AbortSignal;
+}
+
+/** Answer a child's confirmation prompt; `true` lets the call run. */
+export type StepSubagentApprovalHandler = (prompt: StepSubagentApprovalPrompt) => Promise<boolean>;
+
 export interface StepSubagentRunInput {
 	onModelRequest?: (event: import("../core/rate-limit.ts").ModelRequestProgress) => void;
 	parentCwd?: string;
@@ -188,6 +211,12 @@ export interface StepSubagentRunInput {
 	 * server, whose own entry does not accept `--mode rpc`.
 	 */
 	cliPath?: string;
+	/**
+	 * Answer the child's confirmation prompts with a real user decision. A host
+	 * with a UI (Web/Desktop) sets it so a subagent's write asks the same way the
+	 * main session does; without it every such prompt is cancelled.
+	 */
+	requestApproval?: StepSubagentApprovalHandler;
 }
 
 /** Injectable runner used by embedders and tests. The default runner launches
@@ -228,6 +257,12 @@ export interface StepSubagentDetails {
 	userAgentsDir: string;
 	projectAgentsDir: string | null;
 	results: StepSubagentResultRecord[];
+	/**
+	 * Tasks left out of a live frame to keep one frame bounded. Only set while
+	 * running with a batch larger than the byte budget; the final result reports
+	 * every task. Renderers add it to `results.length` for the real total.
+	 */
+	omittedResults?: number;
 	/** Present for background lanes and useful to a renderer/list command. */
 	agentId?: string;
 	status?: "running" | "completed" | "failed" | "aborted";
@@ -252,6 +287,11 @@ export interface StepSubagentExtensionOptions {
 	runner?: StepSubagentRunner;
 	/** CLI entry the default runner launches; see `StepSubagentRunInput.cliPath`. Ignored with a custom runner. */
 	cliPath?: string;
+	/**
+	 * Answer child confirmation prompts; see `StepSubagentRunInput.requestApproval`.
+	 * Ignored with a custom runner.
+	 */
+	requestApproval?: StepSubagentApprovalHandler;
 	/** Optional process reporter; telemetry never owns child execution. */
 	telemetry?: StepTelemetryReporter;
 	/**
@@ -718,9 +758,12 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 		},
 		runner:
 			options.runner ??
-			(options.cliPath === undefined
-				? runStepSubagentProcess
-				: (input: StepSubagentRunInput) => runStepSubagentProcess({ ...input, cliPath: options.cliPath })),
+			((input: StepSubagentRunInput) =>
+				runStepSubagentProcess({
+					...input,
+					...(options.cliPath === undefined ? {} : { cliPath: options.cliPath }),
+					...(options.requestApproval === undefined ? {} : { requestApproval: options.requestApproval }),
+				})),
 	};
 	return (pi: ExtensionAPI): void => {
 		// The child process inherits this marker. It still gets Step's provider and
@@ -766,10 +809,14 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 					lane.ctx.ui.setWidget(lanesWidgetKey, undefined);
 					return;
 				}
+				// Each lane's frame is byte-bounded, so its omitted count must be
+				// summed too: otherwise a two-lane batch under-reports its total.
+				const omitted = batch.reduce((sum, entry) => sum + (entry.details.omittedResults ?? 0), 0);
 				const details: StepSubagentDetails = {
 					...lane.details,
 					mode: "parallel",
 					results: batch.flatMap((entry) => entry.details.results),
+					...(omitted > 0 ? { omittedResults: omitted } : {}),
 				};
 				lanesWidget?.setDetails(details);
 				const signature = subagentListSignature(details);
@@ -838,15 +885,10 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 		pi.registerTool<typeof StepSubagentParamsSchema, StepSubagentDetails>({
 			name: "subagent",
 			label: "Subagent",
-			description: [
-				"Delegate tasks to specialized subagents with isolated context.",
-				"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
-				"By default the call blocks until the agents finish and returns their results.",
-				"With run_in_background:true it returns a lane_id at once and later sends one <agent-notification> when the lane ends; manage the lane with agent_send.",
-				formatBuiltinAgentGuidance(),
-				`Default agent scope is "user" (from ${path.join(resolved.agentDir, "agents")}).`,
-				`To enable project-local agents in ${resolved.configDirName}/agents, set agentScope: "both" (or "project").`,
-			].join(" "),
+			description: buildSubagentToolDescription({
+				userAgentsDir: path.join(resolved.agentDir, "agents"),
+				configDirName: resolved.configDirName,
+			}),
 			parameters: StepSubagentParamsSchema,
 			execute: async (toolCallId, params, signal, onUpdate, ctx) => {
 				const callParams = params as SubagentParams;

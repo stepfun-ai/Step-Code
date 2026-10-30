@@ -6,14 +6,18 @@ import { BranchControl } from "./features/gitbranch";
 import { RightPanel, RightToolRail } from "./features/inspector";
 import { LoginGate } from "./features/login";
 import { CronView, MarketView } from "./features/market";
+import { MigrationOnboarding } from "./features/migration";
 import { SettingsView } from "./features/settings";
+import { closeSettings } from "./features/settings/actions";
 import { AuthBanner, ErrorToast, LogoutDialog, ShellEffects, SidebarShowButton, UserArea } from "./features/shell";
 import { RenameSessionDialog, SearchModal, SidebarNav, SidebarResizer } from "./features/sidebar";
 import { TerminalDock } from "./features/terminal";
 import { RemoveWorkspaceModal, WorkspaceBrowserModal, WorkspaceControl } from "./features/workspace";
+import { chooseResourceDirectory } from "./features/workspace/actions";
 import { I18nProvider } from "./i18n";
 import { cx } from "./lib/format";
 import { activeRightPanel } from "./state/right-panel";
+import { finishMigrationOnboarding, openSessionWithOutcome, recordMigrationOnboardingJob } from "./state/session";
 import { shallowEqual, useAppStore } from "./state/store";
 import { IconSprite } from "./ui";
 
@@ -35,6 +39,7 @@ import { IconSprite } from "./ui";
  *     aside#rightPanel   floating Summary, or context/files/changes/child inspector / browser
  *     nav.right-tool-rail
  *   #settingsView      settings: full-window settings page (menu + page) over the workspace
+ *   #migrationModal    shared migration dialog host for Settings and optional Desktop onboarding
  *   #feedbackModal, #searchModal, #workspaceBrowserModal, #removeWorkspaceModal, #renameSessionDialog (sidebar),
  *   #selectionDialog,
  *   #imagePreview (composer: enlarged image attachment), #logoutDialog (shell)
@@ -43,6 +48,7 @@ import { IconSprite } from "./ui";
  */
 export function App() {
 	const appRef = useRef<HTMLDivElement>(null);
+	const migrationInvitation = useAppStore((state) => state.ui.migrationInvitation);
 	const [summarySpace, setSummarySpace] = useState(false);
 	const layout = useAppStore(
 		(state) => ({
@@ -116,6 +122,17 @@ export function App() {
 				<RightToolRail />
 			</div>
 			<SettingsView />
+			<MigrationOnboarding
+				open={migrationInvitation}
+				onFinish={finishMigrationOnboarding}
+				onJobStarted={recordMigrationOnboardingJob}
+				onPickTarget={chooseResourceDirectory}
+				onOpenSession={async (id) => {
+					if ((await openSessionWithOutcome(id, { reportErrors: false })) !== "opened")
+						throw new Error("session-open-failed");
+					closeSettings();
+				}}
+			/>
 			<FeedbackModal />
 			<SearchModal />
 			<WorkspaceBrowserModal />

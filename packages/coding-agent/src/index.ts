@@ -304,6 +304,8 @@ export type {
 } from "./core/package-manager.ts";
 export { DefaultPackageManager } from "./core/package-manager.ts";
 export type { AppMode } from "./core/project-trust.ts";
+/** How `AgentSession.prompt` turns `/<template> args` into a prompt; hosts use it to recognise what was sent. */
+export { expandPromptTemplate } from "./core/prompt-templates.ts";
 export type {
 	ResourceCollision,
 	ResourceDiagnostic,
@@ -344,7 +346,29 @@ export {
 	type PromptTemplate,
 } from "./core/sdk.ts";
 export { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "./core/session-cwd.ts";
+export {
+	isEphemeralSessionEvent,
+	type SessionEventDurability,
+	sessionEventDurability,
+} from "./core/session-event-durability.ts";
 export { exportSessionToJsonl } from "./core/session-export.ts";
+export type {
+	ImportScanOptions,
+	ImportScanResult,
+	ReservedSessionImport,
+	ReservedSessionImports,
+} from "./core/session-import/service.ts";
+export { SessionImportError, SessionImportService } from "./core/session-import/service.ts";
+export type {
+	ImportCandidate,
+	ImportJob,
+	ImportPreview,
+	ImportProvenance,
+	ImportResult,
+	ImportSelection,
+	ImportSource,
+	ImportWarning,
+} from "./core/session-import/types.ts";
 export * from "./core/session-index/index.ts";
 export type {
 	SessionFilePersistedEvent,
@@ -543,6 +567,13 @@ export {
 	stepScheduleExtensionInline,
 	UpdateGoalParams,
 } from "./features/step-schedule.ts";
+export {
+	type CompletedSubagentResponse,
+	readSubagentLaneSnapshot,
+	SUBAGENT_LANE_CHANNEL,
+	SUBAGENT_RESPONSE_ENTRY,
+	type SubagentLaneSnapshot,
+} from "./features/subagent/lane-events.ts";
 // Optional Step Workflow capability. The extension remains feature-gated at
 // registration time, while the pure runtime contracts are useful to embedders
 // and tests.
@@ -740,6 +771,43 @@ export {
 } from "./step/mcp.ts";
 export { describeStepMcpImportOutcome, runStepMcpImportPrompt } from "./step/mcp-import-prompt.ts";
 export { hasStoredMcpOAuthCredential, loginMcpServer, logoutMcpServer } from "./step/mcp-oauth.ts";
+export {
+	applyMcpSettingsPatch,
+	applyValidatedMcpSettingsPatch,
+	getMcpSettingsView,
+	MCP_SETTINGS_FIELDS,
+	type McpSettingsField,
+	type McpSettingsFieldChange,
+	type McpSettingsPatch,
+	McpSettingsPatchError,
+	type McpSettingsView,
+	parseMcpSettingsServerConfig,
+} from "./step/mcp-settings-secrets.ts";
+export { MigrationError, MigrationService } from "./step/migration/service.ts";
+export type {
+	MigrationAcknowledgement,
+	MigrationAction,
+	MigrationCandidate,
+	MigrationDiagnostic,
+	MigrationHolding,
+	MigrationItemResult,
+	MigrationJob,
+	MigrationKind,
+	MigrationLocation,
+	MigrationPlan,
+	MigrationPreview,
+	MigrationPreviewRequest,
+	MigrationReadiness,
+	MigrationRecoveryPreview,
+	MigrationRuleImpact,
+	MigrationScanRequest,
+	MigrationScanResult,
+	MigrationScope,
+	MigrationSelection,
+	MigrationSource,
+	MigrationSourceReport,
+	MigrationStartRequest,
+} from "./step/migration/types.ts";
 export { resolveStepLoginProfiles, type StepLoginProfile, type StepLoginProfileId } from "./step/onboarding.ts";
 export {
 	AUTO_RESUME_PROMPT,

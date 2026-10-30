@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { createEditToolDefinition, createWriteToolDefinition, type SessionEntry } from "@step-harness/coding-agent";
 import {
+	applyPatch,
 	fileAtTurnEnd,
 	revertedTurnIds,
 	reversePatch,
@@ -561,16 +562,114 @@ test("each turn's delivery is rebuilt as that turn left the file", async () => {
 	});
 });
 
-test("a turn's version is inexact when a later change cannot be reversed", async () => {
+test("a turn's version is inexact when neither replay nor reversal reaches it", async () => {
 	await withRoot(async (root) => {
 		const s = session(root);
+		// The file predates the session, so no write records its content.
+		await writeFile(join(root, "index.html"), "<p>zero</p>\n");
 		ask(s, "u1");
-		await write(s, "w1", "index.html", "<p>one</p>\n");
+		await edit(s, "e1", "index.html", "zero", "one");
 		ask(s, "u2");
 		await edit(s, "e2", "index.html", "one", "two");
-		// Edited outside the session: the later patch no longer applies.
+		assert.deepEqual(await fileAtTurnEnd(s.entries, "u1", "index.html", root), { text: "<p>one</p>\n", exact: true });
+		// Edited outside the session: the later patch no longer reverses.
 		await writeFile(join(root, "index.html"), "<p>elsewhere</p>\n");
 		assert.deepEqual(await fileAtTurnEnd(s.entries, "u1", "index.html", root), { exact: false });
 		assert.deepEqual(await fileAtTurnEnd(s.entries, "missing-turn", "index.html", root), { exact: false });
 	});
+});
+
+/** A Step-profile call as Web sessions record it: `write_file` keeps no patch, `edit_file` the edit's. */
+async function stepWrite(s: Session, id: string, path: string, content: string, changed = true): Promise<void> {
+	const input = { path, content };
+	s.entries.push(entry(`a-${id}`, { role: "assistant", content: [{ type: "toolCall", id, name: "write_file", arguments: input }] }));
+	if (changed) await writeFile(join(s.root, path), content);
+	s.entries.push(entry(`r-${id}`, { role: "toolResult", toolCallId: id, details: { path, changed } }));
+}
+
+async function stepEdit(s: Session, id: string, path: string, search: string, replace: string): Promise<void> {
+	s.entries.push(
+		entry(`a-${id}`, { role: "assistant", content: [{ type: "toolCall", id, name: "edit_file", arguments: { path, search, replace } }] }),
+	);
+	const result = await createEditToolDefinition(s.root).execute(
+		id,
+		{ path, edits: [{ oldText: search, newText: replace }] },
+		undefined,
+		undefined,
+		undefined as never,
+	);
+	s.entries.push(entry(`r-${id}`, { role: "toolResult", toolCallId: id, details: result.details }));
+}
+
+test("Step's edit_file patches are turn changes; a write_file is untracked, or nothing when unchanged", async () => {
+	await withRoot(async (root) => {
+		const s = session(root);
+		ask(s, "u1");
+		await stepWrite(s, "w1", "index.html", "<p>one</p>\n");
+		ask(s, "u2");
+		await stepEdit(s, "e2", "index.html", "one", "two");
+		ask(s, "u3");
+		await stepWrite(s, "w3", "index.html", "<p>two</p>\n", false);
+		assert.deepEqual(turnChanges(s.entries, "u1").skipped, [{ path: "index.html", reason: "unknown" }]);
+		assert.equal(turnChanges(s.entries, "u2").changes.length, 1);
+		assert.deepEqual(turnChanges(s.entries, "u3"), { changes: [], skipped: [] });
+		// The Step edit's patch reverts like a built-in one.
+		assert.equal(await undo(s, "u2"), "ok");
+		assert.equal(await content(join(root, "index.html")), "<p>one</p>\n");
+	});
+});
+
+test("turn versions replay from a recorded write, whatever happened to the file since", async () => {
+	await withRoot(async (root) => {
+		const s = session(root);
+		await writeFile(join(root, "index.html"), "<p>one</p>\n");
+		ask(s, "u1");
+		// The file already held this content: still a recorded starting point.
+		await stepWrite(s, "w1", "index.html", "<p>one</p>\n", false);
+		ask(s, "u2");
+		await stepEdit(s, "e2", "index.html", "one", "two");
+		ask(s, "u3");
+		await stepEdit(s, "e3", "index.html", "two", "three");
+		// Edited outside the session afterwards: reversing from disk would fail, replaying does not.
+		await writeFile(join(root, "index.html"), "<p>elsewhere</p>\n");
+		for (const [turn, text] of [["u1", "one"], ["u2", "two"], ["u3", "three"]]) {
+			assert.deepEqual(await fileAtTurnEnd(s.entries, turn, "index.html", root), {
+				text: `<p>${text}</p>\n`,
+				exact: true,
+			});
+		}
+		// A version that is still the file on disk keeps the live URL.
+		await writeFile(join(root, "index.html"), "<p>three</p>\n");
+		assert.deepEqual(await fileAtTurnEnd(s.entries, "u3", "index.html", root), { exact: true });
+		assert.equal(await content(join(root, "index.html")), "<p>three</p>\n");
+	});
+});
+
+test("imported file writes cannot replace native delivery versions", async () => {
+	await withRoot(async (root) => {
+		const s = session(root);
+		ask(s, "native-write");
+		await stepWrite(s, "native-call", "index.html", "<p>native workspace</p>\n");
+		const historical = [
+			entry("imported-user", { role: "user", content: "Historical task" }),
+			entry("imported-call", {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "historical-write", name: "write_file", arguments: { path: "index.html", content: "<p>historical evidence</p>\n" } }],
+			}),
+			entry("imported-result", { role: "toolResult", toolCallId: "historical-write", isError: false }),
+		].map((item) => ({ ...item, imported: { source: "workbuddy" as const, sessionId: "foreign", itemId: item.id } }));
+		s.entries.push(...historical);
+		ask(s, "native-reference");
+		assert.deepEqual(turnChanges(s.entries, "imported-user"), { changes: [], skipped: [] });
+		assert.deepEqual(await fileAtTurnEnd(s.entries, "native-reference", "index.html", root), { exact: true });
+		assert.equal(await content(join(root, "index.html")), "<p>native workspace</p>\n");
+		await unlink(join(root, "index.html"));
+		assert.deepEqual(await fileAtTurnEnd(s.entries, "native-reference", "index.html", root), { text: "<p>native workspace</p>\n", exact: true });
+	});
+});
+
+test("a forward patch applies the recorded change and refuses content that moved on", () => {
+	assert.equal(applyPatch("a\nb\nc\n", PATCHES.edit), "a\nB\nc\nd\n");
+	assert.equal(applyPatch("a\nb", PATCHES.appendNoEol), "a\nb\nc");
+	assert.throws(() => applyPatch("x\ny\n", PATCHES.edit));
 });

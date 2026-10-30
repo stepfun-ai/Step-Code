@@ -241,33 +241,35 @@ test("a report carries the session evidence, the archive and this host's surface
 	}
 });
 
-test("without a bundle endpoint the report says the transcript is not attached", { timeout: 60_000 }, async () => {
+test("a build with no release configuration files to the built-in collector route", { timeout: 60_000 }, async () => {
 	const previous = snapshotEnvironment();
 	const fixture = await startFixture();
-	const collector = await startCollector();
 	const home = await startHome(fixture.baseUrl);
 	const store = new WebSessionStore();
 	try {
 		isolate(home);
-		process.env.STEPCODE_FEEDBACK_ENDPOINT = collector.endpoint;
+		delete process.env.STEPCODE_FEEDBACK_ENDPOINT;
 		delete process.env.STEPCODE_FEEDBACK_BUNDLE_ENDPOINT;
 
 		const session = await store.create(home);
 		await session.send("hello there");
 		await waitForIdle(session);
 
+		// The report needs no release-pipeline configuration any more, so the
+		// built-in route lets it carry the conversation archive too.
 		const draft = await session.prepareFeedback();
-		assert.equal(draft.preview.archive, undefined, "an archive is promised with nowhere to send it");
-		assert.match(draft.preview.archiveNote ?? "", /bundle endpoint/i);
-		const result = await session.submitFeedback({ sentiment: "up", comment: "fine", token: draft.token });
-		assert.equal(result.ok, true, result.message);
-		assert.equal(collector.archives.length, 0, "an archive was uploaded without an endpoint");
-		// The summary still travels: it is the part that needs no archive endpoint.
-		assert.equal(collector.bodies[0]?.sessionSummary?.counts?.turns, 1);
+		assert.ok(draft.preview.archive?.length, "the built-in collector route should carry the archive");
+		assert.equal(draft.preview.archiveNote, undefined);
+
+		// Sending would leave the machine for the production collector: the test
+		// guard has to stop it rather than file a real report.
+		await assert.rejects(
+			() => session.submitFeedback({ sentiment: "up", comment: "no release config", token: draft.token }),
+			/a test would have posted to the real collector/,
+		);
 	} finally {
 		await store.interruptAndClose().catch(() => {});
 		await fixture.stop();
-		await collector.stop();
 		await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 		restoreEnvironment(previous);
 	}
@@ -298,32 +300,6 @@ test("an undeliverable report is reported as pending, not as submitted", { timeo
 	}
 });
 
-test("feedback without an endpoint is refused and nothing is prepared", { timeout: 60_000 }, async () => {
-	const previous = snapshotEnvironment();
-	const fixture = await startFixture();
-	const home = await startHome(fixture.baseUrl);
-	const store = new WebSessionStore();
-	try {
-		isolate(home);
-		delete process.env.STEPCODE_FEEDBACK_ENDPOINT;
-		delete process.env.STEPCODE_FEEDBACK_BUNDLE_ENDPOINT;
-
-		const session = await store.create(home);
-		await assert.rejects(
-			() => session.prepareFeedback(),
-			/Feedback is not configured/,
-			"preparing evidence must fail when nothing can receive the report",
-		);
-		const result = await session.submitFeedback({ sentiment: "up", comment: "hello" });
-		assert.deepEqual(result, { ok: false, message: "Feedback is not configured for this build." });
-	} finally {
-		await store.interruptAndClose().catch(() => {});
-		await fixture.stop();
-		await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-		restoreEnvironment(previous);
-	}
-});
-
 test("a token that no longer names prepared evidence is refused, not re-prepared", { timeout: 60_000 }, async () => {
 	const previous = snapshotEnvironment();
 	const fixture = await startFixture();
@@ -333,7 +309,7 @@ test("a token that no longer names prepared evidence is refused, not re-prepared
 	try {
 		isolate(home);
 		process.env.STEPCODE_FEEDBACK_ENDPOINT = collector.endpoint;
-		delete process.env.STEPCODE_FEEDBACK_BUNDLE_ENDPOINT;
+		process.env.STEPCODE_FEEDBACK_BUNDLE_ENDPOINT = collector.bundleEndpoint;
 
 		const session = await store.create(home);
 		const draft = await session.prepareFeedback();

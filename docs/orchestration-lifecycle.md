@@ -168,6 +168,21 @@ the turn as failed and ends the child even for a keep-alive lane. The default is
 30 minutes, deliberately generous because a long `run_command` is silent while it
 runs; `STEP_SUBAGENT_TURN_IDLE_TIMEOUT_MS` overrides it and `0` disables it.
 
+## Subagent delegation authorization
+
+Delegation guidance is split by owner. The `subagent` tool description holds the
+default gate (spawn only when the user, applicable AGENTS.md, or a skill explicitly
+asks for subagents, delegation, or parallel agent work), the delegation method, and
+the lane facts; it does not change within a session. The system prompt's
+`# Coordination primitives` section only routes between direct tools, `subagent`,
+`workflow`, `cron_create`, and `create_goal` once one is authorized. Session-standing
+ultracode is the proactive switch: its on reminder also authorizes proactive
+delegation, and its off reminder restores the explicit-request gate. A per-turn
+`ultracode: <task>` opt-in authorizes a workflow for that turn only; it does not
+lift the subagent gate, because the workflow already fans out its own agents. Like workflow
+opt-in, this is model guidance, not a permission gate; `subagent` calls are not
+rejected for lacking a request.
+
 ## Background subagent lanes
 
 `subagent` blocks by default: the call returns once every child has finished.
@@ -188,6 +203,62 @@ boundary](../packages/coding-agent/docs/tool-output-retention.md): oversized
 output is saved under the session's `tool-output` directory and replaced by a
 preview with its path. `subscribe: "progress"` adds throttled progress messages
 that do not wake the parent. A child's needs-input request does wake it.
+
+Live hosts subscribe to `SUBAGENT_LANE_CHANNEL` (`step:subagent-lane`) on the
+session's extension event bus. Each `SubagentLaneSnapshot` replaces that lane's
+state and carries bounded child session ids, current output, tools and usage.
+This channel is independent of TUI widgets and `subscribe`, never enters model
+context, and is not written to JSON/RPC records. Hosts keep the latest snapshot
+for reconnects and must isolate it by session. Shutdown invalidates late callbacks.
+
+A child assistant's successful final answer (`stopReason: "stop"`) is a separate
+fact from full lane settlement. Each answer is retained once as a
+`step-subagent-response` custom entry in the parent journal. Oversized text uses
+the shared output-retention boundary. A queued follow-up, a failed later response,
+or stopping the lane does not replace that completed answer. Terminal notifications
+and `agent_send status` include completed answers alongside the current outcome;
+an interrupted lane remains interrupted, not falsely successful. Retention errors
+are reported in the terminal notification, with the child's own transcript still
+available. Progress frames contain no completed-response history.
+
+Outcome and failure diagnostics precede historical answer bodies. Status and
+notification views use independent byte budgets for diagnostics, current output,
+session metadata and recent answers, report omitted
+answers explicitly, and refer to the journal/child transcripts for the complete
+history. This does not remove durable answers. A normalized full-answer hash
+prevents a retained preview or trailing whitespace from duplicating the current
+answer; substring matches never discard an independent answer. Clipped views
+retain their complete lane snapshot in the owned tool-output namespace and show
+its file path. Answer views keep both the introduction and conclusion. Only
+32 recent answers and 128,000 characters of answer/task payload remain cached in
+memory; all completed-answer journal facts and child transcripts stay intact.
+Each new reply immediately publishes its running state and starts a fresh
+retention-error scope. Stopping a lane publishes its settled roster after cleanup, so skipped
+steps do not remain queued in a reconnect snapshot. Consumers validate bus input
+with `readSubagentLaneSnapshot`, which re-projects the bounded live allowlist.
+
+The Web/Desktop host forwards live lane updates as `subagent_lane` SSE events
+and includes its latest bounded lane snapshots in session snapshots for reconnects.
+The child inspector uses these for ids, status and streaming output, while reading
+the child's completed transcript remains a read-only polling fallback. Retained
+completed-response entries remain visible even after a later lane interruption.
+Its summary list and header count show only running agents. Control calls update
+the existing child-session or lane/task identity rather than creating agent rows;
+their history stays with that agent. Completed agents remain accessible through
+the parent conversation's tool rows and the read-only child inspector.
+Journal entry order determines whether a control or notification is newer;
+rebuilding history cannot let an old reply revive an already settled lane.
+Completed-answer SSE facts are applied directly rather than depending on an
+asynchronous HTTP refresh; the stream revision prevents an older snapshot from
+replacing them. Hosts validate bus payloads and retain only running lanes plus
+the sixteen most recently updated finished lanes.
+When a new host explicitly reports no live owner for an unfinished historical
+lane, the client marks the unresolved work unknown instead of resurrecting
+it as running. Historical child links and completed answers remain available.
+Omitted roster entries preserve uncertainty rather than inheriting the lane's
+aggregate terminal status. The inspector discloses the omitted count; client
+and host caches retain the same 16 recent terminal lanes plus running lanes.
+The header hides its count when no known agent is running.
 
 `agent_send` takes `{lane_id, action, prompt?, interrupt?}`:
 

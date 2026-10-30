@@ -3,6 +3,7 @@ import "./bootstrap.ts";
 import { createReadStream, existsSync } from "node:fs";
 import { readdir, realpath, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { homedir } from "node:os";
 import { dirname, extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { StepPermissionPresetId } from "@step-harness/coding-agent";
@@ -13,10 +14,14 @@ import {
 	getStepAccountProfile,
 	getStepAuthPath,
 	getStepLoginStatus,
+	MigrationService,
 	openBrowser,
 	resolveStepAgentDir,
 	resolveStepCodeVersion,
 	resolveStepConfigRoot,
+	resolveStepSessionDir,
+	SessionImportError,
+	SessionImportService,
 	SessionSearchRequestError,
 } from "@step-harness/coding-agent";
 import { AccountProfileCache } from "./account.ts";
@@ -24,13 +29,19 @@ import { WebAuth } from "./auth.ts";
 import { formatStartupBanner, launchUrl, resolveLaunchPort } from "./banner.ts";
 import { recordBrowserOpened, shouldOpenBrowser } from "./browser-open.ts";
 import { listWorkflowChildren, readChildTranscript } from "./child-sessions.ts";
+import {
+	DesktopOnboardingError,
+	type DesktopOnboardingState,
+	type DesktopOnboardingStatus,
+	DesktopOnboardingStore,
+} from "./desktop-onboarding.ts";
 import { type DirectoryPickerMode, pickNativeDirectory, resolveDirectoryPickerMode } from "./directory-picker.ts";
 import {
 	absoluteLocalPath,
 	completeWorkspaceFiles,
 	containedWorkspacePath,
+	imageMimeType,
 	listDirectory,
-	MAX_IMAGE_BYTES,
 	readLocalFile,
 	readWorkspaceFile,
 	searchWorkspaceFiles,
@@ -39,6 +50,7 @@ import {
 import { createBranch, GitBranchError, listLocalBranches, readGitState, switchBranch } from "./git.ts";
 import { buildLoginReport, type LoginReport, loginMethods, WebLoginController } from "./login.ts";
 import { signOutStep } from "./logout.ts";
+import { migrationRoute } from "./migration-routes.ts";
 import {
 	deleteModelProvider,
 	discoverProviderModels,
@@ -56,6 +68,7 @@ import {
 	mcpStatuses,
 	projectEntry,
 	type QueuedFile,
+	setLaunchWorkspace,
 	type WebAttachment,
 	WebSessionStore,
 } from "./runtime.ts";
@@ -74,6 +87,7 @@ import {
 	removePlugin,
 	SettingsError,
 	saveMcpServer,
+	saveMcpServerPatch,
 	setMcpServerEnabled,
 	setSkillEnabled,
 	updateMarketplace,
@@ -92,7 +106,14 @@ import {
 } from "./uploads.ts";
 import { VoiceRelay } from "./voice.ts";
 import { voiceRoute } from "./voice-routes.ts";
-import { WORKSPACES_FILE, WorkspaceRegistry } from "./workspaces.ts";
+import {
+	canonicalWorkspacePath,
+	type DefaultWorkspace,
+	firstUseWorkspaceDirectory,
+	resolveDefaultWorkspace,
+	WORKSPACES_FILE,
+	WorkspaceRegistry,
+} from "./workspaces.ts";
 
 const moduleRoot = resolve(fileURLToPath(new URL(".", import.meta.url)));
 /**
@@ -118,6 +139,13 @@ const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
 const port = Number.parseInt(process.env.STEPCODE_WEB_PORT ?? "3077", 10);
 /** Where the launch link points: this host, or the Vite dev server in `pnpm web:watch`. */
 const launchPort = resolveLaunchPort(process.env, port);
+/**
+ * How long shutdown waits for each running turn to record its interrupted
+ * reply. The desktop sends SIGKILL 5s after SIGTERM, so this must stay under it:
+ * a turn that outlasts the bound is abandoned instead of taking the whole
+ * transcript down with an unhandled kill.
+ */
+const SHUTDOWN_TURN_GRACE_MS = 3_000;
 const SECRET_FILE = "web-auth-secret";
 const authSecretPath = process.env.STEPCODE_WEB_AUTH_SECRET?.trim() || join(resolveStepConfigRoot(), SECRET_FILE);
 const bindHost = "127.0.0.1";
@@ -293,12 +321,64 @@ configureStepMcpPool({ quitRelease: "idle" });
 const mcpWarmup = createStepMcpHostWarmup();
 const resyncMcp = (): void => void mcpWarmup.sync(defaultWorkspace());
 const sessionSearch = new WebSessionSearch(resolveStepAgentDir());
+const sessionImports = new SessionImportService({
+	agentDir: resolveStepAgentDir(),
+	sessionRoot: resolveStepSessionDir(),
+	onPersisted: (event) => sessionSearch.notifyPersisted(event),
+});
 const store = new WebSessionStore({ index: sessionSearch });
+let migrations: MigrationService | undefined;
+let onboarding: DesktopOnboardingStore | undefined;
+try {
+	migrations = new MigrationService({
+		agentDir: resolveStepAgentDir(),
+		sessions: sessionImports,
+		env: process.env,
+		// Migrated MCP servers are enabled: connect them now so the next message can use their tools.
+		onMcpChanged: () => resyncMcp(),
+	});
+} catch {
+	// Optional migration data must not prevent the host from serving existing chats.
+}
+try {
+	onboarding = new DesktopOnboardingStore({ agentDir: resolveStepAgentDir() });
+} catch {
+	// An unsafe or unavailable onboarding directory is reported by its API, never reset silently.
+}
 const workspaces = new WorkspaceRegistry(join(resolveStepAgentDir(), WORKSPACES_FILE));
 /** Rendered previews of workspace files, on their own origin (see site-preview.ts). */
 const sitePreview = new SitePreviewServer();
 const terminals = new WebTerminals();
 const voice = new VoiceRelay();
+
+/**
+ * The first-use workspace, prepared in the background so listening never waits
+ * on it (creating a folder under ~/Documents can sit behind a macOS privacy
+ * prompt). API requests await it, so the page only ever sees the final launch
+ * folder. Failure is logged and leaves the launch folder as it was.
+ */
+const firstUseWorkspace: Promise<void> = (async () => {
+	const directory = firstUseWorkspaceDirectory(process.env);
+	if (!directory) return;
+	try {
+		const path = await workspaces.initializeDefault(directory, async () => (await store.list()).length > 0);
+		if (!path) return;
+		setLaunchWorkspace(path);
+		resyncMcp();
+	} catch (caught) {
+		console.warn(
+			`Could not prepare the default workspace ${directory}: ${caught instanceof Error ? caught.message : String(caught)}`,
+		);
+	}
+})();
+
+/**
+ * The default workspace: the folder a new conversation falls back to when no
+ * workspace is on offer, and whether it is the home fallback (see
+ * `resolveDefaultWorkspace`).
+ */
+const defaultWorkspaceInfo = (): Promise<DefaultWorkspace> =>
+	resolveDefaultWorkspace(workspaces, defaultWorkspace(), homedir());
 
 /**
  * Resolve the `cwd` of a workspace-scoped request, or undefined when the folder
@@ -307,7 +387,8 @@ const voice = new VoiceRelay();
  * File browsing is keyed by folder rather than by session so that a workspace
  * with no conversation yet can still be browsed. That makes the folder a
  * caller-supplied path, so it is checked against what the host already knows:
- * the launch folder, registered workspaces, and the cwd of existing sessions.
+ * the launch folder, the default workspace, registered workspaces, and the cwd
+ * of existing sessions.
  */
 async function knownWorkspace(input: string | null): Promise<string | undefined> {
 	if (!input) return undefined;
@@ -318,7 +399,11 @@ async function knownWorkspace(input: string | null): Promise<string | undefined>
 		return undefined;
 	}
 	if (await workspaces.has(cwd)) return cwd;
-	const candidates = [defaultWorkspace(), ...(await store.list()).map((session) => session.cwd)];
+	const candidates = [
+		defaultWorkspace(),
+		(await defaultWorkspaceInfo()).path,
+		...(await store.list()).map((session) => session.cwd),
+	];
 	for (const candidate of new Set(candidates)) {
 		if (!candidate) continue;
 		try {
@@ -506,7 +591,11 @@ async function settingsRoute(
 				return json(response, 201, { ok: true });
 			}
 			if (name && !action && method === "PUT") {
-				saveMcpServer(name, (await body(request)).config, { replace: true });
+				const input = await body(request);
+				if (Object.keys(input).some((key) => key !== "patch") || !input.patch) {
+					return error(response, 400, "A revision-checked MCP settings patch is required");
+				}
+				saveMcpServerPatch(name, input.patch);
 				return json(response, 200, { ok: true });
 			}
 			if (name && !action && method === "PATCH") {
@@ -664,16 +753,34 @@ async function serveImageFile(
 
 async function serveWorkspaceImage(response: ServerResponse, cwd: string, inputPath: string): Promise<void> {
 	const file = await readWorkspaceFile(cwd, inputPath);
-	if (file.kind !== "image") return error(response, 415, "Only images can be served raw");
-	if (file.size > MAX_IMAGE_BYTES) return error(response, 413, "Image is too large to preview");
+	if (file.kind !== "image") {
+		imageRefused(response, file, inputPath);
+		return;
+	}
 	await serveImageFile(response, await containedWorkspacePath(cwd, inputPath), file);
 }
 
 async function serveLocalImage(response: ServerResponse, inputPath: string): Promise<void> {
 	const file = await readLocalFile(inputPath);
-	if (file.kind !== "image") return error(response, 415, "Only images can be served raw");
-	if (file.size > MAX_IMAGE_BYTES) return error(response, 413, "Image is too large to preview");
+	if (file.kind !== "image") {
+		imageRefused(response, file, inputPath);
+		return;
+	}
 	await serveImageFile(response, await absoluteLocalPath(inputPath), file);
+}
+
+/**
+ * Why a raw request was refused. The preview never asks for an oversized image
+ * (the read classifies it as "too large"), so this only answers a direct caller:
+ * an image over the limit keeps its documented 413, everything else is simply
+ * not servable here.
+ */
+function imageRefused(response: ServerResponse, file: WorkspaceFile, inputPath: string): void {
+	if (file.kind === "too-large" && imageMimeType(inputPath)) {
+		error(response, 413, "Image is too large to preview");
+		return;
+	}
+	error(response, 415, "Only images can be served raw");
 }
 
 const server = createServer(async (request, response) => {
@@ -710,22 +817,93 @@ const server = createServer(async (request, response) => {
 		if (url.pathname === "/healthz") return json(response, 200, { ok: true });
 		if (!url.pathname.startsWith("/api/")) return serveStatic(request, response, url.pathname);
 		if (!authorized(request)) return error(response, 401, "Authentication required");
+		await firstUseWorkspace;
 
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api" || parts[1] !== "v1") return error(response, 404, "Not found");
 		if (parts[2] === "terminals")
 			return await terminalRoute(terminals, parts.slice(3), url, request, response, knownWorkspace);
 		if (parts[2] === "voice") return await voiceRoute(voice, parts.slice(3), request, response);
+		if (parts[2] === "migrations") {
+			if (!migrations) return json(response, 503, { error: "migration-unavailable", code: "migration-unavailable" });
+			return await migrationRoute(migrations, parts.slice(3), url, request, response);
+		}
+		if (parts[2] === "desktop-onboarding" && parts.length === 3) {
+			if (!onboarding)
+				return json(response, 503, { error: "onboarding-unavailable", code: "onboarding-unavailable" });
+			try {
+				if (method === "GET") return json(response, 200, onboarding.get());
+				if (method === "PATCH") {
+					const input = await body(request);
+					const statuses: DesktopOnboardingStatus[] = ["unseen", "offered", "in_progress", "completed", "skipped"];
+					if (
+						Object.keys(input).some((key) => !["expectedRevision", "status", "lastJobId"].includes(key)) ||
+						typeof input.expectedRevision !== "number" ||
+						typeof input.status !== "string" ||
+						!statuses.includes(input.status as DesktopOnboardingStatus) ||
+						(input.lastJobId !== undefined && typeof input.lastJobId !== "string")
+					) {
+						return json(response, 400, { error: "invalid-onboarding-data", code: "invalid-onboarding-data" });
+					}
+					return json(
+						response,
+						200,
+						onboarding.update({
+							expectedRevision: input.expectedRevision,
+							status: input.status as DesktopOnboardingStatus,
+							...(typeof input.lastJobId === "string" ? { lastJobId: input.lastJobId } : {}),
+						}),
+					);
+				}
+				return error(response, 404, "Not found");
+			} catch (caught) {
+				const code = caught instanceof DesktopOnboardingError ? caught.code : "onboarding-unavailable";
+				return json(response, caught instanceof DesktopOnboardingError ? caught.status : 503, {
+					error: code,
+					code,
+				});
+			}
+		}
 		if (parts[2] === "bootstrap" && method === "GET") {
-			const [report, customModels] = await Promise.all([loginReport(), hasUsableCustomModel()]);
+			const [report, customModels, defaultInfo] = await Promise.all([
+				loginReport(),
+				hasUsableCustomModel(),
+				defaultWorkspaceInfo(),
+			]);
+			let desktopOnboarding: DesktopOnboardingState | undefined;
+			try {
+				desktopOnboarding = onboarding?.get();
+			} catch {
+				/* The explicit onboarding API reports recovery errors. */
+			}
+			const [existingSessions, existingWorkspaces] =
+				desktopOnboarding?.status === "unseen" ? await Promise.all([store.list(), workspaces.list()]) : [[], []];
+			const migrationSuggested =
+				!!migrations &&
+				desktopOnboarding?.status === "unseen" &&
+				!existingSessions.length &&
+				!existingWorkspaces.some((workspace) => workspace.hidden);
 			// The identity of the running build, so a page (and the person looking at
 			// it) can tell which build it is talking to. `buildTime` is staged beside
 			// the server entry by the installer; a source checkout reports none.
 			return json(response, 200, {
-				cwd: defaultWorkspace(),
+				// The page names its launch folder with this, and it has to agree with
+				// the cwd session headers record and the registry stores. Reporting the
+				// spelling the process was started with (a symlinked folder, a trailing
+				// slash) made the removed real folder keep appearing in the composer's
+				// picker, because only the canonical spelling was marked hidden.
+				cwd: await canonicalWorkspacePath(defaultWorkspace()),
+				// Where a new conversation starts when the launch folder has been
+				// removed from workspace navigation (see `defaultWorkspaceInfo`), and
+				// whether that folder is the fallback the page names "默认项目".
+				defaultCwd: await canonicalWorkspacePath(defaultInfo.path),
+				defaultCwdFallback: defaultInfo.fallback,
 				directoryPicker,
 				login: report,
 				customModels,
+				migrationAvailable: !!migrations,
+				migrationSuggested,
+				...(desktopOnboarding ? { desktopOnboarding } : {}),
 				version: resolveStepCodeVersion().value,
 				...(buildTime ? { buildTime } : {}),
 			});
@@ -777,7 +955,17 @@ const server = createServer(async (request, response) => {
 			return json(response, 200, await directoryList(url.searchParams.get("path") ?? defaultWorkspace()));
 		}
 		if (parts[2] === "workspaces" && parts.length === 3) {
-			if (method === "GET") return json(response, 200, { workspaces: await workspaces.list() });
+			if (method === "GET") {
+				// Kept fresh here as well as at bootstrap: removing the launch folder
+				// changes this answer mid-session, and the reroute that follows a
+				// removal reads it.
+				const [list, info] = await Promise.all([workspaces.list(), defaultWorkspaceInfo()]);
+				return json(response, 200, {
+					workspaces: list,
+					defaultCwd: await canonicalWorkspacePath(info.path),
+					defaultCwdFallback: info.fallback,
+				});
+			}
 			if (method === "POST") {
 				const input = await body(request);
 				if (typeof input.path !== "string") return error(response, 400, "path is required");
@@ -839,7 +1027,7 @@ const server = createServer(async (request, response) => {
 				if (parts[3] === "files") return json(response, 200, await listDirectory(cwd, path));
 				if (parts[3] === "file") return json(response, 200, await readWorkspaceFile(cwd, path));
 				if (parts[3] === "raw") return await serveWorkspaceImage(response, cwd, path);
-				if (parts[3] === "skills") return json(response, 200, { skills: await store.skillsFor(cwd) });
+				if (parts[3] === "skills") return json(response, 200, await store.slashResourcesFor(cwd));
 				if (parts[3] === "search") {
 					return json(response, 200, await searchWorkspaceFiles(cwd, url.searchParams.get("q") ?? ""));
 				}
@@ -850,6 +1038,60 @@ const server = createServer(async (request, response) => {
 		}
 		if (parts[2] === "workspace" && parts[3] === "git") {
 			return await gitRoute(parts.slice(4).map(decodeURIComponent), method, url, request, response);
+		}
+		if (parts[2] === "session-imports") {
+			try {
+				if (parts.length === 3 && method === "GET")
+					return json(response, 200, { jobs: await sessionImports.listJobs() });
+				if (parts.length === 4 && parts[3] === "scan" && method === "POST") {
+					const input = await body(request);
+					for (const key of Object.keys(input))
+						if (key !== "includeArchived")
+							return error(response, 400, "Only default-directory scanning is supported");
+					if (input.includeArchived !== undefined && typeof input.includeArchived !== "boolean")
+						return error(response, 400, "includeArchived must be a boolean");
+					return json(
+						response,
+						200,
+						await sessionImports.scan({
+							includeArchived: input.includeArchived === true,
+						}),
+					);
+				}
+				if (parts.length === 4 && parts[3] === "preview" && method === "POST") {
+					const input = await body(request);
+					if (typeof input.candidateId !== "string") return error(response, 400, "candidateId is required");
+					return json(response, 200, await sessionImports.preview(input.candidateId));
+				}
+				if (parts.length === 3 && method === "POST") {
+					const input = await body(request);
+					if (!Array.isArray(input.selections)) return error(response, 400, "selections are required");
+					const selections: { candidateId: string; fingerprint: string; cwd: string }[] = [];
+					for (const value of input.selections) {
+						if (
+							!value ||
+							typeof value !== "object" ||
+							!("candidateId" in value) ||
+							typeof value.candidateId !== "string" ||
+							!("fingerprint" in value) ||
+							typeof value.fingerprint !== "string" ||
+							!("cwd" in value) ||
+							typeof value.cwd !== "string"
+						)
+							return error(response, 400, "Invalid import selection");
+						selections.push({ candidateId: value.candidateId, fingerprint: value.fingerprint, cwd: value.cwd });
+					}
+					return json(response, 202, await sessionImports.start(selections));
+				}
+				if (parts.length === 4 && method === "GET")
+					return json(response, 200, await sessionImports.getJob(parts[3]));
+				if (parts.length === 4 && method === "DELETE")
+					return json(response, 200, await sessionImports.cancel(parts[3]));
+				return error(response, 404, "Not found");
+			} catch (caught) {
+				if (caught instanceof SessionImportError) return error(response, caught.status, caught.message);
+				return error(response, 400, caught instanceof Error ? caught.message : String(caught));
+			}
 		}
 		if (parts[2] === "settings" && parts[3]) {
 			return await settingsRoute(parts.slice(3).map(decodeURIComponent), method, url, request, response);
@@ -1045,7 +1287,7 @@ const server = createServer(async (request, response) => {
 				return json(response, 200, { ok: true });
 			}
 			if (parts[4] === "skills" && parts.length === 5 && method === "GET") {
-				return json(response, 200, { skills: session.skills() });
+				return json(response, 200, { skills: session.skills(), commands: session.commands() });
 			}
 			// A delivered page as its turn left it: later turns' patches reversed, served beside the
 			// workspace on the site preview origin. Falls back to the current file when that is not exact.
@@ -1251,7 +1493,22 @@ const shutdown = async (): Promise<void> => {
 			voice.stopAll(),
 			(async () => {
 				try {
-					await store.close();
+					// Stop live turns immediately; draining imports must not delay recording
+					// their partial replies before Desktop's 5s SIGKILL. Both finish before
+					// the session index is closed, including when either cleanup fails.
+					const results = await Promise.allSettled([
+						(async () => {
+							try {
+								await migrations?.close();
+							} finally {
+								await sessionImports.close();
+							}
+						})(),
+						store.interruptAndClose({ graceMs: SHUTDOWN_TURN_GRACE_MS, reason: "host shutdown" }),
+					]);
+					for (const result of results) {
+						if (result.status === "rejected") throw result.reason;
+					}
 				} finally {
 					// Flush sessions before stopping their index, even if session teardown fails.
 					// Sessions only release their MCP leases; the pool owns the server processes.

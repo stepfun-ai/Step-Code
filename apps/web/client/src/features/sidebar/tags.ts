@@ -20,7 +20,7 @@ export const TAG_COLORS: Readonly<Record<TagColor, string>> = {
 
 export const TAG_COLOR_KEYS = Object.keys(TAG_COLORS) as TagColor[];
 
-/** DataTransfer type a grouped-view row drags its session id under. */
+/** DataTransfer type a sidebar row drags its session id under (reorder, or retag in the grouped view). */
 export const SESSION_DRAG_TYPE = "application/x-stepcode-session";
 
 /** Name of the group a tag colour stands for, or "" (legacy `groupName`, 756-758). */

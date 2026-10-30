@@ -11,7 +11,8 @@
 	z-index: 90;
 	display: grid;
 	/* Same width as the app sidebar, so opening settings does not shift the content edge. */
-	grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+	--settings-menu-width: var(--sidebar-width);
+	grid-template-columns: var(--settings-menu-width) minmax(0, 1fr);
 	background: var(--canvas);
 	color: var(--ink);
 	animation: settings-enter 160ms ease-out;
@@ -1101,28 +1102,50 @@
 
 /*
  * Electron drag regions ignore stacking: the workspace's `.brand-row` drag strip underneath this view would still
- * swallow clicks on the back button. Opt the whole view out; its own `::before` strip re-enables dragging on top.
+ * swallow clicks on the back button. Opt the whole view out; its title bar below re-enables dragging on top.
  */
 [data-host="desktop"] .settings-view {
 	-webkit-app-region: no-drag;
 }
-/* The macOS title bar overlays the window's top strip: inset the menu and let the strip drag the window. */
-[data-host="desktop"][data-platform="darwin"] .settings-nav {
-	padding-top: calc(6px + var(--titlebar-inset));
+/* Only the macOS desktop draws its own title band; browsers and framed windows have none. */
+.settings-titlebar {
+	display: none;
 }
-[data-host="desktop"][data-platform="darwin"] .settings-view::before {
-	content: "";
-	position: absolute;
-	top: 0;
-	right: 0;
-	left: 0;
-	height: var(--titlebar-inset);
+/*
+ * macOS desktop: the window's title band is a real row of its own, as tall as the workspace's
+ * (--session-header-h), above the menu and the page. It drags the window and a double-click applies
+ * the system title-bar action (zoom by default), the same as the workspace's top band. It does not sit
+ * over the menu's or the page's scroll area, so nothing scrolls under the band, and it keeps the
+ * sidebar tint and divider on the left so the menu column reads as one piece.
+ */
+[data-host="desktop"][data-platform="darwin"] .settings-view {
+	grid-template-rows: var(--session-header-h) minmax(0, 1fr);
+}
+[data-host="desktop"][data-platform="darwin"] .settings-titlebar {
+	display: block;
+	grid-column: 1 / -1;
+	grid-row: 1;
+	background: linear-gradient(
+		to right,
+		var(--sidebar) calc(var(--settings-menu-width) - 1px),
+		var(--line) calc(var(--settings-menu-width) - 1px),
+		var(--line) var(--settings-menu-width),
+		var(--canvas) var(--settings-menu-width)
+	);
 	-webkit-app-region: drag;
+}
+[data-host="desktop"][data-platform="darwin"] .settings-nav,
+[data-host="desktop"][data-platform="darwin"] .settings-main {
+	grid-row: 2;
+}
+/* The band already clears the traffic lights; the page header keeps a modest gap below it. */
+[data-host="desktop"][data-platform="darwin"] .settings-content {
+	padding-top: 24px;
 }
 
 @media (max-width: 760px) {
 	.settings-view {
-		grid-template-columns: 200px minmax(0, 1fr);
+		--settings-menu-width: 200px;
 	}
 	.settings-content {
 		padding: 32px 20px 56px;
@@ -1273,6 +1296,16 @@
 		border-color var(--fast),
 		box-shadow var(--fast);
 }
+/* Token counts are typed, not stepped: a ±1 spinner on a 6-digit number is noise. */
+.settings-model-field input[type="number"] {
+	appearance: textfield;
+	-moz-appearance: textfield;
+}
+.settings-model-field input[type="number"]::-webkit-inner-spin-button,
+.settings-model-field input[type="number"]::-webkit-outer-spin-button {
+	margin: 0;
+	-webkit-appearance: none;
+}
 /* The input-type checkbox sits inside the field grid as its control row. */
 .settings-model-field .settings-inline-check {
 	height: var(--control-h-md);
@@ -1281,8 +1314,14 @@
 	border-color: var(--focus-border);
 	box-shadow: 0 0 0 3px var(--accent-ring);
 }
-.settings-model-row > .settings-icon-action {
-	margin-top: 18px;
+/*
+ * The row actions (connection test, delete) sit on the inputs' line: bottom-aligned with the fields and
+ * centred on their height, however tall the label above the inputs renders.
+ */
+.settings-model-row > .settings-icon-action,
+.settings-model-row > .settings-model-test {
+	align-self: end;
+	margin: 0 0 calc((var(--control-h-md) - 30px) / 2);
 }
 /* The connection-test mark: the zap/spinner/answer slot beside the delete
  * action, aligned with the inputs the same way. */
@@ -1292,7 +1331,6 @@
 	justify-content: center;
 	width: 30px;
 	height: 30px;
-	margin-top: 18px;
 	border-radius: var(--radius-control);
 	color: var(--ink-2);
 }
@@ -1304,7 +1342,19 @@
 }
 
 /* The candidate picker 获取可用模型 opens. It is the shared `ui/Modal`; only the
-   tool row and the option list are the picker's own. */
+   tool row and the option list are the picker's own. The dialog is capped to the
+   viewport so a long reply scrolls inside the list and the footer stays visible. */
+.settings-discover-dialog {
+	display: flex;
+	flex-direction: column;
+	max-height: min(680px, calc(100dvh - 32px));
+}
+.settings-discover-dialog .settings-modal-tools {
+	margin-top: 14px;
+}
+.settings-discover-dialog .settings-model-options {
+	margin-top: 8px;
+}
 .settings-modal-tools {
 	display: flex;
 	align-items: center;
@@ -1357,7 +1407,7 @@
 	.settings-model-row > .settings-model-test,
 	.settings-model-row > .settings-icon-action {
 		grid-row: 3;
-		margin-top: 0;
+		margin: 0;
 		justify-self: start;
 	}
 }

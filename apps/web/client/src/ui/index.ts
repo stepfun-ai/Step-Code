@@ -15,13 +15,14 @@
 export { Button, type ButtonProps, type ButtonVariant } from "./Button/Button";
 export { DiffStat, type DiffStatProps } from "./DiffStat/DiffStat";
 export { EmptyState } from "./EmptyState/EmptyState";
+export { useCopiedFlag } from "./hooks/useCopiedFlag";
 export { type DismissEvent, type DismissOptions, useDismiss } from "./hooks/useDismiss";
 export { useMergedRef } from "./hooks/useMergedRef";
 export { Icon, type IconName, type IconProps, type IconSize, LEGACY_ICONS } from "./Icon/Icon";
 export { IconButton, type IconButtonProps } from "./IconButton/IconButton";
 export { ICON_NAMES, IconSprite } from "./IconSprite/IconSprite";
 export { Kbd, type KbdProps } from "./Kbd/Kbd";
-export { MarkdownView, type MarkdownViewProps } from "./MarkdownView/MarkdownView";
+export { type MarkdownLabels, MarkdownView, type MarkdownViewProps } from "./MarkdownView/MarkdownView";
 export { Menu, MenuDivider, type MenuDividerProps, MenuItem, type MenuItemProps, type MenuProps } from "./Menu/Menu";
 export { Modal, type ModalProps } from "./Modal/Modal";
 export { Popover, type PopoverPlacement, type PopoverProps } from "./Popover/Popover";

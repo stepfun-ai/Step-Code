@@ -7,7 +7,7 @@ import { ApiError, apiSend, errorMessage } from "../../lib/api";
 import { closeRightPanel, openRightPanel } from "../../state/right-panel";
 import { forgetApproval, openSession, refreshSessions, renderSnapshot, showError } from "../../state/session";
 import { getState, setUi } from "../../state/store";
-import type { TurnRevertResult } from "../../state/types";
+import type { Attachment, TurnRevertResult } from "../../state/types";
 import type { PromptFile } from "../composer/prompt-editor";
 
 export type ApprovalVerdict = "deny" | "approve" | "approve_for_session";
@@ -129,7 +129,7 @@ export async function revertTurn(turnId: string): Promise<boolean> {
 			`/api/v1/sessions/${current.id}/turns/${encodeURIComponent(turnId)}/revert`,
 			"POST",
 		);
-		if (getState().current?.id === current.id) renderSnapshot(result.snapshot);
+		if (getState().current?.id === current.id) renderSnapshot(result.snapshot, { fromAction: true });
 		const count = result.paths.length;
 		const skipped = [...new Set(result.skipped.map((change) => change.path))];
 		// Files without a recorded diff stay as they are; say so instead of a plain success.
@@ -155,17 +155,31 @@ export async function rewritePrompt(
 	before: string | undefined,
 	text: string,
 	files?: readonly PromptFile[],
-): Promise<void> {
-	const current = getState().current;
-	if (!current || !text.trim()) return;
+	attachments: readonly Attachment[] = [],
+): Promise<boolean> {
+	const state = getState();
+	const current = state.current;
+	if (!current || !text.trim()) return false;
 	try {
 		const result = await apiSend<{ sessionId: string }>(`/api/v1/sessions/${current.id}/fork`, "POST", {
 			...(before ? { entryId: before } : {}),
 		});
-		await openSession(result.sessionId);
-		const { sendMessage } = await import("../composer/actions");
-		await sendMessage(text, files);
+		// Rewrite content is explicit even when the reader independently selects the fork.
+		// Keep the original transcript mounted until POST succeeds, so failures can restore its editor.
+		await apiSend(`/api/v1/sessions/${result.sessionId}/messages`, "POST", {
+			text,
+			attachments,
+			files: files?.map((file) => file.id) ?? [],
+		});
+		if (
+			getState().composerDraftId === state.composerDraftId &&
+			!getState().ui.openingSession &&
+			getState().ui.editingPrompt === state.ui.editingPrompt
+		)
+			await openSession(result.sessionId);
+		return true;
 	} catch (error) {
 		showError(errorMessage(error));
+		return false;
 	}
 }

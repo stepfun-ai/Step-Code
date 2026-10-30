@@ -3,10 +3,12 @@
  * file; `openSearch` / `closeSearch` are the fixed cross-feature names.
  */
 
-import type { TagColor } from "../../i18n";
+import { type TagColor, t } from "../../i18n";
 import { api } from "../../lib/api";
+import { arrangementChanged, moveSession, writeSessionPreferences } from "../../state/session-order";
 import { type ConversationView, getState, setState, setToggled, setUi } from "../../state/store";
-import { withoutSessionTag } from "../../state/tag-groups";
+import { updateTagGroups } from "../../state/tag-group-persistence";
+import { pruneTagGroups, withoutSessionTag } from "../../state/tag-groups";
 import type { SessionSearchResult } from "../../state/types";
 
 /* ── Global search (legacy 1199-1211) ────────────────────────────────────── */
@@ -117,6 +119,11 @@ export function toggleProjectFolded(cwd: string): void {
 	setState((state) => ({ foldedProjects: setToggled(state.foldedProjects, cwd) }));
 }
 
+/** Show every conversation of a workspace group, or only its first few again. */
+export function toggleProjectExpanded(cwd: string): void {
+	setState((state) => ({ expandedProjects: setToggled(state.expandedProjects, cwd) }));
+}
+
 /** Collapse or show the sidebar (legacy `#sidebarToggle`, 3383-3385). */
 export function toggleSidebar(): void {
 	setUi((ui) => ({ sidebarHidden: !ui.sidebarHidden }));
@@ -131,11 +138,12 @@ export function toggleSidebar(): void {
  * behind only made the picker offer a group that no longer exists.
  */
 export function setSessionTag(sessionId: string, color: TagColor | null): void {
-	setState((state) => {
+	updateTagGroups((state) => {
 		if (!color) return withoutSessionTag(state, sessionId);
+		if (!state.groups.some((group) => group.key === color)) throw new Error(t("groupColorUnavailable"));
 		const tags = new Map(state.tags);
 		tags.set(sessionId, color);
-		return { tags };
+		return pruneTagGroups({ ...state, tags }, new Set(tags.keys()));
 	});
 }
 
@@ -145,16 +153,62 @@ export function setSessionTag(sessionId: string, color: TagColor | null): void {
  * that keeps it alive never appear apart.
  */
 export function createGroupAndTag(sessionId: string, color: TagColor, name: string): void {
-	setState((state) => {
+	updateTagGroups((state) => {
+		if (state.groups.some((group) => group.key === color)) throw new Error(t("groupColorUnavailable"));
+		if (state.groups.some((group) => group.name.toLowerCase() === name.trim().toLowerCase())) {
+			throw new Error(t("groupNameDuplicate"));
+		}
 		const tags = new Map(state.tags);
 		tags.set(sessionId, color);
-		return { groups: [...state.groups, { key: color, name }], tags };
+		const groups = [...state.groups, { key: color, name: name.trim() }];
+		return pruneTagGroups({ ...state, groups, tags }, new Set(tags.keys()));
 	});
+}
+
+/* ── Arrangement: pinning and drag order ─────────────────────────────────── */
+
+/**
+ * Pin or unpin a conversation. A pinned row leads the list it already belongs
+ * to (its project, Recent, or its tag section) instead of moving out of it, so
+ * pinning never hides which project a conversation came from; the row pinned
+ * last is the one nearest the top. Stored in local storage, like the theme: the
+ * host has no opinion about one reader's order.
+ */
+export function toggleSessionPin(sessionId: string): void {
+	const state = getState();
+	const pinnedSessions = state.pinnedSessions.includes(sessionId)
+		? state.pinnedSessions.filter((id) => id !== sessionId)
+		: [sessionId, ...state.pinnedSessions];
+	setState({ pinnedSessions });
+	writeSessionPreferences({ pinnedSessions, sessionOrder: state.sessionOrder });
+}
+
+/**
+ * Move a dragged row before or after another row of its own list
+ * (`features/sidebar/drag.ts`). `drawnIds` is that list in drawn order; a drop
+ * beside a pinned row pins the row there, beside an unpinned row it unpins it.
+ * The stored arrangement keeps only the lists the reader has actually moved.
+ */
+export function reorderSession(
+	draggedId: string,
+	targetId: string,
+	place: "before" | "after",
+	drawnIds: readonly string[],
+): void {
+	const state = getState();
+	const preferences = moveSession(drawnIds, state, draggedId, targetId, place);
+	// A drag that changes nothing must not write (nor repaint) the arrangement.
+	if (!arrangementChanged(state, preferences)) return;
+	setState(preferences);
+	writeSessionPreferences(preferences);
 }
 
 /** Rename the group a tag colour stands for; rows and the filter chip follow the colour, not the name. */
 export function renameGroup(key: TagColor, name: string): void {
-	setState((state) => ({
-		groups: state.groups.map((group) => (group.key === key ? { ...group, name } : group)),
-	}));
+	updateTagGroups((state) => {
+		if (state.groups.some((group) => group.key !== key && group.name.toLowerCase() === name.trim().toLowerCase())) {
+			throw new Error(t("groupNameDuplicate"));
+		}
+		return { groups: state.groups.map((group) => (group.key === key ? { ...group, name: name.trim() } : group)) };
+	});
 }

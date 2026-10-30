@@ -97,3 +97,30 @@ test("a refused undo names its reason: later turns only for conflict", () => {
 	assert.notEqual(refusal("modified"), refusal("conflict"));
 	assert.match(refusal("modified"), /a\.txt/);
 });
+
+test("Step's edit_file and write_file count as turn changes on both sides; an unchanged write does not", () => {
+	const call = (id: string, name: string, args: Record<string, unknown>, details: Record<string, unknown>) => [
+		message(`a-${id}`, { role: "assistant", content: [{ type: "toolCall", id, name, arguments: args }] }),
+		message(`r-${id}`, { role: "toolResult", toolCallId: id, details }),
+	];
+	const entries = [
+		message("u1", { role: "user", content: [{ type: "text", text: "write it" }] }),
+		...call("w1", "write_file", { path: "index.html", content: "x\n" }, { path: "index.html", changed: true }),
+		message("u2", { role: "user", content: [{ type: "text", text: "change it" }] }),
+		...call("e2", "edit_file", { path: "index.html", search: "x", replace: "y" }, { patch: patch("index.html") }),
+		message("u3", { role: "user", content: [{ type: "text", text: "write it again" }] }),
+		...call("w3", "write_file", { path: "index.html", content: "y\n" }, { path: "index.html", changed: false }),
+	];
+	const turns = collectTurnChanges(timelineFromEntries(entries), "/work");
+	assert.deepEqual(
+		turns.map((turn) => [turn.turnId, turn.files.map((file) => [file.path, file.additions, file.deletions, file.untracked])]),
+		[
+			["u1", [["index.html", 0, 0, "unknown"]]],
+			["u2", [["index.html", 1, 1, undefined]]],
+		],
+	);
+	const host = entries as unknown as HostEntry[];
+	assert.deepEqual(turnChanges(host, "u1").skipped, [{ path: "index.html", reason: "unknown" }]);
+	assert.equal(turnChanges(host, "u2").changes.length, 1);
+	assert.deepEqual(turnChanges(host, "u3"), { changes: [], skipped: [] });
+});

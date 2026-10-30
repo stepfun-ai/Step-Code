@@ -25,6 +25,13 @@ import {
 	type WriteToolDetails,
 } from "@step-harness/coding-agent";
 
+/**
+ * File-changing tools: the built-in names and the Step tool profile's, which
+ * Web sessions use. Step's `edit_file` records the same patch as `edit`; its
+ * `write_file` records none (skipped) and `changed: false` for a no-op.
+ */
+const FILE_CHANGE_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "edit_file", "write_file"]);
+
 function toolPath(input: Readonly<Record<string, unknown>>): string | undefined {
 	const value = input.path ?? input.file_path;
 	return typeof value === "string" && value.trim() ? value : undefined;
@@ -254,7 +261,7 @@ export function turnChanges(entries: readonly SessionEntry[], turnId: string): T
 	const calls = new Map<string, { name: string; path?: string }>();
 	for (const entry of entries.slice(start + 1)) {
 		if (isUserMessage(entry)) break;
-		if (entry.type !== "message") continue;
+		if (entry.type !== "message" || entry.imported) continue;
 		const message = entry.message as {
 			role: string;
 			content?: unknown;
@@ -271,13 +278,15 @@ export function turnChanges(entries: readonly SessionEntry[], turnId: string): T
 		}
 		if (message.role !== "toolResult" || message.isError || !message.toolCallId) continue;
 		const call = calls.get(message.toolCallId);
-		if (!call?.path || (call.name !== "edit" && call.name !== "write")) continue;
-		const details = (message.details ?? {}) as WriteToolDetails;
+		if (!call?.path || !FILE_CHANGE_TOOLS.has(call.name)) continue;
+		const details = (message.details ?? {}) as WriteToolDetails & { changed?: unknown };
+		// Step's write_file left a file that already held the content untouched.
+		if (details.changed === false) continue;
 		if (typeof details.patch !== "string") {
 			skipped.push({ path: call.path, reason: details.untracked ?? "unknown" });
 			continue;
 		}
-		const write = call.name === "write";
+		const write = call.name === "write" || call.name === "write_file";
 		changes.push({
 			toolCallId: message.toolCallId,
 			path: call.path,
@@ -473,17 +482,105 @@ async function laterTurnsUnblock(
 export interface FileAtTurn {
 	/** The reconstructed text; absent when the file on disk is still that version. */
 	readonly text?: string;
-	/** False when a later change cannot be reversed: the caller shows the current file instead. */
+	/** False when the version is not on record: the caller shows the current file instead. */
 	readonly exact: boolean;
 }
 
+/** `patch` with its two sides swapped, so reversing it applies the original forward. */
+function invertedPatch(patch: string): string {
+	return patch
+		.split("\n")
+		.map((line) => {
+			const header = /^@@ -(\d+(?:,\d+)?) \+(\d+(?:,\d+)?) @@(.*)$/.exec(line);
+			if (header) return `@@ -${header[2]} +${header[1]} @@${header[3]}`;
+			// The "\ No newline" marker follows its line and keeps applying to it.
+			if (line.startsWith("+")) return `-${line.slice(1)}`;
+			if (line.startsWith("-")) return `+${line.slice(1)}`;
+			return line;
+		})
+		.join("\n");
+}
+
+/** Apply a recorded unified patch forward; throws when the content no longer matches it. */
+export function applyPatch(content: string, patch: string): string {
+	return reversePatch(content, invertedPatch(patch));
+}
+
+/** The text a recorded change is compared and replayed in: LF without BOM, like the patches. */
+function recordedText(raw: string): string {
+	return normalizeToLF(raw.startsWith("\uFEFF") ? raw.slice(1) : raw);
+}
+
 /**
- * Rebuild `path` as the turn `turnId` left it: the file on disk with every
- * later turn's patches to it reversed, newest first. Reverted turns are
- * skipped, since their edits are already gone from disk. A later change with
- * no patch, a later `write` that created the file anew, or a patch that no
- * longer applies (a command or another program edited the file) makes the
- * result inexact. Nothing is written.
+ * Replay the file's recorded changes up to `end` (exclusive): the latest full
+ * content a write recorded, then each later patch applied forward. Undefined
+ * when that is not on record: no write named the content, a later change has
+ * neither content nor patch, a patch does not apply (something outside the
+ * session edited the file in between), or a turn that changed the file was
+ * reverted before `end`.
+ */
+async function replayFile(
+	entries: readonly SessionEntry[],
+	end: number,
+	key: string,
+	cwd: string,
+): Promise<string | undefined> {
+	const sameFile = async (path: string) => (await fileKey(resolveToCwd(path, cwd))) === key;
+	const calls = new Map<string, { name: string; path?: string; content?: unknown }>();
+	let content: string | undefined;
+	for (const entry of entries.slice(0, end)) {
+		if (entry.imported) continue;
+		if (entry.type === "custom_message" && entry.customType === TURN_REVERT_TYPE) {
+			const turnId = (entry.details as { turnId?: unknown } | undefined)?.turnId;
+			if (typeof turnId !== "string") continue;
+			const reverted = turnChanges(entries, turnId);
+			for (const change of [...reverted.changes, ...reverted.skipped])
+				if (await sameFile(change.path)) return undefined;
+			continue;
+		}
+		if (entry.type !== "message") continue;
+		const message = entry.message as {
+			role: string;
+			content?: unknown;
+			toolCallId?: string;
+			isError?: boolean;
+			details?: unknown;
+		};
+		if (message.role === "assistant" && Array.isArray(message.content)) {
+			for (const part of message.content as Array<Record<string, unknown>>) {
+				if (part?.type !== "toolCall") continue;
+				const args = (part.arguments ?? {}) as Record<string, unknown>;
+				calls.set(String(part.id), { name: String(part.name ?? ""), path: toolPath(args), content: args.content });
+			}
+		}
+		if (message.role !== "toolResult" || message.isError || !message.toolCallId) continue;
+		const call = calls.get(message.toolCallId);
+		if (!call?.path || !FILE_CHANGE_TOOLS.has(call.name) || !(await sameFile(call.path))) continue;
+		const details = (message.details ?? {}) as WriteToolDetails & { changed?: unknown };
+		const write = call.name === "write" || call.name === "write_file";
+		// A write names the whole content, even when the file already held it (`changed: false`).
+		if (write && typeof call.content === "string") content = recordedText(call.content);
+		else if (details.changed === false) continue;
+		else if (typeof details.patch === "string" && content !== undefined) {
+			try {
+				content = applyPatch(content, details.patch);
+			} catch {
+				content = undefined;
+			}
+		} else content = undefined;
+	}
+	return content;
+}
+
+/**
+ * Rebuild `path` as the turn `turnId` left it. Preferably by replaying the
+ * session's own records up to the end of that turn (`replayFile`), which does
+ * not depend on what the file holds now. Without a recorded starting content
+ * (the file predates the session) it falls back to the file on disk with every
+ * later turn's patches to it reversed, newest first; reverted turns are
+ * skipped there, since their edits are already gone from disk, and a later
+ * change with no patch, a recreated file, or a patch that no longer applies
+ * makes the result inexact. Nothing is written.
  */
 export async function fileAtTurnEnd(
 	entries: readonly SessionEntry[],
@@ -493,7 +590,16 @@ export async function fileAtTurnEnd(
 ): Promise<FileAtTurn> {
 	const start = entries.findIndex((entry) => entry.id === turnId && isUserMessage(entry));
 	if (start < 0) return { exact: false };
-	const key = await fileKey(resolveToCwd(path, cwd));
+	const next = entries.findIndex((entry, index) => index > start && isUserMessage(entry));
+	const absolute = resolveToCwd(path, cwd);
+	const key = await fileKey(absolute);
+	const replayed = await replayFile(entries, next < 0 ? entries.length : next, key, cwd);
+	if (replayed !== undefined) {
+		const current = await readCurrent(absolute);
+		return current !== undefined && recordedText(current) === replayed
+			? { exact: true }
+			: { text: replayed, exact: true };
+	}
 	const reverted = new Set(revertedTurnIds(entries));
 	const later = entries
 		.slice(start + 1)
@@ -506,7 +612,7 @@ export async function fileAtTurnEnd(
 		for (const change of turn.changes) if (await sameFile(change.path)) patches.push(change);
 	}
 	if (!patches.length) return { exact: true };
-	const raw = await readCurrent(resolveToCwd(path, cwd));
+	const raw = await readCurrent(absolute);
 	if (raw === undefined) return { exact: false };
 	const bom = raw.startsWith("\uFEFF");
 	const text = bom ? raw.slice(1) : raw;

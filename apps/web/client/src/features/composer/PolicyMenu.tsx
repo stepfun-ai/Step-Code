@@ -9,10 +9,13 @@ import type { IconName } from "../../ui";
 import { selectPolicy } from "./actions";
 import { ControlMenu, ControlOption, PopoverHint } from "./ControlOption";
 
-/** Icons for each permission preset, keyed by the kernel's preset id. */
+/**
+ * Icons for each permission preset, keyed by the kernel's preset id. The wand
+ * belongs to skills, so automatic approval wears its own check mark.
+ */
 const POLICY_ICONS: Readonly<Record<string, IconName>> = {
 	ask: "shield",
-	"approve-for-me": "wand",
+	"approve-for-me": "circleCheck",
 	"full-access": "zap",
 };
 

@@ -346,7 +346,7 @@ function DiscoverDialog({
 			open={open}
 			onClose={onClose}
 			id="settingsModelDiscover"
-			className="settings-dialog"
+			className="settings-dialog settings-discover-dialog"
 			labelledBy="settingsModelDiscoverTitle"
 		>
 			<div className="settings-dialog-head">
@@ -456,7 +456,10 @@ export function ModelEditor({
 		setDiscoverLoading(true);
 		setSelected(new Set());
 		try {
+			// A blank key field means "keep the stored key": the host falls back to
+			// the credential stored for this provider id, as the connection test does.
 			const reply = await apiSend<{ models: DiscoveredModelEntry[] }>(`${MODELS_PATH}/discover`, "POST", {
+				providerId: editing ? editor.id : form.id.trim(),
 				baseUrl: form.baseUrl.trim(),
 				api: form.api,
 				apiKey: form.apiKey.trim() || undefined,
@@ -468,7 +471,7 @@ export function ModelEditor({
 		} finally {
 			setDiscoverLoading(false);
 		}
-	}, [form.baseUrl, form.api, form.apiKey]);
+	}, [editing, editor.id, form.id, form.baseUrl, form.api, form.apiKey]);
 
 	const openDiscover = () => {
 		setDiscoverOpen(true);
@@ -765,16 +768,15 @@ export function ModelEditor({
 										onTest={() => testRow(row)}
 									/>
 									<Tooltip content={t("settingsDelete")}>
-										<button
-											type="button"
+										<IconButton
+											icon="trash"
+											iconSize="xs"
 											className="settings-icon-action danger"
 											aria-label={t("settingsDelete")}
 											onClick={() =>
 												update({ models: form.models.filter((candidate) => candidate.key !== row.key) })
 											}
-										>
-											<Icon name="trash" size="xs" />
-										</button>
+										/>
 									</Tooltip>
 								</li>
 							))}

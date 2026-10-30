@@ -14,7 +14,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BorderedLoader } from "../components/bordered-loader.ts";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionFactory } from "../core/extensions/types.ts";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+	ExtensionFactory,
+} from "../core/extensions/types.ts";
 import { execFileText } from "../utils/child-process.ts";
 import { resolveStepConfigDir } from "./environment.ts";
 import { resolveStepMcpEnvironment, STEP_LOGIN_SUPPLIED_ENV } from "./mcp-environment.ts";
@@ -1056,7 +1061,7 @@ export async function addMarketplaceSource(input: {
 			await fs.cp(local, target, { recursive: true, errorOnExist: true, force: false });
 		} else {
 			report(`Cloning repository (timeout: 120s): ${cloneSource}`);
-			await cloneMarketplace(cloneSource!, target, report, input.signal);
+			await cloneMarketplace(cloneSource!, target, marketplacesDir, report, input.signal);
 		}
 	} catch (error) {
 		await fs.rm(target, { recursive: true, force: true }).catch(() => undefined);
@@ -1084,10 +1089,16 @@ export async function addMarketplaceSource(input: {
  * `--progress` is what makes git emit percentage updates to stderr when it is
  * not attached to a terminal; without it a large clone is silent until it
  * finishes, which is indistinguishable from a hang.
+ *
+ * git runs in `cwd` (the marketplaces folder, which exists by now) rather than
+ * the host's working directory: a long-lived host can outlive its own cwd (the
+ * Web host's build folder is deleted and recreated on rebuild), and git's https
+ * helper then fails with "Unable to read current working directory".
  */
 async function cloneMarketplace(
 	cloneSource: string,
 	target: string,
+	cwd: string,
 	report: (message: string) => void,
 	signal?: AbortSignal,
 ): Promise<void> {
@@ -1095,7 +1106,7 @@ async function cloneMarketplace(
 		const child = execFile(
 			"git",
 			["clone", "--depth", "1", "--progress", "--", cloneSource, target],
-			{ timeout: 120_000, ...(signal ? { signal } : {}) },
+			{ cwd, timeout: 120_000, ...(signal ? { signal } : {}) },
 			(error) => (error ? reject(error) : resolve()),
 		);
 		let pending = "";
@@ -1156,7 +1167,7 @@ export async function updateMarketplaceSource(input: {
 		return { warnings: [`Marketplace '${name}' is a local checkout and cannot be updated automatically.`] };
 	}
 	try {
-		await execFileText("git", ["-C", target, "pull", "--ff-only", "--quiet"], { timeout: 120_000 });
+		await execFileText("git", ["-C", target, "pull", "--ff-only", "--quiet"], { cwd: target, timeout: 120_000 });
 	} catch (error) {
 		return { warnings: [`Could not update marketplace '${name}': ${describe(error)}`] };
 	}
@@ -1189,28 +1200,66 @@ export function createStepPluginResourcesExtension(): ExtensionFactory {
 	let generation = 0;
 	return (pi: ExtensionAPI): void => {
 		pi.on("resources_discover", async (_event, ctx) => {
-			const projectDir = defaultStepPluginsDir(process.env, { cwd: ctx.cwd, project: true });
+			// Discovery outlives a session that is replaced while it runs (a fork, /new
+			// or reload disposes the runner). Its context getters throw once that
+			// happens, and a throw from the error path below would surface as an
+			// extension error — a toast on a session the user just branched. Read what
+			// this handler needs before the first await.
+			let cwd: string;
+			let projectTrusted: boolean;
+			let sessionManager: ExtensionContext["sessionManager"];
+			let notify: ((message: string, level?: "info" | "warning" | "error") => void) | undefined;
+			try {
+				cwd = ctx.cwd;
+				projectTrusted = ctx.isProjectTrusted();
+				sessionManager = ctx.sessionManager;
+				const ui = ctx.ui;
+				notify = ui?.notify?.bind(ui);
+			} catch (error) {
+				// The runner was replaced between `session_start` and here, so there is
+				// no session left to report into. Any other failure still reaches the
+				// user: a plugin whose resources went missing must not fail silently.
+				notifyUnusableContext(ctx, error);
+				return {};
+			}
+			const projectDir = defaultStepPluginsDir(process.env, { cwd, project: true });
 			const attempt = ++generation,
 				owners = new Map<string, string>();
 			try {
 				const discovered = await discoverStepPluginResourcePaths({
 					projectDir,
-					projectTrusted: ctx.isProjectTrusted(),
+					projectTrusted,
 					onSkillOwner: (root, owner) => owners.set(root, owner),
 					userDir: defaultStepPluginsDir(process.env),
 				});
-				if (attempt === generation && ctx.sessionManager) pluginSkillOwners.set(ctx.sessionManager, owners);
+				if (attempt === generation && sessionManager) pluginSkillOwners.set(sessionManager, owners);
 				// Surface a malformed declaration once, on the channel the loader
 				// already uses for resource diagnostics, rather than throwing: the
 				// rest of the plugins' resources must still load.
-				for (const warning of discovered.warnings) ctx.ui?.notify?.(warning, "warning");
+				for (const warning of discovered.warnings) notify?.(warning, "warning");
 				return { skillPaths: discovered.skillPaths, promptPaths: discovered.promptPaths };
 			} catch (error) {
-				ctx.ui?.notify?.(`Could not read plugin resources: ${describe(error)}`, "warning");
+				notify?.(`Could not read plugin resources: ${describe(error)}`, "warning");
 				return {};
 			}
 		});
 	};
+}
+
+/**
+ * Report that `resources_discover` could not read its own context.
+ *
+ * A runner replaced by a fork, `/new` or reload throws from every getter, so
+ * that case has no window to report into and stays silent. Any other failure
+ * left a live session without its plugin resources, which the user must hear
+ * about rather than losing silently.
+ */
+function notifyUnusableContext(ctx: ExtensionContext, error: unknown): void {
+	try {
+		ctx.ui?.notify?.(`Could not read plugin resources: ${describe(error)}`, "warning");
+	} catch {
+		// Stale context: the session that would have shown the warning is gone.
+	}
 }
 
 function reportPluginWarnings(say: PluginNotice, warnings: readonly string[]): void {
@@ -1749,7 +1798,10 @@ function deriveMarketplaceName(source: string): string | undefined {
 
 async function readGitOrigin(dir: string): Promise<string | null> {
 	try {
-		const result = await execFileText("git", ["-C", dir, "remote", "get-url", "origin"], { timeout: 10_000 });
+		const result = await execFileText("git", ["-C", dir, "remote", "get-url", "origin"], {
+			cwd: dir,
+			timeout: 10_000,
+		});
 		return result.stdout.trim() || null;
 	} catch {
 		return null;

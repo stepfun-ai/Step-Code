@@ -91,7 +91,8 @@
   --action: var(--ink);
   --action-hover: color-mix(in srgb, var(--ink) 84%, var(--canvas));
   --action-ink: var(--canvas);
-  --caret: #df9a14;
+  /* Text and terminal carets follow the theme's accent; there is no separate caret hue. */
+  --caret: var(--accent);
   /* ── Depth ───────────────────────────────────────────────────────── */
   --shadow: rgb(16 16 18 / 12%);
   --scrim: rgb(16 16 18 / 26%);
@@ -99,6 +100,14 @@
   --elev-1: 0 1px 2px rgb(16 16 18 / 5%);
   --elev-2: 0 1px 2px rgb(16 16 18 / 4%), 0 10px 28px -10px rgb(16 16 18 / 16%);
   --elev-3: 0 2px 6px rgb(16 16 18 / 5%), 0 28px 64px -20px rgb(16 16 18 / 28%);
+  /* Inverse hover card (a truncated sidebar row's full title): dark in every theme. */
+  --hover-card-surface: #2a2a2e;
+  --hover-card-line: transparent;
+  --hover-card-ink: #f4f4f5;
+  --hover-card-ink-2: #a8a8af;
+  --hover-card-success: #62cc8f;
+  --hover-card-attention: #f2bf58;
+  --hover-card-danger: #ff7b6f;
   /* Selected thumb of a segmented tray: separated by tone alone, never by a ring. */
   --thumb: var(--surface);
   --inline-code: rgb(16 16 18 / 5.5%);
@@ -122,6 +131,11 @@
   /* Horizontal inset shared by the message column and the composer, so their
      left edges line up instead of drifting apart by a few pixels. */
   --gutter: 32px;
+  /* The floating show-sidebar button's start, and the inline band the bars
+     under it (session, market, cron headers) keep clear while the sidebar is
+     hidden. The macOS desktop host overrides only the start (below). */
+  --sidebar-show-left: 14px;
+  --sidebar-show-clearance: calc(var(--sidebar-show-left) + var(--control-h) + 14px);
   --radius-control: 8px;
   --radius-card: 16px;
   --fast: 120ms;
@@ -244,13 +258,15 @@ html[data-theme="dark"] {
   --accent-ink: #15121f;
   --accent-soft: rgb(160 143 255 / 12%);
   --accent-ring: rgb(237 237 239 / 10%);
-  --caret: #f6b73c;
   --shadow: rgb(0 0 0 / 46%);
   --scrim: rgb(6 6 10 / 58%);
   --edge-light: rgb(255 255 255 / 5%);
   --elev-1: 0 1px 2px rgb(0 0 0 / 32%), inset 0 1px 0 var(--edge-light);
   --elev-2: 0 2px 6px rgb(0 0 0 / 30%), 0 14px 36px -12px rgb(0 0 0 / 62%), inset 0 1px 0 var(--edge-light);
   --elev-3: 0 4px 12px rgb(0 0 0 / 34%), 0 36px 80px -24px rgb(0 0 0 / 72%), inset 0 1px 0 var(--edge-light);
+  /* On a dark page the card lifts by a step of tone and a hairline instead. */
+  --hover-card-surface: #2e2e33;
+  --hover-card-line: var(--line-strong);
   --thumb: #38383e;
   --inline-code: rgb(255 255 255 / 7%);
   --scrollbar-thumb: #38383e;
@@ -278,6 +294,8 @@ html[data-theme="dark"] {
 html[data-theme="violet"] {
   --workbench: #f4f5fc;
   --sidebar-glass: rgb(244 245 252 / 72%);
+  /* The terminal keeps its "a touch deeper than the workbench" step, in lilac instead of blue. */
+  --term-bg: #f1f1fc;
 }
 html[data-theme="violet"] .sidebar {
   --hover: #e8eaf6;
@@ -567,6 +585,16 @@ html[data-theme="dark"] .sidebar {
 .message-body > h4:first-child {
   margin-top: 0;
 }
+/* The rendered Markdown (ui/MarkdownView) sits in one root; its outer blocks never add space at the edges. */
+.md-root > :first-child {
+  margin-top: 0;
+}
+.md-root > :last-child {
+  margin-bottom: 0;
+}
+.message-body p {
+  margin: 10px 0;
+}
 .message-body strong {
   color: var(--ink);
   font-weight: 600;
@@ -575,22 +603,37 @@ html[data-theme="dark"] .sidebar {
 .message.assistant .message-body {
   color: var(--ink);
 }
-.message-body .md-li {
-  position: relative;
-  display: block;
-  padding-left: 1.25em;
+.message-body ul,
+.message-body ol {
+  margin: 10px 0;
+  padding-left: 1.4em;
 }
-.message-body .md-li + .md-li {
+.message-body li + li {
   margin-top: 0.2em;
 }
-.message-body .md-li::before {
-  position: absolute;
-  left: 0.3em;
-  content: "•";
+.message-body li > :is(ul, ol) {
+  margin: 0.2em 0 0;
+}
+/* A loose list wraps each item in a paragraph; the item already spaces it. */
+.message-body li > p {
+  margin: 0;
+}
+.message-body li::marker {
   color: var(--ink-3);
 }
-.message-body .md-li-nested::before {
-  content: "◦";
+.message-body ol > li::marker {
+  font-variant-numeric: tabular-nums;
+}
+.message-body ul ul {
+  list-style-type: circle;
+}
+.message-body .contains-task-list {
+  padding-left: 0.2em;
+  list-style: none;
+}
+.message-body .task-list-item > input {
+  margin: 0 0.45em 0 0;
+  vertical-align: -0.1em;
 }
 /* Links read in the text's own ink; the underline marks them, so a reply is not dotted with violet. */
 .message-body a {
@@ -607,10 +650,6 @@ html[data-theme="dark"] .sidebar {
 .message-body strong {
   font-weight: 600;
 }
-.message-body .md-gap {
-  display: block;
-  height: 10px;
-}
 /*
  * A quote is set back from the prose with a rule, and a horizontal rule is a
  * block: both appear in answers that talk *about* Markdown, and showing their
@@ -626,23 +665,6 @@ html[data-theme="dark"] .sidebar {
   margin: 16px 0;
   border: 0;
   border-top: 1px solid var(--line);
-}
-/* A numbered item keeps the number its author wrote. */
-.message-body .md-li.md-oli {
-  padding-left: 1.55em;
-}
-.message-body .md-li.md-oli::before {
-  left: 0.1em;
-  content: attr(data-n) ".";
-  color: var(--ink-3);
-  font-variant-numeric: tabular-nums;
-}
-/* Two-space indentation is one nesting level. */
-.message-body .md-li.md-li-nested {
-  padding-left: 2.2em;
-}
-.message-body .md-li.md-li-nested.md-oli {
-  padding-left: 3em;
 }
 .message-body .md-table-wrap {
   max-width: 100%;
@@ -759,6 +781,13 @@ html[data-theme="dark"] .sidebar {
 .copy-code:hover {
   background: var(--hover);
 }
+/* Set by MarkdownView for a moment after a successful copy. */
+.copy-code[data-copied] {
+  color: var(--success);
+}
+.copy-code[data-copied]::before {
+  content: "✓ ";
+}
 .code-block pre {
   /* No height cap: a reply's code is read whole, and a clipped block hid its last lines. */
   overflow-x: auto;
@@ -775,6 +804,27 @@ html[data-theme="dark"] .sidebar {
   tab-size: 4;
   font: inherit;
   white-space: pre;
+}
+/* Shiki colours each token for both themes; the dark theme reads its `--shiki-dark` value. */
+html[data-theme="dark"] .code-block code span {
+  color: var(--shiki-dark) !important;
+}
+.message-body .md-mermaid {
+  margin: 14px 0;
+  overflow-x: auto;
+}
+.message-body .md-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+.message-body .katex-display {
+  margin: 12px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+/* A renderer failure shows the source as it was written. */
+.md-fallback {
+  white-space: pre-wrap;
 }
 
 /* legacy 912: chevron in composer and workspace controls */
@@ -815,6 +865,8 @@ html[data-theme="dark"] .sidebar {
 }
 [data-host="desktop"][data-platform="darwin"] {
   --titlebar-inset: 28px;
+  /* Traffic lights end near x 68: the show-sidebar button starts after them. */
+  --sidebar-show-left: 84px;
 }
 [data-host="desktop"][data-platform="darwin"] .sidebar {
   padding-top: var(--titlebar-inset);
@@ -835,9 +887,6 @@ html[data-theme="dark"] .sidebar {
 [data-host="desktop"] .brand-row a,
 [data-host="desktop"] .brand-row input {
   -webkit-app-region: no-drag;
-}
-[data-host="desktop"][data-platform="darwin"] .file-tree {
-  top: calc(var(--brand-row-h) + var(--titlebar-inset));
 }
 /*
  * The whole top band of the window is title bar: across the main column it
@@ -894,11 +943,6 @@ html[data-theme="dark"] .sidebar {
   :is(.main, .right-panel, .right-tool-rail)
   :is(button, a, input, textarea, select, [role="button"], [role="tab"], [contenteditable="true"]) {
   -webkit-app-region: no-drag;
-}
-[data-host="desktop"][data-platform="darwin"]
-  .app.sidebar-hidden
-  .sidebar-show {
-  left: 84px;
 }
 /* The sign-in gate covers the title strip: its backdrop drags the window, the card does not. */
 [data-host="desktop"] .login-gate {

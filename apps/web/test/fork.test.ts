@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -134,15 +134,111 @@ test("a fork returns the new session id, and that id resolves", { timeout: 120_0
 		assert.equal(store.statuses().some((entry) => entry.id === parentId), false);
 		assert.equal(reopened.snapshot().name, "Alpha_fork");
 
-		// Forking the fork appends again rather than counting or replacing. A
-		// branched session has no file until its first reply, and the kernel
-		// refuses to branch one, so continue the child first.
+		// Forking the fork appends again rather than counting or replacing. The
+		// implicit fork branches *before* the newest prompt, so an untouched branch
+		// has nothing to keep; continue the child first.
 		await reopened.send("hello again");
 		await waitFor(() => !reopened.isBusy());
 		const second = await reopened.fork();
 		assert.notEqual(second.sessionId, first.sessionId);
 		assert.equal(second.sessionId, reopened.id);
 		assert.equal((await store.getOrOpen(second.sessionId)).snapshot().name, "Alpha_fork_fork");
+	} finally {
+		await store?.interruptAndClose().catch(() => {});
+		await fixture.stop();
+		await rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+		process.env.STEP_CODING_AGENT_DIR = previous.agentDir;
+		process.env.STEPCODE_AUTH_PATH = previous.authPath;
+		if (previous.apiKey === undefined) delete process.env.STEP_API_KEY;
+		else process.env.STEP_API_KEY = previous.apiKey;
+		if (previous.loginState === undefined) delete process.env.STEPCODE_LOGIN_STATE_PATH;
+		else process.env.STEPCODE_LOGIN_STATE_PATH = previous.loginState;
+	}
+});
+
+/**
+ * Forking mid-history must copy the parent's path up to the selected entry and
+ * leave the parent itself alone: the same file, the same messages, and still
+ * usable for another turn afterwards. The reported regression: forking offered
+ * a new session but a toast, and the original conversation stopped answering.
+ */
+test("a mid-history fork copies the path and leaves the parent usable", { timeout: 180_000 }, async () => {
+	const base = await mkdtemp(join(tmpdir(), "stepcode-web-fork-parent-"));
+	const fixture = await startFixture(base);
+	let store: WebSessionStore | undefined;
+	const previous = {
+		agentDir: process.env.STEP_CODING_AGENT_DIR,
+		authPath: process.env.STEPCODE_AUTH_PATH,
+		apiKey: process.env.STEP_API_KEY,
+		loginState: process.env.STEPCODE_LOGIN_STATE_PATH,
+	};
+	process.env.STEP_CODING_AGENT_DIR = join(base, "agent");
+	process.env.STEPCODE_AUTH_PATH = join(base, "auth.json");
+	delete process.env.STEP_API_KEY;
+	delete process.env.STEPCODE_LOGIN_STATE_PATH;
+	const messageEntries = (session: { snapshot(): Record<string, unknown> }) =>
+		(session.snapshot().entries as Array<Record<string, unknown>>).filter((entry) => entry.type === "message");
+	const textOf = (entry: Record<string, unknown>) => {
+		const message = entry.message as { role: string; content: unknown };
+		const content = message.content;
+		if (typeof content === "string") return content;
+		return (content as Array<{ type: string; text?: string }>)
+			.flatMap((part) => (part.type === "text" && part.text ? [part.text] : []))
+			.join(" ");
+	};
+	try {
+		store = new WebSessionStore();
+		const parent = await store.create(base);
+		const parentId = parent.id;
+		// The page shows a host error event as its toast; a fork must not publish one.
+		const errors: string[] = [];
+		parent.subscribe((event) => {
+			if (event.type === "error") errors.push(event.message);
+		});
+		for (const prompt of ["turn one", "turn two", "turn three"]) {
+			await parent.send(prompt);
+			await waitFor(() => !parent.isBusy());
+		}
+		const before = parent.snapshot();
+		const parentFile = before.sessionFile as string;
+		const parentBytes = await readFile(parentFile, "utf8");
+		const parentMessages = messageEntries(parent);
+		assert.equal(parentMessages.length, 6, "three turns are six messages");
+		const forkTarget = parentMessages[2];
+		assert.equal(textOf(forkTarget), "turn two", "the third message is the second prompt");
+
+		const forked = await parent.fork(forkTarget.id as string);
+		assert.equal(forked.cancelled, false);
+		assert.notEqual(forked.sessionId, parentId);
+		assert.equal(parent.id, forked.sessionId);
+
+		// The branch ends at the selected entry, with the same ids on its path.
+		const child = await store.getOrOpen(forked.sessionId);
+		const childMessages = messageEntries(child);
+		assert.deepEqual(
+			childMessages.map((entry) => entry.id),
+			parentMessages.slice(0, 3).map((entry) => entry.id),
+		);
+		assert.equal(textOf(childMessages.at(-1) as Record<string, unknown>), "turn two");
+		assert.notEqual(child.snapshot().sessionFile, parentFile);
+
+		// The parent's file is byte-for-byte what it was before the fork.
+		assert.equal(await readFile(parentFile, "utf8"), parentBytes);
+
+		// The parent can be reopened from disk and still answer: its row in the
+		// sidebar is what the user clicks after following the fork.
+		const reopenedParent = await store.getOrOpen(parentId);
+		assert.equal(reopenedParent.id, parentId);
+		const reopenedMessages = messageEntries(reopenedParent);
+		assert.equal(reopenedMessages.length, 6);
+		assert.equal(textOf(reopenedMessages.at(-1) as Record<string, unknown>), "done");
+		await reopenedParent.send("after the fork");
+		await waitFor(() => !reopenedParent.isBusy());
+		const continued = messageEntries(reopenedParent);
+		assert.equal(continued.length, 8, "the parent keeps its history and takes another turn");
+		assert.equal(textOf(continued[6] as Record<string, unknown>), "after the fork");
+		assert.equal(textOf(continued[7] as Record<string, unknown>), "done");
+		assert.deepEqual(errors, [], "neither the fork nor the resumed parent reported an error");
 	} finally {
 		await store?.interruptAndClose().catch(() => {});
 		await fixture.stop();

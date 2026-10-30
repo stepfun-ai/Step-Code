@@ -241,6 +241,103 @@ const until = async (probe, label, timeout = 8000) => {
 		await new Promise((resolve) => setTimeout(resolve, 25));
 	}
 };
+const migrationPost = async (path, action) => {
+  const originalFetch = window.fetch;
+  let result;
+  let observed = false;
+  window.fetch = async (input, init) => {
+    const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+    const response = await originalFetch(input, init);
+    if (url.origin === location.origin && url.pathname === '/api/v1/migrations' + path && init?.method === 'POST') {
+      result = { status: response.status, body: await response.clone().json(), request: JSON.parse(init.body) };
+      observed = true;
+    }
+    return response;
+  };
+  try {
+    await action();
+    await until(() => observed, 'migration POST ' + path);
+    return result;
+  } finally {
+    window.fetch = originalFetch;
+  }
+};
+const migrationRead = async (path = '') => {
+  const response = await fetch('/api/v1/migrations' + path);
+  if (!response.ok) throw new Error('Migration read failed: ' + response.status);
+  return response.json();
+};
+const migrationFooter = () => $$('#migrationModal .migration-dialog-foot button');
+const migrationOpen = async () => {
+  if ($('#migrationModal') && !$('#migrationModal').hidden) $('#migrationModal .migration-dialog-head button').click();
+  if ($('#settingsView').hidden) $('#settingsButton').click();
+  $('[data-settings-page="migration"]').click();
+  await until(() => $('#migrationPage .migration-category-list button'), 'migration Settings entry');
+  $('#migrationPage .migration-category-list button').click();
+  await until(() => !$('#migrationModal').hidden && $('#migrationScanButton'), 'explicit scan invitation');
+};
+const migrationScan = async () => {
+  const result = await migrationPost('/scan', () => $('#migrationScanButton').click());
+  if (result.status !== 200) throw new Error('Scan failed: ' + JSON.stringify(result.body));
+  await until(() => $('.migration-list'), 'scan rendered');
+  return result.body;
+};
+const migrationExpand = (row) => {
+  const group = row.closest('.migration-group');
+  if (group && group.querySelector('.migration-group-items')?.hidden) group.querySelector('.migration-group-toggle').click();
+};
+const migrationPreview = async (item) => {
+  const row = $('[data-candidate-id="' + item.id + '"]');
+  if (!row || row.querySelector('input').disabled) throw new Error('Candidate not selectable: ' + item.name);
+  migrationExpand(row);
+  const result = await migrationPost('/preview', () => row.querySelector('.migration-row-title').click());
+  // A failed preview must stay observable in the panel, so callers assert on it themselves.
+  if (result.status === 200)
+    await until(() => $('.migration-preview select') && !$('.migration-preview select').disabled, 'preview settled');
+  return result.body;
+};
+const migrationSelect = async (item) => {
+  const row = $('[data-candidate-id="' + item.id + '"]');
+  await migrationPreview(item);
+  // Selecting re-reviews the same request, so the reviewed snapshot is the one the plan must freeze.
+  const selected = await migrationPost('/preview', () => row.querySelector('input').click());
+  if (selected.status !== 200) throw new Error('Selection preview failed: ' + JSON.stringify(selected.body));
+  await until(() => $('.migration-preview select') && !$('.migration-preview select').disabled, 'preview settled');
+  if (!row.querySelector('input').checked) throw new Error('Explicit selection lost');
+  for (const input of $$('.migration-preview .migration-check input')) if (!input.checked) input.click();
+  return selected.body;
+};
+const migrationToChecklist = async () => {
+  for (let i = 0; i < 4 && !$('.migration-final-plan'); i++) {
+    await until(() => $('#migrationNextStep') && !$('#migrationNextStep').disabled, 'next step ready');
+    $('#migrationNextStep').click();
+    await until(() => $('.migration-final-plan') || $('.migration-list'), 'step advanced');
+  }
+  await until(() => $('.migration-final-plan'), 'final plan reached');
+};
+const migrationPlan = async () => {
+  // A failed plan attempt leaves the review stage open, so return to the category first.
+  if ($('.migration-final-plan')) { $$('#migrationModal .migration-dialog-foot button')[0].click(); await until(() => $('.migration-list'), 'back to selection'); }
+  await until(() => $('#migrationNextStep') && !$('#migrationNextStep').disabled, 'selected previews ready');
+  const result = await migrationPost('/plans', migrationToChecklist);
+  if (result.status !== 200) throw new Error('Plan failed: ' + JSON.stringify(result.body));
+  await until(() => $('.migration-final-plan'), 'immutable final review');
+  return result.body;
+};
+const migrationStart = async () => {
+  const result = await migrationPost('', () => $('#migrationStartPlan').click());
+  if (result.status !== 202) throw new Error('Start failed: ' + JSON.stringify(result.body));
+  const job = await until(async () => {
+    const job = await migrationRead('/' + result.body.id);
+    return ['completed', 'cancelled', 'interrupted'].includes(job.status) ? job : null;
+  }, 'durable terminal job');
+  await until(() => $('[data-result-count="pending"] dd')?.textContent === '0', 'terminal job UI');
+  for (const status of ['imported', 'skipped', 'failed']) {
+    if (Number($('[data-result-count="' + status + '"] dd').textContent) !== job.items.filter(item => item.status === status).length)
+      throw new Error('UI count disagrees with durable job: ' + status);
+  }
+  return job;
+};
 const treeRows = () => $$("#fileTreeBody .file-row").map((row) => row.dataset.path);
 const treeRow = (path) => $$("#fileTreeBody .file-row").find((row) => row.dataset.path === path);
 const projects = () => $$("#projectGroups .project-group").map((group) => group.dataset.cwd);
@@ -273,6 +370,7 @@ before(async () => {
   await mkdir(join(workspace, "src", "deep"), { recursive: true })
   await mkdir(join(workspace, "docs"), { recursive: true })
   await mkdir(join(extra, "lib"), { recursive: true })
+  await mkdir(join(base, "scan-home"), { recursive: true })
   await writeFile(
     join(workspace, "README.md"),
     "# Title\n\nSome **bold** text.\n",
@@ -374,6 +472,10 @@ before(async () => {
     cwd: webRoot,
     env: {
       ...process.env,
+      HOME: join(base, "scan-home"),
+      USERPROFILE: join(base, "scan-home"),
+      CODEX_HOME: join(base, "migration-codex"),
+      CLAUDE_CONFIG_DIR: join(base, "migration-claude"),
       TSX_TSCONFIG_PATH: join(webRoot, "..", "..", "tsconfig.json"),
       STEPCODE_WEB_PORT: String(port),
       STEPCODE_WEB_CWD: workspace,
@@ -1507,8 +1609,7 @@ test("clarification close cancels the pending tool and a single freeform answer 
     const active = $(".session-row.active").dataset.sessionId;
     await fetch("/api/v1/sessions/" + active + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "clarification fixture again" }) });
     await until(() => !$(".clarification-panel").hidden, "new questions");
-    // Closing the round lives with the footer text actions since the panel lost
-    // its card header, so the affordance is a button id, not an icon label.
+    // The close control is targeted by its stable id, not its icon label.
     $("#clarificationClose").click();
     await until(() => $(".clarification-panel").hidden, "cancelled card");
     await until(async () => (await (await fetch("/api/v1/sessions/" + active)).json()).status === "completed", "cancelled turn settles");
@@ -1582,9 +1683,107 @@ test("approval cards show complete commands, restore on reload, and offer only d
   assert.match(await readFile(join(workspace, "approval-result.txt"), "utf8"), /approval command preview/);
   await browser.run(`
     await fetch("/api/v1/sessions/${id}/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "approval-fixture-remembered" }) });
-    await until(async () => (await (await fetch("/api/v1/sessions/${id}")).json()).status === "completed" && $(".approval") === null, "later command reuses session grant");
+    // The post returns before the turn starts, so "completed" alone can still be
+    // the previous turn's state: wait for this turn's own command result too.
+    await until(async () => {
+      const value = await (await fetch("/api/v1/sessions/${id}")).json();
+      const results = value.entries.filter((entry) => entry.message?.role === "toolResult").length;
+      return value.status === "completed" && $(".approval") === null && results >= 2;
+    }, "later command reuses session grant");
   `);
   assert.match(await readFile(join(workspace, "approval-remembered.txt"), "utf8"), /approval command preview/);
+});
+
+test("a subagent's write asks for approval and runs in the child, not the main session", { skip }, async () => {
+  const report = await browser.run(`
+    const json = { "content-type": "application/json" };
+    const session = await (await fetch("/api/v1/sessions", { method: "POST", headers: json, body: JSON.stringify({ cwd: ${JSON.stringify(workspace)} }) })).json();
+    const base = "/api/v1/sessions/" + session.id;
+    await fetch(base + "/policy", { method: "PATCH", headers: json, body: JSON.stringify({ preset: "ask" }) });
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "delegate-subagent-fixture" }) });
+    const asked = [];
+    const snapshot = await until(async () => {
+      const value = await (await fetch(base)).json();
+      if (value.status === "failed") throw new Error(JSON.stringify(value));
+      for (const approval of value.pendingApprovals ?? []) {
+        asked.push({ tool: approval.toolName, content: approval.message });
+        await fetch(base + "/approvals/decision", { method: "POST", headers: json, body: JSON.stringify({ id: approval.id, verdict: "approve_for_session" }) });
+      }
+      const delegatedResult = value.entries?.some(entry => entry.message?.role === "toolResult" && entry.message.toolName === "subagent");
+      // POST accepts the prompt before its turn starts; a previous/initial completed state is not this turn's completion.
+      return value.status === "completed" && delegatedResult ? value : null;
+    }, "the delegated write settles", 180000);
+    const calls = [];
+    for (const entry of snapshot.entries) {
+      for (const part of entry.message?.content ?? []) {
+        if (part.type === "toolCall") calls.push(part.name);
+      }
+    }
+    const subagentResult = snapshot.entries.find((entry) => entry.message?.role === "toolResult" && entry.message.toolName === "subagent");
+    return { id: session.id, asked, calls, resultError: subagentResult?.message?.isError === true, resultText: subagentResult?.message?.content?.map((part) => part.text ?? "").join("") ?? "" };
+  `);
+  // The parent's delegation and the child's write each ask once, in this session.
+  assert.deepEqual(
+    report.asked.map((entry) => entry.tool),
+    ["subagent", "write_file"],
+  );
+  assert.match(report.asked[1].content, /write_file path=src\/sub\.txt/u, "the child's dialog body carries the file it wants to write");
+  // Only the delegated agent wrote the file: the parent's transcript has no write call.
+  assert.deepEqual(report.calls, ["subagent"]);
+  assert.equal(report.resultError, false, report.resultText);
+  assert.equal(await readFile(join(workspace, "src", "sub.txt"), "utf8"), "hello\n");
+});
+
+test("background subagent output is live beside an idle parent and completed answers survive stopping a supplement", { skip }, async () => {
+  const id = await browser.run(`
+    const session = await (await fetch("/api/v1/sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: ${JSON.stringify(workspace)} }) })).json();
+    await fetch("/api/v1/sessions/" + session.id + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "background-parent-fixture" }) });
+    await until(async () => (await (await fetch("/api/v1/sessions/" + session.id)).json()).status === "completed", "parent persisted");
+    return session.id;
+  `);
+  await browser.goto(`${origin}/`);
+  const live = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${id}"]'), "background parent");
+    row.click();
+    await until(() => row.classList.contains("active"), "selected parent");
+    const base = "/api/v1/sessions/${id}";
+    const json = { "content-type": "application/json" };
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "delegate-background-fixture" }) });
+    const lane = await until(() => $('.lane-row[data-subagent-tool-id="tool-background-call"]'), "background lane");
+    lane.click();
+    await until(() => $(".subagent-live-progress")?.textContent.includes("streamed reply"), "live-only child text", 180000);
+    const snapshot = await (await fetch(base)).json();
+    return { parentStatus: snapshot.status, childId: snapshot.subagentLanes?.[0]?.details.results[0]?.sessionId, live: $(".subagent-live-progress").textContent, composer: Boolean($("#prompt")) };
+  `);
+  assert.equal(live.parentStatus, "completed");
+  assert.match(live.childId, /^subagent-/u);
+  assert.match(live.live, /streamed reply/u);
+  assert.equal(live.composer, true);
+  if (process.env.STEP_E2E_SUBAGENT_SCREENSHOT) {
+    const screenshot = await browser.send("Page.captureScreenshot", { format: "png" });
+    await writeFile(process.env.STEP_E2E_SUBAGENT_SCREENSHOT, Buffer.from(screenshot.data, "base64"));
+  }
+  const stopped = await browser.run(`
+    const base = "/api/v1/sessions/${id}";
+    const json = { "content-type": "application/json" };
+    await until(async () => {
+      const value = await (await fetch(base)).json();
+      return value.subagentLanes?.[0]?.status === "completed" && value.status === "completed" && value.entries.some((entry) => entry.customType === "step-subagent-response");
+    }, "first child report completed", 180000);
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "reply-background-fixture" }) });
+    await until(() => $(".subagent-live-progress")?.textContent.includes("streamed reply"), "supplement is live", 180000);
+    await fetch(base + "/messages", { method: "POST", headers: json, body: JSON.stringify({ text: "stop-background-fixture" }) });
+    await until(async () => (await (await fetch(base)).json()).subagentLanes?.[0]?.status === "aborted", "supplement stopped", 180000);
+    await until(() => $(".subagent-completed-output")?.textContent.includes("streamed reply 39"), "retained first report");
+    const value = await (await fetch(base)).json();
+    return { status: value.subagentLanes[0].status, completed: value.entries.filter((entry) => entry.customType === "step-subagent-response").length, output: $(".subagent-completed-output").textContent,
+      agentRows: $$(".sb-agent-row").length, controls: $$(".subagent-controls details").length };
+  `);
+  assert.equal(stopped.status, "aborted");
+  assert.equal(stopped.completed, 1);
+  assert.match(stopped.output, /streamed reply 39/u);
+  assert.equal(stopped.controls, 2);
+  assert.equal(stopped.agentRows, 0);
 });
 
 test("denying an approval never executes the command", { skip }, async () => {
@@ -2204,7 +2403,7 @@ test("workspaces with chats can be removed through the dialog, retained after re
     await until(() => !$("#removeWorkspaceConfirm").disabled && $("#errorToast").textContent.includes("removal fixture retry"), "retryable failure");
     const kept = !$("#removeWorkspaceModal").hidden;
     $("#removeWorkspaceConfirm").click(); $("#removeWorkspaceConfirm").click();
-    await until(() => $("#removeWorkspaceModal").hidden && !projects().length, "confirmed removal");
+    await until(() => $("#removeWorkspaceModal").hidden && !projects().includes(${JSON.stringify(workspace)}), "confirmed removal");
     window.fetch = original;
     return { calls, kept, session: $("#recentTasks .session-row.active")?.dataset.sessionId };
   `);
@@ -2212,9 +2411,18 @@ test("workspaces with chats can be removed through the dialog, retained after re
   await browser.goto(`${origin}/`);
   const reloaded = await browser.run(`
     await until(() => $("#recentTasks .session-row"), "retained chats after reload");
-    return { projects: projects(), session: (await (await fetch("/api/v1/sessions/${before.session}")).json()).id };
+    return {
+      projects: projects(),
+      name: $("#projectGroups .project-name").textContent,
+      session: (await (await fetch("/api/v1/sessions/${before.session}")).json()).id,
+    };
   `);
-  assert.deepEqual(reloaded, { projects: [], session: before.session });
+  // The workspace just removed was the launch folder, so new work falls back to
+  // the host's default folder. The page lists it as "默认项目" instead of leaving
+  // an empty project list: the user still needs a target for the next
+  // conversation, and it must not be the deleted folder.
+  const fallback = await realpath(join(base, "scan-home"));
+  assert.deepEqual(reloaded, { projects: [fallback], name: "默认项目", session: before.session });
   assert.ok(existsSync(join(workspace, "README.md")));
   await browser.run(`
     await fetch("/api/v1/workspaces", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({path:${JSON.stringify(workspace)}}) });
@@ -2226,6 +2434,107 @@ test("workspaces with chats can be removed through the dialog, retained after re
   `);
   assert.deepEqual(restored, [workspace]);
 });
+
+test("a removed workspace leaves the composer picker and never receives a new conversation", { skip }, async () => {
+  // Removing a workspace keeps its conversations. One of them can still be open,
+  // and "New conversation" inherits the folder from it, so the app has to stop
+  // targeting the folder the user deleted: the picker cannot list it any more,
+  // and a chat started there was sent into a workspace that was gone.
+  const now = new Date().toISOString()
+  const usage = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+  const extraSession = "e2e-extra-workspace-session"
+  const dir = join(base, "agent", "sessions", "--e2e-extra--")
+  await mkdir(dir, { recursive: true })
+  await writeFile(
+    join(dir, `${extraSession}.jsonl`),
+    [
+      { type: "session", version: 3, id: extraSession, timestamp: now, cwd: extra },
+      { type: "message", id: "x-u", parentId: null, timestamp: now, message: { role: "user", content: "removed workspace chat", timestamp: Date.now() } },
+      { type: "message", id: "x-a", parentId: "x-u", timestamp: now, message: { role: "assistant", content: [{ type: "text", text: "ok" }], api: "openai-completions", provider: "e2e", model: "e2e", usage, stopReason: "stop", timestamp: Date.now() } },
+    ]
+      .map((line) => JSON.stringify(line))
+      .join("\n") + "\n",
+  )
+  await browser.run(`
+    await fetch("/api/v1/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: ${JSON.stringify(extra)} }) });
+  `)
+  await browser.goto(`${origin}/`)
+  const removed = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${extraSession}"]'), "the workspace's chat");
+    row.click();
+    await until(() => $(".session-row.active"), "opened chat");
+    const group = await until(() => $$("#projectGroups .project-group").find((node) => node.dataset.cwd === ${JSON.stringify(extra)}), "workspace group");
+    group.querySelector(".workspace-menu-button").click();
+    await until(() => $("#workspaceMenu"), "workspace menu");
+    $("#workspaceMenu .remove-workspace").click();
+    await until(() => !$("#removeWorkspaceModal").hidden, "removal dialog");
+    $("#removeWorkspaceConfirm").click();
+    await until(() => $("#removeWorkspaceModal").hidden, "removed");
+    return {
+      groups: projects(),
+      recent: $$("#recentTasks .session-row").map((row) => row.dataset.sessionId),
+      workspaces: (await (await fetch("/api/v1/workspaces")).json()).workspaces,
+    };
+  `)
+  assert.equal(removed.groups.includes(extra), false, "the sidebar drops the removed project")
+  assert.ok(removed.recent.includes(extraSession), "its conversation is kept, under Recent")
+  assert.equal(
+    removed.workspaces.find((workspace) => workspace.name === "second-project")?.hidden,
+    true,
+    "the removal is recorded, not only hidden in this page's memory",
+  )
+
+  // The removed chat is still open. A new conversation must not inherit its folder.
+  const next = await browser.run(`
+    $("#newSession").click();
+    await until(() => !$("#workspaceControl").hidden, "draft composer");
+    const pill = $("#workspaceButtonName").textContent;
+    $("#workspaceButton").click();
+    const rows = await until(() => $$("#workspaceRecentList [role=option]").length && $$("#workspaceRecentList [role=option]"), "picker");
+    const items = rows.map((row) => row.title);
+    document.body.click();
+    await until(() => !$("#workspacePopover"), "picker closes");
+    const editor = $("#prompt");
+    editor.textContent = "stream-fixture"; editor.focus();
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    $("#sendButton").click();
+    const id = await until(() => $(".session-row.active")?.dataset.sessionId, "created session");
+    const snapshot = await until(async () => {
+      const value = await (await fetch("/api/v1/sessions/" + id)).json();
+      if (value.status === "failed") throw new Error(JSON.stringify(value));
+      return value.status === "completed" ? value : null;
+    }, "the new turn settles");
+    return {
+      pill,
+      items,
+      toast: $("#errorToast").hidden ? "" : $("#errorToast").textContent,
+      cwd: snapshot.cwd,
+      groups: projects(),
+    };
+  `)
+  assert.equal(next.pill, "project", "the draft moves to a workspace still on offer")
+  assert.deepEqual(next.items, [workspace], "the picker no longer offers the removed folder")
+  assert.equal(next.cwd, workspace, "the new session is not created in the removed folder")
+  assert.equal(next.toast, "", "no folder-scoped request was refused")
+  assert.equal(next.groups.includes(extra), false, "the removed project never comes back as an empty group")
+  assert.equal(next.groups.includes(workspace), true, "the new chat joins the workspace it was started in")
+
+  // And the removal survives a reload: no group, no picker entry, chat still readable.
+  await browser.goto(`${origin}/`)
+  const reloaded = await browser.run(`
+    await until(() => $("[data-session-id]"), "rows after reload");
+    $("#newSession").click();
+    await until(() => !$("#workspaceControl").hidden, "draft after reload");
+    $("#workspaceButton").click();
+    await until(() => $$("#workspaceRecentList [role=option]").length, "picker after reload");
+    const items = $$("#workspaceRecentList [role=option]").map((row) => row.title);
+    document.body.click();
+    return { items, groups: projects(), recent: $$("#recentTasks .session-row").map((row) => row.dataset.sessionId) };
+  `)
+  assert.equal(reloaded.items.includes(extra), false, "the picker stays clean after a reload")
+  assert.equal(reloaded.groups.includes(extra), false, "the removed project never comes back as a group")
+  assert.ok(reloaded.recent.includes(extraSession), "the removed folder's chat is still readable")
+})
 
 test("rewriting a message leaves one input box, not two", { skip }, async () => {
   // Rewriting happens in place, above the conversation. The bottom composer used
@@ -2337,6 +2646,52 @@ test("a group stops being offered once its last session drops it", { skip }, asy
   })
 })
 
+test("tag group metadata survives browser reload and its last-member removal survives another reload", { skip }, async () => {
+  const sessionId = "e2e-persisted-tag-session"
+  const now = new Date().toISOString()
+  const dir = join(base, "agent", "sessions", "--e2e-persisted-tag--")
+  await mkdir(dir, { recursive: true })
+  const entries = [
+    { type: "session", version: 3, id: sessionId, timestamp: now, cwd: workspace },
+    { type: "message", id: "persisted-tag-user", parentId: null, timestamp: now,
+      message: { role: "user", content: "group persistence fixture", timestamp: Date.now() } },
+  ]
+  await writeFile(join(dir, `${sessionId}.jsonl`), entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n")
+  await browser.goto(`${origin}/`)
+  await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "persisted group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "persisted group picker");
+    picker.querySelector("[data-new-tag='teal']").click();
+    const input = await until(() => $("#tagNameInput"), "persisted group name");
+    input.value = "Reload group";
+    $("#tagNameConfirm").click();
+    await until(() => !$("#tagPicker"), "created group");
+  `)
+  await browser.goto(`${origin}/`)
+  const restored = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "restored group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "restored group picker");
+    const name = picker.querySelector("[data-tag='teal']")?.textContent;
+    const stored = JSON.parse(localStorage.getItem("stepcode.tagGroups"));
+    picker.querySelector("[data-tag='teal']").click();
+    await until(() => !$("#tagPicker"), "removed restored tag");
+    return { name, tag: stored.tags.find(([id]) => id === "${sessionId}") };
+  `)
+  assert.deepEqual(restored, { name: "Reload group", tag: [sessionId, "teal"] })
+  await browser.goto(`${origin}/`)
+  const removed = await browser.run(`
+    const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "untagged group row");
+    row.querySelector(".session-tag-button").click();
+    const picker = await until(() => $("#tagPicker"), "untagged group picker");
+    const removed = !picker.querySelector("[data-tag='teal']") && Boolean(picker.querySelector("[data-new-tag='teal']"));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    return removed;
+  `)
+  assert.equal(removed, true)
+})
+
 test("conversation search finds message content written outside the page and opens the matching message", { skip }, async () => {
   // A session another process (the CLI) wrote: the host's index picks it up without a notification.
   const sessionId = "e2e-search-session"
@@ -2400,6 +2755,59 @@ test("conversation search finds message content written outside the page and ope
     return sessions.map((session) => session.id).filter((id) => id.startsWith("e2e-search") || id.startsWith("subagent-"));
   `)
   assert.deepEqual(listed, [sessionId])
+})
+
+test("a conversation another Host started appears when this window regains focus", { skip }, async () => {
+  // Desktop and Web are separate Host processes over one ~/.stepcode. A turn run
+  // in the other one writes a transcript this page never hears about; the row has
+  // to appear without a reload when the user comes back to the window.
+  const seededId = "e2e-other-host-seeded"
+  const sessionId = "e2e-other-host-session"
+  const usage = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+  const transcript = (id, text) => {
+    const now = new Date().toISOString()
+    return [
+      { type: "session", version: 3, id, timestamp: now, cwd: join(base, "other-host-project") },
+      { type: "message", id: `${id}-user`, parentId: null, timestamp: now, message: { role: "user", content: text, timestamp: Date.now() } },
+      {
+        type: "message",
+        id: `${id}-answer`,
+        parentId: `${id}-user`,
+        timestamp: now,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "written by the other host" }],
+          api: "openai-completions",
+          provider: "e2e",
+          model: "e2e",
+          usage,
+          stopReason: "stop",
+          timestamp: Date.now(),
+        },
+      },
+    ]
+  }
+  const dir = join(base, "agent", "sessions", "--e2e-other-host--")
+  await mkdir(dir, { recursive: true })
+  const writeSession = (id, text) =>
+    writeFile(join(dir, `${id}.jsonl`), transcript(id, text).map((line) => JSON.stringify(line)).join("\n") + "\n")
+
+  // A conversation the other Host wrote before this page loaded: seeing its row
+  // proves the page read the list, so the next write cannot race the bootstrap.
+  await writeSession(seededId, "seeded before the page loaded")
+  await browser.goto(`${origin}/`)
+  await browser.run(`await until(() => $("[data-session-id='${seededId}']"), "the seeded row");`)
+
+  await writeSession(sessionId, "started in the other host")
+  const seen = await browser.run(`
+    const row = () => $("[data-session-id='${sessionId}']");
+    const before = Boolean(row());
+    window.dispatchEvent(new Event("focus"));
+    const found = await until(() => row(), "the other host's session row");
+    return { before, title: found.querySelector(".session-title")?.textContent };
+  `)
+  assert.equal(seen.before, false, "no row exists until the list is re-read")
+  assert.equal(seen.title, "started in the other host")
 })
 
 test("the conversation locator rail jumps to a query and follows the viewport", { skip }, async () => {
@@ -2654,15 +3062,23 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     const view = $("#childAgentView");
     await until(() => !view.hidden && view.textContent.includes("Wombat audit finished."), "child transcript");
     const usageStrip = $("#subagentUsage");
-    // A subagent is context the main agent wrote: the reader only looks, so the
-    // parent's prompt deck must be gone while this read-only record is open.
+    // A subagent is context the main agent wrote, but only the record is
+    // read-only: the parent conversation keeps its one prompt field while the
+    // panel is open, so typing, stop and queued messages stay reachable.
     const composer = $(".composer-zone");
+    const promptVisible = (() => {
+      const prompt = $("#prompt");
+      if (!prompt) return false;
+      const box = prompt.getBoundingClientRect();
+      return box.width > 0 && box.height > 0;
+    })();
     const single = {
       listedChildren,
       readOnlyBadge: Boolean(view.querySelector(".child-agent-badge")),
       actions: view.querySelectorAll(".message-actions, textarea, input").length,
       activeRow: $(".session-row.active")?.dataset.sessionId,
-      composerHidden: getComputedStyle(composer).display === "none",
+      composerVisible: getComputedStyle(composer).display !== "none",
+      promptVisible,
       // The child's input is a collapsed "message received" receipt, never a
       // bubble (which reads as an input field in this read-only panel).
       taskCopiesBeforeOpen: (view.textContent.match(/audit wombat/g) ?? []).length,
@@ -2691,7 +3107,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     single.taskBlock = Boolean(view.querySelector(".subagent-input .subagent-task"));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await until(() => view.hidden, "child view closed by Escape");
-    single.composerRestored = getComputedStyle(composer).display !== "none";
+    single.composerAfterClose = getComputedStyle(composer).display !== "none";
 
     // A refused dispatch has no per-task result; it must still be a failed
     // record carrying the tool's own reason, not a nameless "status unknown" row.
@@ -2715,7 +3131,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
       empty: view.querySelector(".subagent-execution .child-agent-empty")?.textContent ?? "",
       inputs: view.querySelectorAll("input, textarea, [contenteditable='true']").length,
       userBubbles: view.querySelectorAll(".message.user").length,
-      composerHidden: getComputedStyle(composer).display === "none",
+      composerVisible: getComputedStyle(composer).display !== "none",
     };
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await until(() => view.hidden, "rejected view closed by Escape");
@@ -2738,8 +3154,9 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     await until(() => view.hidden, "rail closes the panel");
     return { ...single, rejected, tabs: agentTabs, tabHints, railOpened };
   `)
-  assert.equal(seen.composerHidden, true, "the parent composer still shows beside the read-only subagent record")
-  assert.equal(seen.composerRestored, true, "closing the record does not restore the parent composer")
+  assert.equal(seen.composerVisible, true, "opening a subagent record took the parent composer away")
+  assert.equal(seen.promptVisible, true, "the parent prompt field is not usable beside the read-only subagent record")
+  assert.equal(seen.composerAfterClose, true, "closing the record broke the parent composer")
   assert.equal(seen.taskCopiesBeforeOpen, 0, "the task is printed before its receipt is opened")
   assert.match(seen.inputRow?.label ?? "", /^收到任务消息/, "the receipt is not labelled")
   assert.equal(seen.inputRow?.expanded, "false", "the task receipt starts closed")
@@ -2750,7 +3167,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
   assert.equal(seen.rejected.laneState, "failed", "a refused dispatch is not a failed lane")
   assert.match(seen.rejected.laneText, /rejected audit/)
   assert.equal(seen.rejected.summaryUnknownHasAttempt, false, "a refused dispatch is recorded as status unknown")
-  assert.match(seen.rejected.summaryFailed.join(" | "), /rejected audit/)
+  assert.deepEqual(seen.rejected.summaryFailed, [], "the activity summary excludes settled failures; the parent row keeps navigation")
   assert.deepEqual(seen.rejected.panel, {
     error: "Invalid parameters. Provide exactly one mode.",
     status: "已失败",
@@ -2758,7 +3175,7 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     empty: "派发失败，子会话未创建",
     inputs: 0,
     userBubbles: 0,
-    composerHidden: true,
+    composerVisible: true,
   })
   assert.deepEqual(seen.usage, {
     input: "输入 1k",
@@ -2775,8 +3192,9 @@ test("a subagent or workflow call opens its child agents' transcripts read-only 
     sections: _sections,
     rejected: _rejected,
     inputRow: _inputRow,
-    composerHidden: _composerHidden,
-    composerRestored: _composerRestored,
+    composerVisible: _composerVisible,
+    promptVisible: _promptVisible,
+    composerAfterClose: _composerAfterClose,
     ...rest
   } = seen
   assert.deepEqual(rest, {
@@ -2825,7 +3243,10 @@ test("plan mode's proposal keeps its review card after a reload and its approval
     const stripHidden = $("#planStrip").hidden;
     $("#planApprove").click();
     await until(() => !$("#planApprove"), "card settles after the decision");
-    await until(async () => (await (await fetch("/api/v1/sessions/${id}")).json()).status === "completed", "approval turn settles");
+    await until(async () => {
+      const value = await (await fetch("/api/v1/sessions/${id}")).json();
+      return value.status === "completed" && $$(".message.user").some(node => node.textContent.includes("同意执行"));
+    }, "this approval turn settles and its decision is rendered");
     return {
       contents,
       approve,
@@ -3026,4 +3447,1135 @@ test("a streaming reply never turns into a second prompt field", { skip }, async
   assert.equal(tops.length, 1, `the prompt moved while the reply streamed: ${tops.join(",")}`)
   const zones = [...new Set(settled.map((frame) => frame.zone))]
   assert.equal(zones.length, 1, `the composer moved while the reply streamed: ${zones.join(",")}`)
+})
+
+test(
+  "the terminal pastes the clipboard without reading it from script",
+  { skip },
+  async (t) => {
+    // The dock cannot be opened at all when the native PTY is unavailable.
+    const support = await browser.run(`
+      const cwd = (await (await fetch("/api/v1/bootstrap")).json()).cwd;
+      const list = await (await fetch("/api/v1/terminals?" + new URLSearchParams({ cwd }))).json();
+      return list.support;
+    `)
+    if (!support.available) {
+      t.skip(`terminal unavailable: ${support.reason}`)
+      return
+    }
+
+    // The page may put text on the clipboard, but a scripted read stays denied,
+    // as it always is in Desktop. Granting read back would hide the regression:
+    // the dock used to call navigator.clipboard.readText() inside the keydown
+    // handler and showed a red error when the browser refused.
+    await browser.send(
+      "Browser.grantPermissions",
+      { origin, permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"] },
+      false,
+    )
+    await browser.goto(`${origin}/`)
+    await browser.run(`
+      await until(() => $("#newSession"), "shell");
+      await navigator.clipboard.writeText("echo PASTE_MARKER");
+      $("[data-terminal-toggle]").click();
+      await until(() => !$("#terminalDock").hidden, "terminal dock");
+      await until(() => !$("#terminalDock .terminal-status"), "terminal connection");
+      // The shell process is connected before its login files have drawn a
+      // prompt; text sent into that gap is swallowed by the line editor.
+      const rows = () => $$("#terminalDock .xterm-rows > div").map((row) => row.textContent.trim());
+      await until(() => rows().some((row) => row.length > 1 && /[$%#>]$/.test(row)), "shell prompt");
+      await until(() => document.activeElement?.classList.contains("xterm-helper-textarea"), "terminal focus");
+      return true;
+    `)
+    await browser.send(
+      "Browser.grantPermissions",
+      { origin, permissions: ["clipboardSanitizedWrite"] },
+      false,
+    )
+    // Headless CDP cannot press the OS paste accelerator (that lives in the
+    // browser process), so the edit command rides on the same key event. It runs
+    // only when the page leaves the keydown uncancelled — which is the fix.
+    const pasteKey = {
+      code: "KeyV",
+      key: "v",
+      modifiers: 4,
+      windowsVirtualKeyCode: 86,
+    }
+    await browser.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      ...pasteKey,
+      commands: ["paste"],
+    })
+    await browser.send("Input.dispatchKeyEvent", { type: "keyUp", ...pasteKey })
+    await browser.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      code: "Enter",
+      key: "Enter",
+      windowsVirtualKeyCode: 13,
+    })
+    await browser.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      code: "Enter",
+      key: "Enter",
+      windowsVirtualKeyCode: 13,
+    })
+    const seen = await browser.run(`
+      const rows = () => $$("#terminalDock .xterm-rows > div").map((row) => row.textContent);
+      const output = await until(
+        () => rows().some((row) => row.trim() === "PASTE_MARKER"),
+        "pasted command output",
+      ).catch(() => false);
+      return {
+        output,
+        screen: rows().join("\\n"),
+        error: $("#terminalDock .terminal-error")?.textContent ?? "",
+      };
+    `)
+    assert.equal(seen.error, "", `no clipboard error: ${seen.screen}`)
+    assert.equal(seen.output, true, `the pasted command ran: ${seen.screen}`)
+  },
+)
+
+test("stopping a long streaming turn settles it and a late snapshot cannot restart it", { skip }, async () => {
+  // A turn that inspects the folder, then streams thinking and a long reply.
+  // While it runs the page reads a snapshot; the host answers it late, after the
+  // reader stopped the turn. Such an answer describes the running turn, so it
+  // must not repaint the status, the stop control or a live thought back.
+  await browser.goto(`${origin}/`)
+  const seen = await browser.run(`
+    await until(() => $("#newSession"), "shell");
+    $("#newSession").click();
+    await until(() => !$("#workspaceControl").hidden, "new draft");
+    // Hold each snapshot read the page issues while the turn runs, the way a
+    // large transcript answers slowly, and release it only after the stop has
+    // settled in the page. The answer therefore describes the running turn and
+    // arrives when the page has already left it.
+    const reads = [];
+    let clickedAt = Number.NaN;
+    const gate = { holding: true };
+    let releaseHeld;
+    const released = new Promise((resolve) => { releaseHeld = resolve; });
+    const realFetch = window.fetch;
+    window.fetch = (input, init) => {
+      const url = String(typeof input === "string" ? input : input.url);
+      const read = /\\/api\\/v1\\/sessions\\/[^/?]+$/.test(url);
+      if (!read || (init && init.method && init.method !== "GET") || !gate.holding) return realFetch(input, init);
+      const issuedAt = Math.round(performance.now());
+      return realFetch(input, init).then(async (response) => {
+        const body = await response.clone().json();
+        await released;
+        reads.push({ issuedAt, status: body.status, revision: body.revision, deliveredAt: Math.round(performance.now() - clickedAt) });
+        return response;
+      });
+    };
+    const editor = $("#prompt");
+    editor.textContent = "stop-fixture"; editor.focus();
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    $("#sendButton").click();
+    // The stop control replaces the send arrow for the whole run, thinking included.
+    const stop = await until(() => $("#stopRun"), "stop button during the turn");
+    const thinking = await until(() => $(".thinking[data-running='true']"), "live thinking block");
+    const running = {
+      sendButton: Boolean($("#sendButton")),
+      stopLabel: stop.getAttribute("aria-label"),
+      header: $(".session-header-status")?.textContent ?? "",
+      thinking: thinking.querySelector(".tool-verb")?.textContent ?? "",
+    };
+    await until(() => $$("#stream .message.assistant").some((row) => row.textContent.length > 300), "streamed prose");
+    const id = await until(() => $(".session-row.active")?.dataset.sessionId, "created session");
+    clickedAt = performance.now();
+    gate.holding = false;
+    $("#stopRun").click();
+    // Let the stop reach the page first: the held answers must arrive after it.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    releaseHeld();
+    await until(() => !$("#stopRun") && $("#sendButton"), "send button returns", 1500);
+    const settledIn = Math.round(performance.now() - clickedAt);
+    const tokensOf = (snapshot) =>
+      snapshot.entries
+        .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
+        .map((entry) => entry.message.content.map((part) => part.text ?? part.thinking ?? "").join(""))
+        .join("\\n");
+    const tokensAtStop = tokensOf(await (await fetch("/api/v1/sessions/" + id)).json()).length;
+    // What the page already showed: a snapshot from before the stop would roll
+    // the transcript back to a shorter reply.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const shownAtStop = $$("#stream .message.assistant").map((row) => row.textContent).join("\\n");
+    // Watch past the late answers: the stopped turn must stay stopped.
+    const samples = [];
+    for (let index = 0; index < 40; index += 1) {
+      const snapshot = await (await fetch("/api/v1/sessions/" + id)).json();
+      samples.push({
+        at: Math.round(performance.now() - clickedAt),
+        stop: Boolean($("#stopRun")),
+        send: Boolean($("#sendButton")),
+        header: $(".session-header-status")?.textContent ?? "",
+        runningThinking: $$(".thinking[data-running='true']").length,
+        tokens: tokensOf(snapshot).length,
+        chars: $$("#stream .message.assistant, #stream .thinking-body").reduce((total, row) => total + row.textContent.length, 0),
+        keptShown: $$("#stream .message.assistant").map((row) => row.textContent).join("\\n").includes(shownAtStop),
+        revision: snapshot.revision,
+        status: snapshot.status,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return { running, settledIn, tokensAtStop, samples, reads, shownLength: shownAtStop.length };
+  `)
+  assert.deepEqual(seen.running, { sendButton: false, stopLabel: "停止", header: "运行中", thinking: "正在思考" })
+  assert.ok(seen.settledIn <= 1000, `the turn stopped in ${seen.settledIn}ms`)
+  // The scenario is the reported one only if a read issued during the run was
+  // answered after the stop: the fixture's tool prelude makes the page refresh
+  // its snapshot mid-turn, and that read is held until past the click.
+  const inFlight = seen.reads.filter((read) => read.status === "running")
+  assert.ok(
+    inFlight.length > 0,
+    `a read issued during the run must be answered late: ${JSON.stringify(seen.reads)}`,
+  )
+  assert.ok(
+    inFlight.every((read) => read.deliveredAt > 0 && read.revision < seen.samples.at(-1).revision),
+    `the late reads must arrive after the stop and describe an older state: ${JSON.stringify(seen.reads)}`,
+  )
+  assert.ok(seen.shownLength > 300, "the page had rendered the reply before the stop")
+  const after = seen.samples.at(-1)
+  assert.ok(after && after.at > 3000, "the page was watched past the late answer")
+  assert.equal(after.tokens, seen.tokensAtStop, "no new tokens arrived after the stop")
+  assert.equal(after.send, true, "the send arrow is back")
+  const rendered = seen.samples.find((sample) => sample.at >= 1000)
+  for (const sample of seen.samples) {
+    assert.equal(sample.stop, false, `the stop control stayed gone: ${JSON.stringify(sample)}`)
+    assert.equal(sample.header, "空闲", `the header reports idle: ${JSON.stringify(sample)}`)
+    assert.equal(sample.status, "idle", `the host stays idle: ${JSON.stringify(sample)}`)
+    assert.equal(sample.tokens, seen.tokensAtStop, `the transcript kept growing: ${JSON.stringify(sample)}`)
+    assert.equal(sample.keptShown, true, `the transcript was rolled back: ${JSON.stringify(sample)}`)
+    assert.equal(sample.runningThinking, 0, `the stop left a thought running: ${JSON.stringify(sample)}`)
+    // The already-received text may finish revealing, but it must stop within 1s.
+    if (rendered && sample.at >= rendered.at)
+      assert.equal(sample.chars, rendered.chars, `the reply kept rendering: ${JSON.stringify(sample)}`)
+  }
+})
+
+test("forking from the middle of a conversation branches there and leaves the parent usable", { skip }, async () => {
+  // The reported regression: clicking 「从此处分叉」 on an earlier turn produced a
+  // conversation the page could not open (a toast instead), and the original
+  // stopped answering. The branch must end at the clicked turn, and the parent
+  // must keep its own history, file and ability to take another turn.
+  const sessionId = "e2e-fork-here"
+  const usage = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+  const now = new Date().toISOString()
+  const lines = [{ type: "session", version: 3, id: sessionId, timestamp: now, cwd: workspace }]
+  let leaf = null
+  for (let turn = 1; turn <= 4; turn += 1) {
+    lines.push({ type: "message", id: "fork-u" + turn, parentId: leaf, timestamp: now, message: { role: "user", content: "question " + turn, timestamp: Date.now() } })
+    lines.push({ type: "message", id: "fork-a" + turn, parentId: "fork-u" + turn, timestamp: now, message: { role: "assistant", content: [{ type: "text", text: "answer " + turn }], api: "openai-completions", provider: "e2e", model: "e2e", usage, stopReason: "stop", timestamp: Date.now() } })
+    leaf = "fork-a" + turn
+  }
+  const dir = join(base, "agent", "sessions", "--e2e-fork-here--")
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, sessionId + ".jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n")
+  const before = await readFile(join(dir, sessionId + ".jsonl"), "utf8")
+  await browser.goto(`${origin}/`)
+  const idLiteral = JSON.stringify(sessionId)
+  const seen = await browser.run(`
+    const parentId = ${idLiteral};
+    const parentRow = () => $(".session-row[data-session-id='" + parentId + "']");
+    (await until(() => parentRow(), "seeded row")).click();
+    await until(() => $$("#stream .message").length === 8, "eight messages");
+    const original = {
+      count: $$("#stream .message").length,
+      last: $$("#stream .message").at(-1).textContent,
+    };
+    // The second turn's footer carries the fork action for that turn.
+    const button = await until(() => $$(".fork-message")[1], "fork action on the second turn");
+    button.click();
+    await until(() => {
+      const id = $(".session-row.active")?.dataset.sessionId;
+      return Boolean(id) && id !== parentId;
+    }, "the branch opens in the page");
+    await until(() => $$("#stream .message").length === 4, "the branch ends at the clicked turn");
+    const branch = {
+      count: $$("#stream .message").length,
+      last: $$("#stream .message").at(-1).textContent,
+      toast: $("#errorToast").hidden ? "" : $("#errorToast").textContent,
+      title: $("#sessionHeader .session-header-title")?.textContent,
+      hasComposer: Boolean($("#prompt")),
+    };
+    parentRow().click();
+    await until(() => $(".session-row.active")?.dataset.sessionId === parentId, "the parent opens again");
+    await until(() => $$("#stream .message").length === 8, "the parent keeps its history");
+    const back = {
+      count: $$("#stream .message").length,
+      last: $$("#stream .message").at(-1).textContent,
+      toast: $("#errorToast").hidden ? "" : $("#errorToast").textContent,
+    };
+    const editor = $("#prompt");
+    editor.textContent = "stream-fixture after fork";
+    editor.focus();
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    $("#sendButton").click();
+    // The parent answers again: the turn really runs in the original conversation.
+    await until(() => $("#stream").textContent.includes("streamed reply 11"), "the parent's own reply");
+    await until(
+      async () => (await (await fetch("/api/v1/sessions/" + parentId)).json()).status === "completed",
+      "the parent's turn settles",
+    );
+    const continued = {
+      count: $$("#stream .message").length,
+      reply: $$("#stream .message.assistant").at(-1).textContent.includes("streamed reply 11"),
+      toast: $("#errorToast").hidden ? "" : $("#errorToast").textContent,
+    };
+    return { original, branch, back, continued };
+  `)
+  assert.deepEqual(seen.original, { count: 8, last: "answer 4" })
+  assert.deepEqual(seen.branch, {
+    count: 4,
+    last: "answer 2",
+    toast: "",
+    title: "question 1_fork",
+    hasComposer: true,
+  })
+  assert.deepEqual(seen.back, { count: 8, last: "answer 4", toast: "" })
+  assert.deepEqual(seen.continued, { count: 10, reply: true, toast: "" })
+  // Forking writes a new file; the parent's own transcript keeps its bytes. The
+  // continued turn appends after that prefix, so only the prefix is compared.
+  const after = await readFile(join(base, "agent", "sessions", "--e2e-fork-here--", sessionId + ".jsonl"), "utf8")
+  assert.ok(after.startsWith(before), "the parent's transcript kept every original record")
+})
+
+test(
+  "the sidebar pins and reorders conversations, and only the project view offers workspace actions",
+  { skip },
+  async () => {
+    // Three conversations in one project folder plus one in another, so both the
+    // reorder and the "another list does not move" rule are observable. Their
+    // message timestamps set the host's order (newest first), which an
+    // unarranged list must keep.
+    const arrange = join(base, "arrange-project")
+    const neighbour = join(base, "arrange-neighbour")
+    await mkdir(arrange, { recursive: true })
+    await mkdir(neighbour, { recursive: true })
+    const now = Date.now()
+    const seed = async (cwd, id, age) => {
+      const timestamp = now - age
+      const at = new Date(timestamp).toISOString()
+      const lines = [
+        { type: "session", version: 3, id, timestamp: at, cwd },
+        {
+          type: "message",
+          id: `${id}-user`,
+          parentId: null,
+          timestamp: at,
+          message: { role: "user", content: `arrange fixture ${id}`, timestamp },
+        },
+      ]
+      const dir = join(base, "agent", "sessions", `--e2e-${id.split("-")[1] ?? "arrange"}--`)
+      await mkdir(dir, { recursive: true })
+      await writeFile(join(dir, `${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n")
+    }
+    for (const [id, age] of [
+      ["e2e-arrange-first", 300_000],
+      ["e2e-arrange-second", 200_000],
+      ["e2e-arrange-third", 100_000],
+    ]) {
+      await seed(arrange, id, age)
+    }
+    await seed(neighbour, "e2e-neighbour-only", 50_000)
+
+    // A shared browser profile: never inherit an arrangement from an earlier run.
+    await browser.run(`localStorage.removeItem("stepcode.pinnedSessions"); localStorage.removeItem("stepcode.sessionOrder");`)
+    await browser.goto(`${origin}/`)
+    try {
+      const seen = await browser.run(`
+		const group = (cwd) => $$("#projectGroups .project-group").find((node) => node.dataset.cwd === cwd);
+		const rows = (cwd) => {
+			const node = group(cwd);
+			return node ? [...node.querySelectorAll(".session-row")].map((row) => row.dataset.sessionId) : [];
+		};
+		const rowFor = (cwd, id) => group(cwd).querySelector(".session-row[data-session-id='" + id + "']");
+		const stored = (key) => JSON.parse(localStorage.getItem(key) ?? "null");
+		const dragTo = (source, target, clientY) => {
+			const transfer = new DataTransfer();
+			source.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: transfer }));
+			target.dispatchEvent(
+				new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: transfer, clientY }),
+			);
+			return {
+				transfer,
+				drop: () => {
+					target.dispatchEvent(
+						new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer, clientY }),
+					);
+					source.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: transfer }));
+				},
+			};
+		};
+		await until(() => rows(${JSON.stringify(arrange)}).length === 3, "the arranged project's rows");
+		const initial = rows(${JSON.stringify(arrange)});
+
+		// Pinning "second" through the row's own menu floats it over the list and
+		// arranges nothing: a pin is a display order, not a stored place.
+		rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").querySelector(".session-menu-button").click();
+		const menu = await until(() => $("#sessionMenu"), "the session menu");
+		const labels = [...menu.querySelectorAll("button")].map((button) => button.textContent.trim());
+		menu.querySelector("[data-action='pin']").click();
+		await until(
+			() => rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").dataset.pinned === "true",
+			"the pinned row to be marked",
+		);
+		const pinned = {
+			rows: rows(${JSON.stringify(arrange)}),
+			pins: stored("stepcode.pinnedSessions"),
+			marked: rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").dataset.pinned,
+			label: rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").querySelector(".session-pin")?.getAttribute("aria-label"),
+			order: stored("stepcode.sessionOrder"),
+		};
+
+		// The pinned block is fixed: dropping a row on a pinned row changes nothing —
+		// no indicator, no pin, no position above the block.
+		const upper = rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").getBoundingClientRect();
+		const ontoPinned = dragTo(
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third"),
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second"),
+			upper.top + 2,
+		);
+		const ontoIndicator = rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").className.includes("drop-")
+			? "indicator"
+			: "none";
+		ontoPinned.drop();
+		await until(() => $("#errorToast").hidden, "the toast to stay quiet");
+		const fixedBlock = {
+			rows: rows(${JSON.stringify(arrange)}),
+			pins: stored("stepcode.pinnedSessions"),
+			order: stored("stepcode.sessionOrder"),
+			grabbable: rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").draggable,
+		};
+
+		// Dropping on the upper half of an unpinned row lands above it.
+		const thirdTop = rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third").getBoundingClientRect();
+		const reorder = dragTo(
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-first"),
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third"),
+			thirdTop.top + 2,
+		);
+		const reorderIndicator = await until(
+			() => rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third").classList.contains("drop-before") && "drop-before",
+			"the upper-half drop indicator",
+		);
+		reorder.drop();
+		await until(
+			() => rows(${JSON.stringify(arrange)}).indexOf("e2e-arrange-first") < rows(${JSON.stringify(arrange)}).indexOf("e2e-arrange-third"),
+			"the dragged row to land above",
+		);
+		const moved = { rows: rows(${JSON.stringify(arrange)}), order: stored("stepcode.sessionOrder") };
+
+		// And the lower half lands below, so the pointer's side is what decides.
+		const thirdBox = rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third").getBoundingClientRect();
+		const lowerDrag = dragTo(
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-first"),
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third"),
+			thirdBox.bottom - 2,
+		);
+		const lowerIndicator = await until(
+			() => rowFor(${JSON.stringify(arrange)}, "e2e-arrange-third").classList.contains("drop-after") && "drop-after",
+			"the lower-half drop indicator",
+		);
+		lowerDrag.drop();
+		await until(
+			() => rows(${JSON.stringify(arrange)}).indexOf("e2e-arrange-first") > rows(${JSON.stringify(arrange)}).indexOf("e2e-arrange-third"),
+			"the dragged row to land below",
+		);
+		const movedAgain = { rows: rows(${JSON.stringify(arrange)}), order: stored("stepcode.sessionOrder") };
+
+		// Another project's list is untouched by that drag: it still follows the host.
+		const other = rows(${JSON.stringify(neighbour)});
+
+		// A row dropped on another project's row is not a reorder at all.
+		const foreign = dragTo(
+			rowFor(${JSON.stringify(arrange)}, "e2e-arrange-first"),
+			rowFor(${JSON.stringify(neighbour)}, "e2e-neighbour-only"),
+			0,
+		);
+		foreign.drop();
+		const crossed = { arrange: rows(${JSON.stringify(arrange)}), neighbour: rows(${JSON.stringify(neighbour)}) };
+
+		return {
+			initial,
+			labels,
+			pinned,
+			ontoIndicator,
+			fixedBlock,
+			reorderIndicator,
+			moved,
+			lowerIndicator,
+			movedAgain,
+			other,
+			crossed,
+		};
+	`)
+      assert.deepEqual(seen.initial, ["e2e-arrange-third", "e2e-arrange-second", "e2e-arrange-first"])
+      assert.ok(seen.labels.includes("置顶会话"), seen.labels.join(" | "))
+      assert.deepEqual(seen.pinned.rows, ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"])
+      assert.deepEqual(seen.pinned.pins, ["e2e-arrange-second"])
+      assert.equal(seen.pinned.marked, "true")
+      assert.equal(seen.pinned.label, "取消置顶")
+      assert.equal((seen.pinned.order ?? []).length, 0, "a pin must not arrange anything")
+      assert.equal(seen.ontoIndicator, "none", "a pinned row shows no drop indicator")
+      assert.deepEqual(seen.fixedBlock, {
+        rows: ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"],
+        pins: ["e2e-arrange-second"],
+        order: [],
+        grabbable: false,
+      })
+      assert.equal(seen.reorderIndicator, "drop-before")
+      assert.deepEqual(seen.moved, {
+        rows: ["e2e-arrange-second", "e2e-arrange-first", "e2e-arrange-third"],
+        order: ["e2e-arrange-first", "e2e-arrange-third"],
+      })
+      assert.equal(seen.lowerIndicator, "drop-after")
+      assert.deepEqual(seen.movedAgain, {
+        rows: ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"],
+        order: ["e2e-arrange-third", "e2e-arrange-first"],
+      })
+      assert.deepEqual(seen.other, ["e2e-neighbour-only"])
+      assert.deepEqual(seen.crossed, {
+        arrange: ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"],
+        neighbour: ["e2e-neighbour-only"],
+      })
+
+      // A reload keeps the pin and the arrangement.
+      await browser.goto(`${origin}/`)
+      const reloaded = await browser.run(`
+		const group = (cwd) => $$("#projectGroups .project-group").find((node) => node.dataset.cwd === cwd);
+		const rows = (cwd) => {
+			const node = group(cwd);
+			return node ? [...node.querySelectorAll(".session-row")].map((row) => row.dataset.sessionId) : [];
+		};
+		const rowFor = (cwd, id) => group(cwd).querySelector(".session-row[data-session-id='" + id + "']");
+		const shown = (node) => node.getClientRects().length > 0;
+		await until(() => rows(${JSON.stringify(arrange)}).length === 3, "the arranged rows after reload");
+		const kept = rows(${JSON.stringify(arrange)});
+		const pinMarked = rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").dataset.pinned;
+
+		// Unpinning through the menu drops only the pin and keeps the arrangement.
+		rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").querySelector(".session-menu-button").click();
+		const menu = await until(() => $("#sessionMenu"), "the session menu after reload");
+		menu.querySelector("[data-action='pin']").click();
+		await until(() => !rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").dataset.pinned, "the pin to clear");
+		const unpinned = {
+			pins: JSON.parse(localStorage.getItem("stepcode.pinnedSessions") ?? "null"),
+			rows: rows(${JSON.stringify(arrange)}),
+			grabbable: rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second").draggable,
+		};
+
+		// The same arrangement is available without a pointer: Alt+↓ moves the
+		// focused row past its drawn neighbour, and focus survives the move.
+		const moved = rowFor(${JSON.stringify(arrange)}, "e2e-arrange-second");
+		moved.focus();
+		moved.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true }));
+		await until(
+			() => rows(${JSON.stringify(arrange)})[1] === "e2e-arrange-second",
+			"the keyboard reorder",
+		);
+		await until(
+			() => document.activeElement?.dataset.sessionId === "e2e-arrange-second",
+			"focus to stay on the moved row",
+		);
+		const oneStep = rows(${JSON.stringify(arrange)});
+		document.activeElement.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true }),
+		);
+		await until(
+			() => rows(${JSON.stringify(arrange)})[0] === "e2e-arrange-second",
+			"the second keyboard step",
+		);
+		const keyboard = rows(${JSON.stringify(arrange)});
+
+		// The grouped view has no workspace navigation: adding one and opening the
+		// archive belong to the project view alone.
+		const groupTab = () => $$(".view-tab").find((tab) => tab.dataset.view === "group");
+		const projectTab = () => $$(".view-tab").find((tab) => tab.dataset.view === "project");
+		groupTab().click();
+		await until(() => !$("#groupedView").hidden, "the grouped view");
+		const grouped = { add: shown($("#addWorkspace")), archive: shown($("#archiveToggle")) };
+		projectTab().click();
+		await until(() => $("#groupedView").hidden, "the project view");
+		const project = { add: shown($("#addWorkspace")), archive: shown($("#archiveToggle")) };
+
+		return { kept, pinMarked, unpinned, oneStep, keyboard, grouped, project };
+	`)
+      assert.deepEqual(reloaded.kept, ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"])
+      assert.equal(reloaded.pinMarked, "true")
+      // "second" was pinned before it was ever arranged, so it has no unpinned
+      // place to return to and leads the unpinned rows once unpinned; it is
+      // draggable again now that the pin is gone.
+      assert.deepEqual(reloaded.unpinned, {
+        pins: [],
+        rows: ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"],
+        grabbable: true,
+      })
+      assert.deepEqual(reloaded.oneStep, ["e2e-arrange-third", "e2e-arrange-second", "e2e-arrange-first"])
+      assert.deepEqual(reloaded.keyboard, ["e2e-arrange-second", "e2e-arrange-third", "e2e-arrange-first"])
+      assert.deepEqual(reloaded.project, { add: true, archive: true })
+    } finally {
+      // This case owns fixture sessions and a shared browser profile: leave both
+      // as they were even when an assertion above fails.
+      await browser
+        .run(`localStorage.removeItem("stepcode.pinnedSessions"); localStorage.removeItem("stepcode.sessionOrder");`)
+        .catch(() => {})
+      await rm(join(base, "agent", "sessions", "--e2e-arrange--"), { recursive: true, force: true })
+      await rm(join(base, "agent", "sessions", "--e2e-neighbour--"), { recursive: true, force: true })
+    }
+  },
+)
+
+test("a row dropped on another group section still retags it, it is not a reorder", { skip }, async () => {
+  // The grouped view's cross-section drop is the one feature this change could
+  // silently eat: a row-level drop handler that stops propagating would keep the
+  // reorder working while retagging stopped. Two tagged sessions make both
+  // sections real; the drag goes from one section's row to the other section.
+  const cwd = join(base, "group-drag-project")
+  await mkdir(cwd, { recursive: true })
+  const now = Date.now()
+  for (const [id, age] of [
+    ["e2e-gtag-one", 200_000],
+    ["e2e-gtag-two", 100_000],
+  ]) {
+    const at = new Date(now - age).toISOString()
+    const lines = [
+      { type: "session", version: 3, id, timestamp: at, cwd },
+      {
+        type: "message",
+        id: `${id}-user`,
+        parentId: null,
+        timestamp: at,
+        message: { role: "user", content: `group drag fixture ${id}`, timestamp: now - age },
+      },
+    ]
+    const dir = join(base, "agent", "sessions", "--e2e-gtag--")
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, `${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n")
+  }
+
+  await browser.goto(`${origin}/`)
+  try {
+    const seen = await browser.run(`
+		const group = () => $$("#projectGroups .project-group").find((node) => node.dataset.cwd === ${JSON.stringify(cwd)});
+		const rowFor = (id) => group().querySelector(".session-row[data-session-id='" + id + "']");
+		const sections = () => $$("#groupedView .group-section");
+		const sectionOf = (id) => sections().find((section) => section.querySelector(".session-row[data-session-id='" + id + "']"));
+		await until(() => group() && group().querySelectorAll(".session-row").length === 2, "the group drag fixtures");
+
+		const tag = async (id, colour, name) => {
+			rowFor(id).querySelector(".session-tag-button").click();
+			const picker = await until(() => $("#tagPicker"), "the tag picker");
+			picker.querySelector("[data-new-tag='" + colour + "']").click();
+			const input = await until(() => $("#tagNameInput"), "the group name input");
+			input.value = name;
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+			$("#tagNameConfirm").click();
+			await until(() => !$("#tagPicker"), "the picker to close");
+		};
+		await tag("e2e-gtag-one", "red", "拖拽红色");
+		await tag("e2e-gtag-two", "teal", "拖拽青色");
+
+		$$(".view-tab").find((tab) => tab.dataset.view === "group").click();
+		// Other tests leave their own sessions in this profile, so the two tagged
+		// sections are looked up by their rows rather than by section count.
+		await until(() => sectionOf("e2e-gtag-one") && sectionOf("e2e-gtag-two"), "both tagged sections");
+		const red = sectionOf("e2e-gtag-one");
+		const teal = sectionOf("e2e-gtag-two");
+		const heading = (section) => section.querySelector(".group-heading").textContent.trim();
+		const redName = heading(red);
+
+		// Drop the red section's row on the teal section itself: the row leaves the
+		// event alone, so the section's own retag handler takes it.
+		const source = rowFor("e2e-gtag-one");
+		const transfer = new DataTransfer();
+		source.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: transfer }));
+		teal.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+		teal.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+		source.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: transfer }));
+		await until(() => sectionOf("e2e-gtag-one")?.isSameNode(teal), "the row to join the other section");
+		const joined = sectionOf("e2e-gtag-one");
+		return {
+			redName,
+			tealName: heading(sectionOf("e2e-gtag-two")),
+			tealRows: [...joined.querySelectorAll(".session-row")].map((row) => row.dataset.sessionId),
+			redGone: !sections().some((section) => section.isSameNode(red)),
+			order: localStorage.getItem("stepcode.sessionOrder"),
+		};
+	`)
+    assert.equal(seen.redName, "拖拽红色")
+    assert.equal(seen.tealName, "拖拽青色")
+    assert.deepEqual([...seen.tealRows].sort(), ["e2e-gtag-one", "e2e-gtag-two"])
+    assert.equal(seen.redGone, true, "the emptied section is gone, as for any group")
+    assert.equal(seen.order, null, "a retag must not arrange anything")
+  } finally {
+    await rm(join(base, "agent", "sessions", "--e2e-gtag--"), { recursive: true, force: true })
+  }
+})
+
+test("the ＋ menu offers goal and plan, but not ultracode", { skip }, async () => {
+  // Ultracode is hidden in Web and Desktop until its interaction is finished. The
+  // mode itself stays wired (its keyword, lead chip and message badge), so the
+  // picker row is the only thing that must be gone.
+  const seen = await browser.run(`
+		$("#plusTrigger").click();
+		const plus = await until(() => $("#plusPopover"), "the add menu");
+		const modes = [...plus.querySelectorAll(".control-option--mode")].map((row) =>
+			[...row.classList].find((name) => name.startsWith("control-option--") && name !== "control-option--mode"),
+		);
+		document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		await until(() => !$("#plusPopover"), "the add menu to close");
+		return { modes, ultracode: Boolean(plus.querySelector(".control-option--ultraloop")) };
+	`)
+  assert.deepEqual(seen, { modes: ["control-option--goal", "control-option--plan"], ultracode: false })
+})
+
+test("session migration imports reviewed snapshots while sources continue writing", { skip }, async () => {
+  const codexRoot = join(base, "migration-codex")
+  const claudeRoot = join(base, "migration-claude", "projects")
+  await mkdir(join(codexRoot, "sessions"), { recursive: true })
+  await mkdir(join(codexRoot, "archived_sessions"), { recursive: true })
+  await mkdir(claudeRoot, { recursive: true })
+  const timestamp = "2026-10-22T00:00:00.000Z"
+  const sourcePath = join(codexRoot, "sessions", "rollout-migration.jsonl")
+  const input = [
+    { type: "session_meta", timestamp, payload: { id: "migration-codex", cwd: workspace, cli_version: "0.163.0-alpha.11", history_mode: "paginated" } },
+    { type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "<user_query>Migration acceptance quokkabridge</user_query>" }] } },
+    { type: "response_item", timestamp, payload: { type: "function_call", call_id: "migration-tool", name: "exec_command", arguments: '{"cmd":"never execute this historical call"}' } },
+  ].map(JSON.stringify).join("\n") + "\n"
+  await writeFile(sourcePath, input)
+  // An unreadable archive must not even produce a scan/parse failure by default.
+  await writeFile(join(codexRoot, "archived_sessions", "rollout-archive.jsonl"), "{")
+  await writeFile(join(claudeRoot, "migration-claude.jsonl"), [
+    { type: "user", uuid: "cc-user", parentUuid: null, sessionId: "migration-claude", cwd: workspace, timestamp, message: { content: "<user_query>Claude migration acceptance</user_query>" } },
+    { type: "assistant", uuid: "cc-assistant", parentUuid: "cc-user", sessionId: "migration-claude", timestamp, message: { content: [{ type: "text", text: "Historical CC reply" }] } },
+  ].map(JSON.stringify).join("\n") + "\n")
+  const claudePath = join(claudeRoot, "migration-claude.jsonl")
+  const claudeInput = await readFile(claudePath, "utf8")
+  const scanned = await browser.run(`
+    await migrationOpen();
+    if ($('#importCustomToggle, #importCustomPath, #importIncludeArchived')) throw new Error('Arbitrary source roots or archive controls exposed');
+    const scan = await migrationScan();
+    const sessions = scan.candidates.filter(item => item.kind === 'sessions');
+    if (sessions.length !== 2) throw new Error('Expected two active native-format sessions: ' + JSON.stringify(sessions));
+    if (sessions.some(item => item.sourcePath.includes('archived_sessions'))) throw new Error('Archive scanned by default');
+    if ($$('[data-candidate-id] > input').some(input => input.checked)) throw new Error('Scan silently selected candidates');
+    for (const key of ['customRoot', 'codexRoot', 'claudeRoot', 'workbuddyRoot', 'qoderRoot']) {
+      const response = await fetch('/api/v1/migrations/scan', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({[key]: '/must-not-scan'}) });
+      if (response.status !== 400) throw new Error('Custom source override accepted: ' + key);
+    }
+    // Workspace groups stay collapsed until the user opens one, so expand before counting rows.
+    for (const toggle of $$('.migration-group-toggle')) if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
+    // The list keeps only source filtering (matching the prototype); no search field.
+    if ($('.migration-list input[type="search"]')) throw new Error('Migration list must not expose a search field');
+    const sourceTabs = $$('.migration-list > div[aria-label] button');
+    sourceTabs[sourceTabs.length - 1].click();
+    await until(() => $$('.migration-row').length === 1, 'source filter');
+    sourceTabs[0].click();
+    await until(() => $$('.migration-row').length === 2, 'cleared source filter');
+    const previews = [];
+    for (const item of [...sessions].sort((a, b) => a.source.localeCompare(b.source))) previews.push(await migrationSelect(item));
+    const codex = previews.find(preview => preview.candidate.source === 'codex');
+    if (!codex.sourceText.includes('Migration acceptance')) throw new Error('Reviewed snapshot content missing');
+    if (!codex.warnings.length || !$('.migration-preview .migration-diagnostics li')) throw new Error('Historical compatibility warning hidden');
+    for (const preview of previews) {
+      if (preview.target.scope.kind !== 'project' || preview.target.scope.cwd !== ${JSON.stringify(workspace)}) throw new Error('Session destination must be explicit project');
+    }
+    window.reviewedMigrationPreviews = previews;
+    return sessions.map(item => item.source).sort();
+  `)
+  assert.deepEqual(scanned, ["claude-code", "codex"])
+  assert.equal(await readFile(sourcePath, "utf8"), input)
+  const updatedInput = input + [
+    { type: "event_msg", timestamp, payload: { type: "token_count", info: {} } },
+    { type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Unreviewed source append" }] } },
+  ].map(JSON.stringify).join("\n") + "\n"
+  await writeFile(sourcePath, updatedInput)
+  const imported = await browser.run(`
+    const before = (await migrationRead()).jobs.length;
+    const plan = await migrationPlan();
+    if ((await migrationRead()).jobs.length !== before) throw new Error('Review started a job without explicit Start');
+    if (plan.items.length !== 2 || plan.items.some(item => !window.reviewedMigrationPreviews.some(preview => preview.id === item.id && preview.fingerprint === item.fingerprint)))
+      throw new Error('Final review did not use frozen previews');
+    const job = await migrationStart();
+    if (job.items.length !== 2 || job.items.some(item => item.status !== 'imported')) throw new Error('Native source import failed: ' + JSON.stringify(job));
+    window.realMigrationJob = job;
+    const sessions = (await (await fetch('/api/v1/sessions')).json()).sessions;
+    const codexItem = job.items.find(item => item.source === 'codex');
+    const codex = sessions.find(session => session.id === codexItem.sessionId && session.name.startsWith('[codex]'));
+    if (!codex) throw new Error('Codex import missing from native index');
+    const snapshot = await (await fetch('/api/v1/sessions/' + codex.id)).json();
+    if (!snapshot.entries.some(entry => entry.imported)) throw new Error('Source provenance lost');
+    const entries = JSON.stringify(snapshot.entries);
+    if (entries.includes('Unreviewed source append')) throw new Error('Imported unreviewed content');
+    if (!entries.includes('never execute this historical call')) throw new Error('Historical call discarded');
+    const claudeItem = job.items.find(item => item.source === 'claude-code');
+    const claudeSnapshot = await (await fetch('/api/v1/sessions/' + claudeItem.sessionId)).json();
+    if (!claudeSnapshot.entries.some(entry => entry.imported) || !JSON.stringify(claudeSnapshot.entries).includes('Historical CC reply'))
+      throw new Error('Claude native history or provenance lost');
+    $$('.migration-job-item').find(row => row.querySelector('h4').textContent === claudeItem.name).querySelector('button').click();
+    await until(() => $('#settingsView').hidden && $('#migrationModal').hidden && $('.message.user')?.dataset.content === 'Claude migration acceptance', 'opened native Claude message');
+    $('#settingsButton').click();
+    $('[data-settings-page="migration"]').click();
+    const nativeJobRow = await until(() => $$('.migration-history-row').find(row => row.querySelector('code')?.textContent === job.createdAt), 'return to native job history');
+    nativeJobRow.querySelector('button').click();
+    await until(() => $$('.migration-job-item').length === 2 && !$('#migrationModal').hidden, 'reattach native job');
+    $$('.migration-job-item').find(row => row.querySelector('h4').textContent === codexItem.name).querySelector('button').click();
+    await until(() => $('#settingsView').hidden && $('#migrationModal').hidden && document.body.textContent.includes('Migration acceptance quokkabridge'), 'opened native import');
+    if (!$('#authBanner').hidden || !$('#errorToast').hidden) throw new Error('Successful local navigation disturbed authentication');
+    if ($('[data-tool-state="running"]') || $('[data-tool-state="completed"]')) throw new Error('Unconfirmed historical call acquired an execution outcome');
+    return { id: codex.id, hasUnknown: !!$('[data-tool-state="unknown"]') };
+  `)
+  assert.equal(imported.hasUnknown, true)
+  assert.equal(await readFile(sourcePath, "utf8"), updatedInput)
+  assert.equal(await readFile(claudePath, "utf8"), claudeInput)
+  await browser.send("Page.reload")
+  await browser.run(`await until(() => document.body.textContent.includes('Migration acceptance quokkabridge'), 'reopened after refresh');`)
+  assert.equal(await browser.run(`
+    const result = await (await fetch('/api/v1/search?q=quokkabridge')).json();
+    return result.hits.some(hit => hit.sessionId === ${JSON.stringify(imported.id)});
+  `), true)
+  await browser.run(`
+    $('#settingsButton').click();
+    $('[data-settings-page="migration"]').click();
+    await until(() => $$('.migration-history-row').length === 1, 'persisted unified job');
+    const jobs = (await migrationRead()).jobs;
+    if (jobs.length !== 1 || jobs[0].items.length !== 2 || jobs[0].items.some(item => item.status !== 'imported')) throw new Error('Persisted job lost real outcomes');
+    $('#settingsBack').click();
+  `)
+})
+
+test("session migration failures are visible and preserve truthful job state", { skip }, async () => {
+  await browser.run(`
+    await until(() => $('#settingsButton') && $('#authBanner').hidden, 'authenticated page');
+    if ($('#settingsView').hidden) $('#settingsButton').click();
+    $('[data-settings-page="general"]').click();
+    await until(() => !$('#migrationPage'), 'migration Settings unmounted');
+    const originalFetch = window.fetch;
+    const path = '/api/v1/migrations';
+    const createdAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 600000).toISOString();
+    const expiredId = 'migration-fixture-expired-session';
+    const scope = { kind: 'project', cwd: ${JSON.stringify(workspace)} };
+    const candidate = (id, source, name) => ({ id, source, name, kind: 'sessions',
+      sourcePath: '/fixture/' + id + '.jsonl', sourceScope: scope, holding: 'external',
+      readiness: 'ready', needsMigration: true, diagnostics: [], sourceSessionId: id, modified: createdAt });
+    const healthy = candidate('healthy', 'codex', 'Healthy migration fixture');
+    const broken = candidate('broken', 'qoder', 'Broken migration fixture');
+    const target = { scope, path: '/fixture/native-sessions', name: healthy.name };
+    const preview = item => ({ id: 'preview-' + item.id, candidate: item, fingerprint: 'frozen-' + item.id,
+      expiresAt, target: { ...target, name: item.name }, action: 'import', allowedActions: ['import', 'skip'],
+      sourceText: item.name + ' reviewed content', requiredAcknowledgements: [],
+      warnings: [{ code: 'unsupported_content', count: 73519 }], blockers: [], activation: 'history' });
+    const result = (item, status, extra = {}) => ({ id: 'result-' + item.id, candidateId: item.id,
+      kind: 'sessions', source: item.source, name: item.name, sourceScope: scope,
+      requestedTarget: { ...target, name: item.name }, action: 'import', status,
+      diagnostics: [], activation: 'history', ...extra });
+    const saved = { id: 'saved', createdAt, revision: 1, status: 'completed', items: [
+      result(candidate('saved-candidate', 'claude-code', 'Saved migration fixture'), 'imported', { sessionId: expiredId, actualTarget: target }),
+      result(candidate('persisted-failed', 'qoder', 'Failed saved fixture'), 'failed', { diagnostics: [{ code: 'session-import-failed' }] }),
+    ] };
+    let history = [saved];
+    let scanFailure = false, historyFailure = false, previewFailure = true, malformedPreview = false;
+    let planFailure = true, startFailure = true, pollFailure = true;
+    let running;
+    const calls = { history: 0, scan: 0, previews: [], plans: [], starts: [], cancel: 0, poll: 0, open: 0 };
+    const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    const failure = stage => response({ error: 'fixture-' + stage, code: 'fixture-' + stage }, 503);
+    window.fetch = async (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
+      if (url.origin !== location.origin) return originalFetch(input, init);
+      if (url.pathname === '/api/v1/sessions/' + expiredId && method === 'GET') { calls.open++; return failure('open'); }
+      if (url.pathname !== path && !url.pathname.startsWith(path + '/')) return originalFetch(input, init);
+      if (url.pathname === path && method === 'GET') { calls.history++; return historyFailure ? failure('history') : response({ jobs: history }); }
+      if (url.pathname === path + '/scan' && method === 'POST') {
+        calls.scan++;
+        return scanFailure ? failure('scan') : response({ candidates: [healthy, broken], truncated: false,
+          sources: [{ kind: 'sessions', source: 'claude-code', scope: { kind: 'global' }, path: '/fixture/claude',
+            status: 'error', diagnostics: [{ code: 'session-scan-failed' }] }] });
+      }
+      if (url.pathname === path + '/preview' && method === 'POST') {
+        const { candidateId } = JSON.parse(init.body); calls.previews.push(candidateId);
+        if (candidateId === broken.id && previewFailure) return failure('preview');
+        const value = preview(candidateId === healthy.id ? healthy : broken);
+        return response(malformedPreview ? { ...value, candidate: { ...value.candidate, readiness: 'invented' } } : value);
+      }
+      if (url.pathname === path + '/plans' && method === 'POST') {
+        const request = JSON.parse(init.body); calls.plans.push(request);
+        if (planFailure) return failure('plan');
+        return response({ id: 'fixture-plan', digest: 'immutable-digest', expiresAt,
+          items: request.selections.map(selection => preview(selection.previewId === 'preview-healthy' ? healthy : broken)) });
+      }
+      if (url.pathname === path && method === 'POST') {
+        calls.starts.push(JSON.parse(init.body));
+        if (startFailure) return failure('start');
+        running = { id: 'fixture-running', createdAt, revision: 2, status: 'running', items: [result(healthy, 'pending')] };
+        history = [running, saved]; return response(running, 202);
+      }
+      if (url.pathname === path + '/fixture-running/cancel' && method === 'POST') { calls.cancel++; return failure('cancel'); }
+      if (url.pathname === path + '/fixture-running' && method === 'GET') { calls.poll++; return pollFailure ? failure('poll') : response(running); }
+      throw new Error('Unexpected migration fixture request: ' + method + ' ' + url.pathname);
+    };
+    try {
+      const settle = async () => { await new Promise(resolve => setTimeout(resolve, 100)); };
+      const visibleError = async (selector, code) => {
+        const label = {
+          'invalid-response': '服务返回的迁移数据不符合接口，未应用此响应。',
+          'session-open-failed': '无法打开已迁入会话，请重试；迁移结果没有被更改。',
+        }[code] ?? code;
+        await until(() => $(selector)?.textContent.includes(label), 'visible ' + code);
+        if ($(selector).getBoundingClientRect().height === 0) throw new Error('Error hidden: ' + code);
+        if (!$('#authBanner').hidden) throw new Error('Migration error changed authentication');
+      };
+      const refresh = async () => {
+        const before = calls.history;
+        $('.migration-history > header button').click();
+        await until(() => calls.history > before && !$('.migration-history > header button').disabled, 'history read settled');
+      };
+      await migrationOpen();
+      // Entering the first category scans that kind once; navigation must never preview or start a job.
+      if (calls.previews.length || calls.starts.length) throw new Error('Settings navigation previewed or started migration');
+      const scansAfterOpen = calls.scan;
+      $('#migrationModal .migration-dialog-head button').click();
+      await until(() => $('.migration-history-row'), 'saved history loaded');
+      historyFailure = true;
+      await refresh();
+      await visibleError('#migrationPage [role="alert"]', 'fixture-history');
+      if ($$('.migration-history-row').length !== 1) throw new Error('Failed history read discarded last known saved job');
+      if (calls.scan !== scansAfterOpen) throw new Error('History failure triggered scan');
+      historyFailure = false;
+      await refresh();
+      await migrationOpen();
+      scanFailure = true;
+      const failedScan = await migrationPost('/scan', () => $('#migrationScanButton').click());
+      if (failedScan.status !== 503) throw new Error('Failed scan not surfaced');
+      await visibleError('#migrationModal [role="alert"]', 'fixture-scan');
+      if (!$('[data-candidate-id="healthy"]')) throw new Error('Failed rescan discarded the last good list');
+      scanFailure = false;
+      await migrationScan();
+      $('.migration-source-locations summary').click();
+      if (!$('[data-scan-status="error"]').textContent.includes('/fixture/claude')) throw new Error('Partial source failure hidden');
+      const brokenRow = $('[data-candidate-id="broken"]');
+      await migrationPreview(broken);
+      brokenRow.querySelector('input').click();
+      await visibleError('.migration-preview [role="alert"]', 'fixture-preview');
+      await migrationToChecklist();
+      if (!$('#migrationStartPlan').disabled) throw new Error('Failed selected preview remains submittable');
+      $$('#migrationModal .migration-dialog-foot button')[0].click();
+      await until(() => $('.migration-list'), 'back to selection');
+      if (!$('[data-candidate-id="healthy"]')) throw new Error('Partial failure removed healthy candidate');
+      previewFailure = false;
+      malformedPreview = true;
+      await migrationPost('/preview', () => $('#migrationRefreshPreview').click());
+      await visibleError('.migration-preview [role="alert"]', 'invalid-response');
+      await migrationToChecklist();
+      if (!$('#migrationStartPlan').disabled) throw new Error('Invalid DTO passed review readiness');
+      $$('#migrationModal .migration-dialog-foot button')[0].click();
+      await until(() => $('.migration-list'), 'back to selection');
+      malformedPreview = false;
+      // Re-query: earlier renders replaced the row node, so a stale reference would silently do nothing.
+      $('[data-candidate-id="broken"]').querySelector('input').click();
+      const healthyPreview = await migrationSelect(healthy);
+      if (!$('.migration-preview .migration-diagnostics').textContent.includes('73519')) throw new Error('Compatibility warning count hidden');
+      const failedPlan = await migrationPost('/plans', migrationToChecklist);
+      if (failedPlan.status !== 503) throw new Error('Failed plan not surfaced');
+      // The review list stays reachable so the failure is visible; it must not become submittable.
+      if (!$('#migrationStartPlan').disabled) throw new Error('Failed plan left a submittable review');
+      await visibleError('#migrationModal [role="alert"]', 'fixture-plan');
+      if (calls.starts.length) throw new Error('Plan failure started job');
+      planFailure = false;
+      const plan = await migrationPlan();
+      if (plan.items.length !== 1 || plan.items[0].id !== healthyPreview.id || calls.plans.at(-1).selections.length !== 1)
+        throw new Error('Plan included unselected or failed candidate');
+      const failedStart = await migrationPost('', () => $('#migrationStartPlan').click());
+      if (failedStart.status !== 503 || $('.migration-job')) throw new Error('Failed start fabricated running job');
+      await visibleError('#migrationModal [role="alert"]', 'fixture-start');
+      await settle();
+      if (calls.starts.length !== 1 || calls.cancel) throw new Error('Uncertain start automatically retried');
+      if (!$('.migration-final-plan') || $('#migrationStartPlan').disabled) throw new Error('Explicit retry lost frozen plan');
+      startFailure = false;
+      await migrationPost('', () => $('#migrationStartPlan').click());
+      await until(() => calls.poll >= 2, 'failed read polling with backoff');
+      await visibleError('.migration-job [role="alert"]', 'fixture-poll');
+      const stillRunning = () => {
+        if (!$('.migration-job > header button') || $('[data-result-count="pending"] dd').textContent !== '1' || $('[data-result-count="imported"] dd').textContent !== '0')
+          throw new Error('Uncertain job fabricated terminal state or import outcome');
+        if ($$('.migration-job-item button').length) throw new Error('Pending result offered successful session');
+      };
+      stillRunning();
+      // Stopping a running job asks first, then cancels the remaining items.
+      const cancel = await migrationPost('/fixture-running/cancel', async () => {
+        $('.migration-job > header button').click();
+        await until(() => !$('#migrationCloseConfirm')?.hidden, 'close confirmation');
+        const buttons = $$('#migrationCloseConfirm button');
+        buttons[buttons.length - 1].click();
+      });
+      if (cancel.status !== 503) throw new Error('Cancel failure not injected');
+      await visibleError('#migrationModal [role="alert"]', 'fixture-cancel');
+      stillRunning();
+      const starts = calls.starts;
+      if (starts.length !== 2 || starts[0].planId !== 'fixture-plan' || starts[0].digest !== 'immutable-digest' || !starts[0].idempotencyKey ||
+        JSON.stringify(starts[0]) !== JSON.stringify(starts[1])) throw new Error('Explicit start retry changed frozen plan or idempotency key');
+      // A stale read must not downgrade the last known running revision to completion.
+      running = { ...running, revision: 1, status: 'completed', items: [result(healthy, 'failed')] };
+      pollFailure = false;
+      const priorPoll = calls.poll;
+      await until(() => calls.poll > priorPoll && !$('.migration-job [role="alert"]'), 'poll read recovered');
+      stillRunning();
+      running = { ...running, revision: 3, status: 'completed', items: [result(healthy, 'failed', { diagnostics: [{ code: 'session-import-failed' }] })] };
+      history = [running, saved];
+      await until(() => $('[data-item-status="failed"]'), 'truthful failed result');
+      if ($('[data-item-status="failed"] button') || $('.migration-job > header button') || $('[data-result-count="failed"] dd').textContent !== '1')
+        throw new Error('Failed result masquerades as imported or still cancellable');
+      if (!$('[data-item-status="failed"] .migration-diagnostics li')) throw new Error('Persisted item diagnostic hidden');
+      await settle();
+      if (calls.starts.length !== 2 || calls.cancel !== 1) throw new Error('Mutation automatically retried during read recovery');
+      $('#migrationModal .migration-dialog-head button').click();
+      await refresh();
+      if ($$('.migration-history-row').length !== 2) throw new Error('Saved history lost during failures');
+      const savedRow = $$('.migration-history-row')[1];
+      savedRow.querySelector('button').click();
+      await until(() => $$('.migration-job-item').length === 2, 'saved job reattached');
+      if ($('[data-item-status="failed"] button')) throw new Error('Saved failure offers imported session');
+      $('[data-item-status="imported"] button').click();
+      await until(() => calls.open === 1, 'expired imported session open attempted');
+      await visibleError('#migrationModal [role="alert"]', 'session-open-failed');
+      if ($('#migrationModal').hidden || $('#settingsView').hidden) throw new Error('Failed open claimed successful navigation');
+    } finally {
+      if (!$('#migrationModal').hidden) $('#migrationModal .migration-dialog-head button').click();
+      $('[data-settings-page="general"]').click();
+      await until(() => !$('#migrationPage'), 'fixture reader unmounted');
+      window.fetch = originalFetch;
+      if (!$('#settingsView').hidden) $('#settingsBack').click();
+    }
+  `)
+  // Session-open errors are visible, but dismissing the wizard must not change auth or the conversation.
+  await browser.send("Page.reload")
+  await browser.run(`await until(() => $('#settingsButton') && $('#authBanner').hidden, 'authenticated reload after fixture');`)
+})
+
+test("WorkBuddy and Qoder sessions are identified and imported through the migration UI", { skip }, async () => {
+  const root = join(base, "scan-home")
+  const workbuddyRoot = join(root, ".workbuddy", "projects")
+  const qoderRoot = join(root, ".qoder", "projects")
+  await mkdir(workbuddyRoot, { recursive: true })
+  await mkdir(qoderRoot, { recursive: true })
+  const timestamp = "2026-10-26T00:00:00.000Z"
+  await writeFile(join(workbuddyRoot, "workbuddy.jsonl"), [
+    { type: "session-meta", sessionId: "wb-ui" },
+    { type: "message", id: "wb-u", sessionId: "wb-ui", cwd: workspace, role: "user", timestamp, content: [{ type: "input_text", text: "<user_query>WorkBuddy fixture</user_query>" }] },
+    { type: "ai-title", sessionId: "wb-ui", aiTitle: "WorkBuddy fixture" },
+  ].map(JSON.stringify).join("\n") + "\n")
+  await writeFile(join(qoderRoot, "qoder.jsonl"), [
+    { type: "workspace-directories", sessionId: "q-ui" },
+    { type: "user", sessionId: "q-ui", cwd: workspace, uuid: "q-u", parentUuid: null, timestamp, message: { role: "user", content: "<user_query>Qoder fixture</user_query>" } },
+    { type: "active-leaf", sessionId: "q-ui", leafUuid: "q-u" },
+  ].map(JSON.stringify).join("\n") + "\n")
+  const sourceFiles = [join(workbuddyRoot, "workbuddy.jsonl"), join(qoderRoot, "qoder.jsonl")]
+  const before = await Promise.all(sourceFiles.map(path => readFile(path, "utf8")))
+  const imported = await browser.run(`
+    await migrationOpen();
+    const scan = await migrationScan();
+    const sources = scan.candidates.filter(item => item.kind === 'sessions' && ['workbuddy', 'qoder'].includes(item.source));
+    if (sources.length !== 2 || new Set(sources.map(item => item.source)).size !== 2) throw new Error('Native source identification lost');
+    if (!sources.find(item => item.source === 'workbuddy').name.includes('WorkBuddy fixture')) throw new Error('Native title metadata lost');
+    for (const item of sources) {
+      const row = $('[data-candidate-id="' + item.id + '"]');
+      if (!row.textContent.includes(item.source === 'workbuddy' ? 'WorkBuddy' : 'Qoder')) throw new Error('Source label missing');
+      const preview = await migrationSelect(item);
+      if (!preview.sourceText.includes(item.source === 'workbuddy' ? 'WorkBuddy fixture' : 'Qoder fixture')) throw new Error('Native content not reviewed');
+      if (preview.blockers.length) throw new Error('Native valid source rejected');
+    }
+    const plan = await migrationPlan();
+    if (plan.items.length !== 2 || plan.items.some(item => !['workbuddy', 'qoder'].includes(item.candidate.source))) throw new Error('Plan leaked other source selections');
+    const job = await migrationStart();
+    if (job.items.length !== 2 || job.items.some(item => item.status !== 'imported')) throw new Error('Native import failed: ' + JSON.stringify(job));
+    for (const item of job.items) {
+      const snapshot = await (await fetch('/api/v1/sessions/' + item.sessionId)).json();
+      const entries = JSON.stringify(snapshot.entries);
+      if (entries.includes('<user_query>')) throw new Error('User wrapper leaked into native entries');
+      if (!snapshot.entries.some(entry => entry.imported) || !entries.includes(item.source === 'workbuddy' ? 'WorkBuddy fixture' : 'Qoder fixture'))
+        throw new Error('Imported source provenance or real message lost');
+    }
+    const qoder = job.items.find(item => item.source === 'qoder');
+    $$('.migration-job-item').find(row => row.querySelector('h4').textContent === qoder.name).querySelector('button').click();
+    await until(() => $('#settingsView').hidden && $('#migrationModal').hidden && $('.message.user')?.dataset.content === 'Qoder fixture', 'opened native Qoder message');
+    $('#settingsButton').click();
+    $('[data-settings-page="migration"]').click();
+    const sourceJobRow = await until(() => $$('.migration-history-row').find(row => row.querySelector('code')?.textContent === job.createdAt), 'return to current imported job');
+    sourceJobRow.querySelector('button').click();
+    await until(() => $$('.migration-job-item').length === 2 && !$('#migrationModal').hidden, 'reattach current source job');
+    const workbuddy = job.items.find(item => item.source === 'workbuddy');
+    $$('.migration-job-item').find(row => row.querySelector('h4').textContent === workbuddy.name).querySelector('button').click();
+    await until(() => $('#settingsView').hidden && $('#migrationModal').hidden && $('.message.user')?.dataset.content === 'WorkBuddy fixture', 'clean imported user message');
+    if (!$('#authBanner').hidden || !$('#errorToast').hidden) throw new Error('Successful imported navigation is not quiet');
+    return job.items.map(item => ({ source: item.source, status: item.status }));
+  `)
+  assert.deepEqual(imported.sort((a, b) => a.source.localeCompare(b.source)), [{ source: "qoder", status: "imported" }, { source: "workbuddy", status: "imported" }])
+  assert.deepEqual(await Promise.all(sourceFiles.map(path => readFile(path, "utf8"))), before)
+})
+
+test("new conversation offers a lightweight shortcut to session migration", { skip }, async () => {
+  await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] })
+  const report = await browser.run(`
+    if (!$("#settingsView").hidden) $("#settingsBack").click();
+    await until(() => $("#newSession"), "new conversation");
+    $("#newSession").click();
+    const link = await until(() => $("#emptySessionImport"), "empty import shortcut");
+    return { text: link.textContent.trim(), title: $("#stream .empty-title")?.textContent, mark: !!$("#stream .empty-mark .icon") };
+  `)
+  assert.equal(report.text, "从其他AI应用导入会话")
+  assert.equal(report.title, "今天想推进什么？")
+  assert.equal(report.mark, true)
+  const qaDir = process.env.STEPCODE_WEB_QA_DIR
+  if (qaDir) await mkdir(qaDir, { recursive: true })
+  try {
+    for (const width of [1280, 390]) {
+      await browser.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false })
+      if (width === 390) await browser.run(`
+        $('#sidebarToggle').click();
+        await until(() => $('.app').classList.contains('sidebar-hidden'), 'sidebar collapsed for narrow layout');
+      `)
+      const layout = await browser.run(`
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const mark = $('#stream .empty-mark').getBoundingClientRect();
+        const title = $('#stream .empty-title').getBoundingClientRect();
+        const column = $('#stream .stream-inner').getBoundingClientRect();
+        const button = $('#emptySessionImport').getBoundingClientRect();
+        const centre = column.left + column.width / 2;
+        return {
+          headingCentreDelta: Math.abs((mark.left + title.right) / 2 - centre),
+          buttonCentreDelta: Math.abs(button.left + button.width / 2 - centre),
+          belowHeading: button.top >= Math.max(mark.bottom, title.bottom) + 8,
+          buttonFits: button.left >= column.left && button.right <= column.right,
+          hasSubtitle: !!$('#emptySessionImport small'),
+          horizontalOverflow: $('#stream').scrollWidth > $('#stream').clientWidth
+        };
+      `)
+      assert.ok(layout.headingCentreDelta < 2, JSON.stringify({ width, ...layout }))
+      assert.ok(layout.buttonCentreDelta < 2, JSON.stringify({ width, ...layout }))
+      assert.equal(layout.belowHeading, true, JSON.stringify({ width, ...layout }))
+      assert.equal(layout.buttonFits, true, JSON.stringify({ width, ...layout }))
+      assert.equal(layout.hasSubtitle, false)
+      assert.equal(layout.horizontalOverflow, false, JSON.stringify({ width, ...layout }))
+      if (qaDir) {
+        const shot = await browser.send("Page.captureScreenshot", { format: "png" })
+        await writeFile(join(qaDir, `empty-migration-${width}.png`), Buffer.from(shot.data, "base64"))
+      }
+    }
+    await browser.run(`
+      $('#emptySessionImport').click();
+      await until(() => !$('#settingsView').hidden && $('[data-page="migration"]'), 'migration settings');
+      if (!$('#migrationPage .migration-category-list button') || !$('[data-settings-page="migration"]').classList.contains('active')) throw new Error('Migration Settings entry did not open');
+      if (!$('#migrationModal').hidden) throw new Error('Lightweight shortcut must not bypass the Settings entry or explicit scan');
+      $('#settingsBack').click();
+    `)
+  } finally {
+    await browser.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false })
+    await browser.run(`if ($('.app').classList.contains('sidebar-hidden')) $('#sidebarShow').click();`)
+    await browser.send("Emulation.setEmulatedMedia", { features: [] })
+  }
+  if (qaDir) console.log(`Empty migration layout screenshots: ${qaDir}`)
 })

@@ -35,6 +35,13 @@ Inherits the [root rules](../../AGENTS.md). This package is `@step-harness/codin
 
 Core provides mechanisms that product features compose. Do not put a feature's state machine into tool loading, session storage, or the generic Agent Loop.
 
+`src/core/session-import/` owns offline foreign-session discovery, adapters and
+atomic import jobs. Keep source reads separate from live session opening. Preserve
+import provenance, exclude historical usage/model selection, and project source
+tools as evidence rather than executable calls. See `docs/session-import.md`.
+Keep explicit failed/unknown tool outcomes and supported compaction attachments
+in continuation context; discovery must not truncate a metadata-bearing JSONL record.
+
 ### src/features: concrete features and orchestration
 
 | Feature | Main locations | Contents |
@@ -63,6 +70,7 @@ Features connect through existing extension and session-event interfaces. Reuse 
 - Preserve the frozen `bin` / `exports` boundary. Do not add argv, TTY, or process entry points, or weaken `check:coding-agent-entry-freeze`.
 - Reuse `src/theme/` and `config.ts` for theme catalogs and resolution. Renderers consume the active theme; do not add another theme registry.
 - Session completion, cancellation, recovery, and tool permissions remain consistent across RPC, print, TUI, and SDK. Protocol adaptation and presentation may vary by mode.
+- Every *record* transport filters through `sessionEventDurability` (via `toJsonEvent`); frames require an explicit live-consumer opt-in. That is `--mode json` and `--mode rpc`, whose stdout a harness may redirect to a file. In-process subscribers, the in-process event bridge and the framed SDK host (`--sdk-stdio`) are live channels: they keep every event by design, so a record consumer must use `json`/`rpc` rather than those.
 - Add features through existing extension / feature interfaces. Compatibility wrappers must not introduce independent core execution semantics.
 
 ## Session, tool, and feature constraints
@@ -74,13 +82,18 @@ Features connect through existing extension and session-event interfaces. Reuse 
 - Use the existing mutation queue for changes to the same file. Final text results pass through the shared output-retention boundary, including MCP, extensions, hook replacements, and errors. Save full oversized output before publishing a preview; storage failure must not automatically retry calls with side effects.
 - Preserve extension ordering: pre-execution `tool_call`, then return-stage `tool_result`. Publish catalogs in batches through `registerTools` to avoid repeated tool and prompt refreshes; tools added after a request starts become available to later requests.
 - Keep persistent RPC sessions for subagents. Build child environments through `buildSubagentChildEnv`, retaining the child marker and workflow / cron / goal disabling flags. Timeouts, failures, and cancellation must settle lanes and release resources. Background lanes belong to the session runtime that started them: run every rejecting check before a lane exists, send one terminal notification per lane, and stop a runtime's lanes on `session_shutdown` without touching another runtime's lanes (see [orchestration lifecycle](../../docs/orchestration-lifecycle.md#background-subagent-lanes)).
+- A child's permission prompt has no terminal of its own: `StepSubagentRunInput.requestApproval` carries the host's answer back over rpc. Forward it only from a host that can show the question; without a handler the prompt must stay cancelled (a denial), never auto-approved. `confirmed` is the only verdict; other blocking dialog methods remain auto-cancelled.
+- An extension context is invalidated when its session is replaced (fork, `/new`, reload), so its getters throw. A handler that awaits before reading `ctx` must read what it needs first and tolerate a replacement during the await: reporting a stale context as a warning turns a normal branch into a visible error. See `createStepPluginResourcesExtension` and `test/step-plugin-discovery-replacement.test.ts`.
 - Run user workflow code in the existing QuickJS VM through the restricted host bridge. Path ACLs and fan-out depth are separate contracts.
+- Publish background lane snapshots on the session-local `SUBAGENT_LANE_CHANNEL`, not through a TUI-only callback or model steering. Keep completed child answers as separate `step-subagent-response` journal facts; later failures or cancellation must not erase them. Never replay completed-response history in live frames.
+- Keep current outcome diagnostics ahead of bounded historical answer views. Validate and re-project bus payloads at host boundaries with `readSubagentLaneSnapshot`; publish the final roster after a stopped run settles.
+- Bound diagnostic metadata as well as answer bodies, retain complete clipped snapshots through the owned output boundary, and compare completed answers by exact normalized identity rather than substrings. Keep the in-memory recent-answer cache bounded without deleting journal facts; scope retention errors to their originating turn.
 - Plan mode and structured task tracking are independent. Validate plan write paths; do not infer task state from reply numbering or completion markers.
 - Persist goal controls before applying them. Clearing a goal revokes continuation and cancels its corresponding run. Deliver cron jobs when the host is idle with no pending user messages; preserve durable-store locking, atomic replacement, and rollback on failure.
 - Configuration reads distinguish missing files, invalid TOML, and other I/O errors. Writes preserve fields such as `mcp_servers` from the read under the same lock; respect host-injected directories and project trust.
 - MCP connections are pooled per process (`src/step/mcp-pool.ts`): sessions lease one connection per server identity, and the pool owns connect, catalog refresh and close. `shared = false` keeps a private connection per session. Interactive MCP connects in the background; print / RPC wait for the initial catalog. Shutdown cancels a session's waits and calls and releases its leases without closing connections other sessions hold; late tools must not enter a new session. Isolate OAuth credentials by server identity and URL; do not borrow another product's identity.
 - A running session reconciles MCP declarations in the awaited `before_agent_start` and tool-running `turn_end` hooks (see [MCP catalogs](docs/mcp-catalog.md#changes-during-a-session)): it leases newly declared servers, releases removed or changed ones, and keeps reconciliation side-effect free when nothing changed. Do not retry a failed server with an unchanged declaration.
-- Preserve feedback consent, redaction, and endpoint injection. Public source must not embed private exporters, endpoints, or release configuration.
+- Preserve feedback consent, redaction, and endpoint resolution. The feedback collector route is a product default (users file reports deliberately); `STEPCODE_FEEDBACK_ENDPOINT` / `STEPCODE_FEEDBACK_BUNDLE_ENDPOINT` still override it. Public source must not embed telemetry exporters, private telemetry routes, or release configuration.
 
 ## Validation and documentation
 

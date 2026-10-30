@@ -7,7 +7,7 @@ type TitleModel = Parameters<ModelRuntime["completeSimple"]>[0];
 const TITLE_GENERATION_TIMEOUT_MS = 60_000;
 /** Cap on the first prompt handed to the model; a title never needs more. */
 const MAX_TITLE_INPUT_CHARS = 1_200;
-/** Prompts this short are their own best title; no model call is worth it. */
+/** Input this short is its own best title; no model call is worth it. */
 const MIN_TITLE_INPUT_CHARS = 10;
 /** Hard cap on a stored generated title; the sidebar ellipsizes beyond it. */
 const MAX_TITLE_CHARS = 100;
@@ -40,6 +40,71 @@ Title rules:
 /** A skill the composer sends whole, in either form the client's `skillInvocation` knows. */
 const SKILL_BLOCK = /^<skill name="([^"]+)" location="[^"]+">\n[\s\S]*?\n<\/skill>(?:\n\n([\s\S]+))?$/;
 const SKILL_COMMAND = /^\/skill:(\S+)(?:\s+([\s\S]+))?$/;
+/** A leading `/name args`, split at the first space as the kernel's `_tryExecuteExtensionCommand` does. */
+const SLASH_COMMAND = /^\/([^ ]+)(?: ([\s\S]*))?$/;
+/** The per-turn workflow keyword the composer's ultraloop mode puts before the user's text. */
+const WORKFLOW_KEYWORD_PREFIX = /^ultra(?:loop|code):\s*/iu;
+/**
+ * What the session's kernel does with a leading `/name`: run a registered
+ * command, expand a prompt template, or nothing (a pasted path such as
+ * `/tmp 看下` reaches the model as an ordinary prompt).
+ */
+export type SlashCommandKind = "command" | "template" | undefined;
+export type SlashCommandResolver = (name: string) => SlashCommandKind;
+/**
+ * Registered commands whose arguments are the user's task. Every other
+ * registered command (`/permissions full-access`, `/compact`, `/ultraloop on`)
+ * only configures the session and leaves the title to the next input.
+ */
+const TASK_COMMANDS: ReadonlySet<string> = new Set(["goal", "plan"]);
+/** `/goal` subcommands that steer an existing goal; mirrors the kernel's `/goal` parser. */
+const GOAL_CONTROL_SUBCOMMANDS = new Set(["status", "clear", "pause", "resume", "budget", "edit"]);
+const GOAL_CLEAR_ALIASES = new Set(["stop", "off", "reset", "none", "cancel"]);
+
+/** The part of a task command's arguments that is the user's own text. */
+function taskArgumentText(name: string, args: string): string {
+	if (name !== "goal") return args;
+	if (GOAL_CLEAR_ALIASES.has(args.toLowerCase())) return "";
+	const [subcommand = "", ...rest] = args.split(/\s+/u);
+	if (subcommand.toLowerCase() === "start") return rest.join(" ");
+	// `/goal status` and friends carry no objective; only a goal's own text names a session.
+	return GOAL_CONTROL_SUBCOMMANDS.has(subcommand.toLowerCase()) ? "" : args;
+}
+
+/**
+ * The title text of a leading slash line, given what the kernel will do with
+ * it. `nested` marks the argument of a task command (`/plan /review x`): the
+ * host's template naming only sees a template that leads the sent line, so a
+ * nested one is titled here, by its own line.
+ */
+function slashLineText(prompt: string, resolve: SlashCommandResolver, nested: boolean): string {
+	const match = SLASH_COMMAND.exec(prompt);
+	if (!match) return prompt;
+	const name = match[1] ?? "";
+	const args = match[2]?.trim() ?? "";
+	switch (resolve(name)) {
+		case "command":
+			if (!TASK_COMMANDS.has(name)) return "";
+			// `/plan /skill:x task` is titled like the same text sent alone.
+			return titleText(taskArgumentText(name, args), resolve, true);
+		case "template":
+			// The host names a session opened by a template after its command line (`nameAfterPromptCommand`).
+			return nested ? prompt : "";
+		default:
+			return prompt;
+	}
+}
+
+function titleText(prompt: string, resolve: SlashCommandResolver, nested: boolean): string {
+	prompt = prompt.replace(QUOTED_CONTEXT, "").trim().replace(WORKFLOW_KEYWORD_PREFIX, "");
+	const invocation = SKILL_BLOCK.exec(prompt) ?? (prompt.startsWith("/") ? SKILL_COMMAND.exec(prompt) : null);
+	if (invocation) {
+		const request = invocation[2]?.trim() ?? "";
+		const name = invocation[1] ?? "";
+		return request || name;
+	}
+	return prompt.startsWith("/") ? slashLineText(prompt, resolve, nested) : prompt;
+}
 /**
  * A quoted other-session context riding the prompt's tail; keep this in sync
  * with the client's `sessionContextOf` (the host must not import the client).
@@ -53,26 +118,18 @@ function normalizeTitleInput(input: string): string {
 }
 
 /**
- * The text a title should be generated from, or null when the prompt must not
- * be titled. A skill invocation contributes its own request (or name), not the
- * skill's whole instructions; any other slash command is a mode switch, not a
- * task. Prompts below `MIN_TITLE_INPUT_CHARS` are skipped too: the sidebar's
- * first-message fallback is already the better title for them.
+ * The text a title should be generated from, or null when the first input
+ * carries no task text. Whatever the input triggers, the user's own words name
+ * the session: a skill invocation contributes its request (or name), not the
+ * skill's whole instructions; a task command (`/goal`, `/plan`) contributes its
+ * argument. A registered command that only configures the session
+ * (`/permissions …`, `/goal status`, a bare `/plan`) has nothing to title and
+ * leaves the title to the next input; a prompt template is named by the host.
+ * A slash line `resolve` does not know is no command at all and is titled whole.
  */
-export function sessionTitleInput(prompt: string): string | null {
-	prompt = prompt.replace(QUOTED_CONTEXT, "").trim();
-	const invocation = SKILL_BLOCK.exec(prompt) ?? (prompt.startsWith("/") ? SKILL_COMMAND.exec(prompt) : null);
-	if (invocation) {
-		const request = invocation[2]?.trim() ?? "";
-		const name = invocation[1] ?? "";
-		if (!request && !name) return null;
-		prompt = request || name;
-	} else if (prompt.startsWith("/")) {
-		return null;
-	}
-	const normalized = normalizeTitleInput(prompt);
-	// Code points, not UTF-16 units: an emoji-only prompt is still a short prompt.
-	return [...normalized].length >= MIN_TITLE_INPUT_CHARS ? normalized : null;
+export function sessionTitleInput(prompt: string, resolve: SlashCommandResolver = () => undefined): string | null {
+	const normalized = normalizeTitleInput(titleText(prompt, resolve, false));
+	return normalized ? normalized : null;
 }
 
 /** Strip model decorations from a title answer; null when nothing usable remains. */
@@ -138,23 +195,25 @@ function assistantText(message: Awaited<ReturnType<ModelRuntime["completeSimple"
 }
 
 /**
- * One sidecar call that turns the first prompt into a session title: same
- * provider and credentials as the session's own turns, but no agent loop and
- * nothing appended to the transcript (the `/btw` precedent for one-shot
- * questions). Null when the model answers nothing usable.
+ * Turn the first input into a session title. Input shorter than
+ * `MIN_TITLE_INPUT_CHARS` is used as-is; anything longer goes through one
+ * sidecar call: same provider and credentials as the session's own turns, but
+ * no agent loop and nothing appended to the transcript (the `/btw` precedent
+ * for one-shot questions). Null when nothing usable comes back.
  */
 export async function generateSessionTitle(
 	modelRuntime: ModelRuntime,
 	model: TitleModel,
 	input: string,
 ): Promise<string | null> {
+	const normalized = normalizeTitleInput(input);
+	// Code points, not UTF-16 units: an emoji-only input is still a short input.
+	if ([...normalized].length < MIN_TITLE_INPUT_CHARS) return cleanGeneratedTitle(normalized);
 	const message = await modelRuntime.completeSimple(
 		model,
 		{
 			systemPrompt: SESSION_TITLE_SYSTEM_PROMPT,
-			messages: [
-				{ role: "user", content: [{ type: "text", text: normalizeTitleInput(input) }], timestamp: Date.now() },
-			],
+			messages: [{ role: "user", content: [{ type: "text", text: normalized }], timestamp: Date.now() }],
 		},
 		{
 			maxTokens: Math.min(2_048, model.maxTokens > 0 ? model.maxTokens : 2_048),

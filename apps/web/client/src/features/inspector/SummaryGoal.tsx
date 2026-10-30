@@ -12,7 +12,7 @@ import { apiSend, errorMessage } from "../../lib/api";
 import { refreshCurrent, showError } from "../../state/session";
 import { useAppStore } from "../../state/store";
 import type { GoalState } from "../../state/types";
-import { Button, Icon } from "../../ui";
+import { Icon, IconButton, Tooltip } from "../../ui";
 
 type GoalAction = "pause" | "resume" | "edit" | "clear";
 
@@ -133,18 +133,32 @@ export function SummaryGoal() {
 		<section className="sb-goal" data-status={goal.status} aria-label={t("rightGoal")}>
 			<div className="sb-section-heading">
 				<h3>{t("rightGoal")}</h3>
-				{/* Pause / resume rides beside the label; a finished goal keeps its fold. */}
+				{/* Pause / resume beside the label: the app's own stop / caret icons at
+				 * the standard control size, with a hover hint. */}
 				{goal.status === "complete" ? null : (
-					<button
-						className="sb-goal-toggle"
-						type="button"
-						title={t(active ? "goalPause" : "goalResume")}
-						aria-label={t(active ? "goalPause" : "goalResume")}
-						disabled={busy}
-						onClick={() => void send(active ? "pause" : "resume")}
-					>
-						<Icon name={active ? "stop" : "orbit"} size="xs" />
-					</button>
+					<Tooltip content={t(active ? "goalPause" : "goalResume")}>
+						<IconButton
+							className="sb-goal-toggle"
+							icon={active ? "stop" : "tool"}
+							title={t(active ? "goalPause" : "goalResume")}
+							aria-label={t(active ? "goalPause" : "goalResume")}
+							disabled={busy}
+							onClick={() => void send(active ? "pause" : "resume")}
+						/>
+					</Tooltip>
+				)}
+				{/* Delete sits left of the status chip, red, with its own hint. */}
+				{goal.status === "complete" ? null : (
+					<Tooltip content={t("goalDelete")}>
+						<IconButton
+							className="sb-goal-danger"
+							icon="trash"
+							title={t("goalDelete")}
+							aria-label={t("goalDelete")}
+							disabled={busy}
+							onClick={() => void send("clear")}
+						/>
+					</Tooltip>
 				)}
 				{goal.status === "complete" ? (
 					<button
@@ -160,9 +174,11 @@ export function SummaryGoal() {
 					<span className="sb-goal-status">{t(statusKey(goal.status))}</span>
 				)}
 			</div>
-			{/* A one-line summary of the objective, then the full text clamped to three lines. */}
-			<p className="sb-goal-summary">{summarizeGoal(goal.objective)}</p>
-			<p className="sb-goal-objective">{goal.objective}</p>
+			{/* The one-line summary is the objective here: showing both it and the
+			 * clamped full text reads as saying the same thing twice. */}
+			<p className="sb-goal-summary" title={goal.objective}>
+				{summarizeGoal(goal.objective)}
+			</p>
 			<p className="sb-goal-stats">
 				{t("goalRounds", { rounds: goal.rounds })}
 				{" · "}
@@ -196,12 +212,6 @@ export function SummaryGoal() {
 					/>
 				</div>
 			)}
-			<div className="sb-goal-actions">
-				<Button onClick={() => void send("clear")} disabled={busy}>
-					<Icon name="trash" size="2xs" />
-					{t("goalDelete")}
-				</Button>
-			</div>
 		</section>
 	);
 }

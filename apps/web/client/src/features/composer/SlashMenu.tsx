@@ -1,5 +1,6 @@
 /**
- * The composer's slash menu. Typing `/word` as the whole prompt lists, in two
+ * The composer's slash menu. Typing `/word` as the whole prompt — or after the
+ * command chips already staged, since commands stack — lists, in two
  * groups, the commands and the skills that fuzzy-match it, scored like the
  * CLI's autocomplete:
  *
@@ -7,96 +8,24 @@
  *   runs it when the prompt is sent;
  * - `/mcp` opens the MCP server list in place (the kernel's `/mcp` only prints
  *   through a terminal notification, which the Web host does not have);
+ * - each prompt command (a plugin's `commands/*.md`, or the user's or the
+ *   project's prompt templates) inserts `/<name> `, which the kernel expands
+ *   into the template when the prompt is sent;
  * - each skill inserts `/skill:<name> `, which the kernel expands into the
  *   skill's instructions when the prompt is sent.
  */
 
 import { Fragment, type ReactNode, type RefObject, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { type MessageKey, type TranslateFn, useT } from "../../i18n";
+import { useT } from "../../i18n";
 import { api, errorMessage, workspaceApi } from "../../lib/api";
 import { cx } from "../../lib/format";
-import { fuzzyFilter } from "../../lib/fuzzy";
 import { activeCwd } from "../../state/session";
 import { setUi, useAppStore } from "../../state/store";
-import type { McpServerStatus, WebSkill } from "../../state/types";
+import type { McpServerStatus, WebPromptCommand, WebSkill } from "../../state/types";
 import { Icon, useDismiss } from "../../ui";
+import { matchText, type SlashItem, slashGroups, slashSections } from "./slash-groups";
 
-export interface SlashItem {
-	/**
-	 * `command` inserts `/<key> `, `mcp` opens the MCP view, `feedback` opens the
-	 * feedback dialog, `skill` inserts `/skill:<key> `.
-	 */
-	readonly kind: "command" | "mcp" | "feedback" | "skill";
-	readonly key: string;
-	readonly title: string;
-	readonly description: string;
-}
-
-/** The commands the menu offers, in display order. */
-const SLASH_COMMANDS: readonly { readonly name: string; readonly description: MessageKey }[] = [
-	{ name: "goal", description: "goalCommandDesc" },
-	{ name: "init", description: "initCommandDesc" },
-	{ name: "plan", description: "planCommandDesc" },
-	{ name: "btw", description: "btwCommandDesc" },
-	{ name: "compact", description: "compactCommandDesc" },
-	{ name: "feedback", description: "feedbackCommandDesc" },
-	{ name: "mcp", description: "mcpCommandDesc" },
-];
-
-/** `find-skills` -> `Find Skills`. */
-function skillTitle(name: string): string {
-	return name
-		.split(/[-_:\s]+/)
-		.filter(Boolean)
-		.map((word) => word[0].toUpperCase() + word.slice(1))
-		.join(" ");
-}
-
-/** The word of a prompt that is a single `/word` (including a `skill:` prefix), or null. */
-export function slashQuery(value: string): string | null {
-	const match = /^\/(\S*)$/.exec(value);
-	return match ? match[1] : null;
-}
-
-/** The part of a slash query the items are matched against. */
-function matchText(query: string): string {
-	return query.replace(/^skill:/i, "");
-}
-
-export interface SlashGroups {
-	readonly commands: readonly SlashItem[];
-	readonly skills: readonly SlashItem[];
-}
-
-/**
- * Commands and skills matching `query`, each group best first and in display
- * order when the query is empty. A `skill:` prefix asks for skills only.
- */
-export function slashGroups(query: string, skills: readonly WebSkill[], t: TranslateFn): SlashGroups {
-	const wanted = matchText(query);
-	const commands = /^skill:/i.test(query)
-		? []
-		: SLASH_COMMANDS.map(
-				(command): SlashItem => ({
-					kind: command.name === "mcp" ? "mcp" : command.name === "feedback" ? "feedback" : "command",
-					key: command.name,
-					title: `/${command.name}`,
-					description: t(command.description),
-				}),
-			);
-	const skillItems = skills.map(
-		(skill): SlashItem => ({
-			kind: "skill",
-			key: skill.name,
-			title: skillTitle(skill.name),
-			description: skill.description,
-		}),
-	);
-	return {
-		commands: fuzzyFilter(commands, wanted, (item) => item.key),
-		skills: fuzzyFilter(skillItems, wanted, (item) => item.key),
-	};
-}
+export { type SlashItem, slashQuery } from "./slash-groups";
 
 /** The title with the characters the query matched in order shown strong. */
 function Highlighted({ text, query }: { readonly text: string; readonly query: string }) {
@@ -122,30 +51,38 @@ function Highlighted({ text, query }: { readonly text: string; readonly query: s
 	return <span className="slash-item-title">{parts}</span>;
 }
 
-const skillCache = new Map<string, WebSkill[]>();
+/** What the menu lists beyond its own commands: skills and prompt commands. */
+interface SlashResources {
+	readonly skills: readonly WebSkill[];
+	readonly commands: readonly WebPromptCommand[];
+}
 
-/** Skills of the current session, or of the draft's folder; cached per session / folder. */
-function useSkills(open: boolean): WebSkill[] {
+const EMPTY_RESOURCES: SlashResources = { skills: [], commands: [] };
+const resourceCache = new Map<string, SlashResources>();
+
+/** Skills and prompt commands of the current session, or of the draft's folder; cached per session / folder. */
+function useSlashResources(open: boolean): SlashResources {
 	const sessionId = useAppStore((state) => state.current?.id ?? "");
 	const cwd = useAppStore((state) => activeCwd(state));
 	const key = sessionId ? `session:${sessionId}` : `cwd:${cwd}`;
-	const [skills, setSkills] = useState<WebSkill[]>(() => skillCache.get(key) ?? []);
+	const [resources, setResources] = useState<SlashResources>(() => resourceCache.get(key) ?? EMPTY_RESOURCES);
 	useEffect(() => {
 		if (!open) return;
-		setSkills(skillCache.get(key) ?? []);
+		setResources(resourceCache.get(key) ?? EMPTY_RESOURCES);
 		let live = true;
 		const path = sessionId ? `/api/v1/sessions/${sessionId}/skills` : workspaceApi(cwd, "/skills");
-		api<{ skills: WebSkill[] }>(path)
+		api<{ skills?: WebSkill[]; commands?: WebPromptCommand[] }>(path)
 			.then((data) => {
-				skillCache.set(key, data.skills);
-				if (live) setSkills(data.skills);
+				const next = { skills: data.skills ?? [], commands: data.commands ?? [] };
+				resourceCache.set(key, next);
+				if (live) setResources(next);
 			})
 			.catch(() => {});
 		return () => {
 			live = false;
 		};
 	}, [open, key, sessionId, cwd]);
-	return skills;
+	return resources;
 }
 
 const MCP_ORDER: Readonly<Record<McpServerStatus["status"], number>> = {
@@ -236,7 +173,7 @@ export interface SlashMenuProps {
 	readonly handle: RefObject<SlashMenuHandle | null>;
 	/** The prompt: pressing in it does not dismiss the menu. */
 	readonly promptRef: RefObject<HTMLDivElement | null>;
-	/** The prompt's slash query, or null when the prompt is not a single `/word`. */
+	/** The prompt's slash query, or null when the text beside the lead chips is not a single `/word`. */
 	readonly query: string | null;
 	readonly onPick: (item: SlashItem) => void;
 }
@@ -244,10 +181,11 @@ export interface SlashMenuProps {
 export function SlashMenu({ handle, promptRef, query, onPick }: SlashMenuProps) {
 	const t = useT();
 	const view = useAppStore((state) => state.ui.slashMenu);
-	const skills = useSkills(view === "commands");
-	const groups = view === "commands" && query !== null ? slashGroups(query, skills, t) : null;
-	// Keyboard selection runs through both groups as one list.
-	const items = groups ? [...groups.commands, ...groups.skills] : [];
+	const resources = useSlashResources(view === "commands");
+	const groups =
+		view === "commands" && query !== null ? slashGroups(query, resources.skills, t, resources.commands) : null;
+	// Keyboard selection runs through every group as one list.
+	const items = groups ? [...groups.commands, ...groups.prompts, ...groups.skills] : [];
 	const [active, setActive] = useState(0);
 	const listRef = useRef<HTMLDivElement>(null);
 	const rootRef = useRef<HTMLDivElement>(null);
@@ -303,17 +241,15 @@ export function SlashMenu({ handle, promptRef, query, onPick }: SlashMenuProps) 
 			onKeyDown={() => {}}
 		>
 			{item.kind === "skill" ? <Icon name="cube" size="sm" /> : null}
+			{item.kind === "prompt" ? <Icon name="puzzle" size="sm" /> : null}
 			<Highlighted text={item.title} query={highlight} />
 			<span className="slash-item-desc">{item.description}</span>
 			{item.kind === "mcp" ? <Icon className="slash-item-more" name="chevronRight" size="sm" /> : null}
 		</div>
 	);
-	const commandCount = groups?.commands.length ?? 0;
+	// Groups with no items are not rendered: no heading over an empty list.
 	const sections = groups
-		? [
-				{ id: "commands", label: t("slashCommands"), items: groups.commands, offset: 0 },
-				{ id: "skills", label: t("slashSkills"), items: groups.skills, offset: commandCount },
-			].filter((section) => section.items.length > 0)
+		? slashSections(groups, { commands: t("slashCommands"), prompts: t("slashPrompts"), skills: t("slashSkills") })
 		: [];
 
 	return (

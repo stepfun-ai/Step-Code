@@ -377,10 +377,6 @@ async function handleStepFeedbackCommand(
 		return;
 	}
 	const endpoint = resolveFeedbackEndpoint(process.env);
-	if (!endpoint) {
-		ctx.ui.notify("Feedback endpoint is not configured.", "warning");
-		return;
-	}
 	const bundleEndpoint = resolveFeedbackEndpoint(process.env, true);
 	const storageRootDir = resolveStepStorageRoot(process.env);
 	const identity = feedbackIdentity?.() ?? {};
@@ -396,9 +392,6 @@ async function handleStepFeedbackCommand(
 			storageRootDir,
 			...sessionSourceOf(ctx),
 			at: readAt,
-			// Nothing can receive the archive without a bundle endpoint; building it
-			// would read and compress up to 24 MiB and promise it on the review page.
-			withoutBundle: bundleEndpoint === undefined,
 			runtime: {
 				...permissionFacts(permission),
 				...(usage ? { contextUsed: usage.tokens, contextWindow: usage.contextWindow } : {}),
@@ -422,7 +415,7 @@ async function handleStepFeedbackCommand(
 			sessionId:
 				sessionBundle?.status === "ready" ? sessionBundle.bundle.sessionId : ctx.sessionManager.getSessionId(),
 			endpoint,
-			...(bundleEndpoint ? { bundleEndpoint } : {}),
+			bundleEndpoint,
 			telemetry,
 			env: process.env,
 			surface: "tui",
@@ -468,7 +461,6 @@ async function handleStepFeedbackCommand(
 		storageRootDir,
 		...sessionSourceOf(ctx),
 		at: readAt,
-		withoutBundle: bundleEndpoint === undefined,
 		runtime: {
 			...permissionFacts(permission),
 			...(usage ? { contextUsed: usage.tokens, contextWindow: usage.contextWindow } : {}),
@@ -493,7 +485,7 @@ async function handleStepFeedbackCommand(
 		storageRootDir,
 		sessionId: submissionSessionId,
 		endpoint,
-		...(bundleEndpoint ? { bundleEndpoint } : {}),
+		bundleEndpoint,
 		telemetry,
 		env: process.env,
 		surface: "tui",

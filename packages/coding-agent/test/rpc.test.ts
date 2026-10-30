@@ -373,7 +373,7 @@ describe.skipIf(skipRpc)("RPC mode", () => {
 		let state = await client.getState();
 		expect(state.sessionName).toBeUndefined();
 
-		// Send a prompt first - session files are only written after first assistant message
+		// Send a prompt first - the session file starts with the first prompt
 		await client.promptAndWait("Reply with just 'ok'");
 
 		// Set name

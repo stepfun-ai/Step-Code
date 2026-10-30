@@ -11,6 +11,8 @@ import {
 	FULL_ACCESS_PRESET,
 	FULL_ACCESS_RISK_CANCEL,
 } from "../../lib/permissions";
+import { isDesktopHost } from "../../platform/host";
+import { retainComposerDraftWork, updateDraftAttachments } from "../../state/composer-drafts";
 import {
 	applyQueueState,
 	countUserMessages,
@@ -33,14 +35,20 @@ import type {
 	TimelineItem,
 	UploadedFile,
 } from "../../state/types";
+import { openSettings } from "../settings/actions";
+import { modelConfigurationRequired } from "./model-readiness";
+import { draftModelSource } from "./models";
 import { commandLeadIcon, MODES, modeFromCommand } from "./modes";
 import {
 	insertCommandLead,
 	insertModeLead,
 	MODE_LEAD_CLASS,
 	type PromptFile,
+	removeSlashToken,
+	replaceSlashTokenWithCommand,
 	stripLeadingCommand,
 } from "./prompt-editor";
+import type { SlashToken } from "./slash-groups";
 
 export async function replyToClarification(
 	request: ClarificationRequest,
@@ -83,7 +91,9 @@ export async function selectPolicy(preset: string): Promise<void> {
 	}
 	setState({ draftPolicy: preset });
 	try {
-		renderSnapshot(await apiSend<SessionSnapshot>(`/api/v1/sessions/${current.id}/policy`, "PATCH", { preset }));
+		renderSnapshot(await apiSend<SessionSnapshot>(`/api/v1/sessions/${current.id}/policy`, "PATCH", { preset }), {
+			fromAction: true,
+		});
 	} catch (error) {
 		showError(errorMessage(error));
 	}
@@ -130,7 +140,7 @@ export async function answerSelection(request: SelectionRequest, value: string |
 			{ id: request.id, ...(value === undefined ? {} : { value }) },
 		);
 		forgetSelection(request.id);
-		renderSnapshot(snapshot);
+		renderSnapshot(snapshot, { fromAction: true });
 		return true;
 	} catch (error) {
 		showError(errorMessage(error));
@@ -164,7 +174,7 @@ export async function answerTextInput(request: TextInputRequest, value: string |
 			"POST",
 			{ id: request.id, ...(value === undefined ? {} : { value }) },
 		);
-		renderSnapshot(snapshot);
+		renderSnapshot(snapshot, { fromAction: true });
 		return true;
 	} catch (error) {
 		showError(errorMessage(error));
@@ -189,6 +199,7 @@ export async function selectModel(value: string): Promise<boolean> {
 	try {
 		renderSnapshot(
 			await apiSend<SessionSnapshot>(`/api/v1/sessions/${current.id}/model`, "PATCH", { provider, modelId }),
+			{ fromAction: true },
 		);
 		return true;
 	} catch (error) {
@@ -205,7 +216,9 @@ export async function selectEffort(level: string): Promise<boolean> {
 		return true;
 	}
 	try {
-		renderSnapshot(await apiSend<SessionSnapshot>(`/api/v1/sessions/${current.id}/thinking`, "PATCH", { level }));
+		renderSnapshot(await apiSend<SessionSnapshot>(`/api/v1/sessions/${current.id}/thinking`, "PATCH", { level }), {
+			fromAction: true,
+		});
 		return true;
 	} catch (error) {
 		showError(errorMessage(error));
@@ -262,29 +275,36 @@ export function clearModes(): void {
 /**
  * The staged mode renders as the prompt's leading chip, so deleting that chip
  * (a backspace over it) is how the user drops the mode — exactly like deleting
- * the command text it stands for. Call after every prompt edit.
+ * the command text it stands for. The chip is the source of truth: the modes
+ * are mutually exclusive, so at most one stands, and the staged state mirrors
+ * whichever mode's chip survives the edit (if any). Call after every prompt
+ * edit.
  */
 export function syncStagedModeLead(editor: HTMLElement): void {
-	const staged = (Object.keys(getState().modes) as ModeId[]).some((id) => getState().modes[id]);
-	// Commands stack: a mode survives while its chip is in the DOM, even beside others.
-	if (staged && !editor.querySelector(`.${MODE_LEAD_CLASS}`)) clearModes();
+	const chip = editor.querySelector<HTMLElement>(`.${MODE_LEAD_CLASS}`);
+	const staged = (Object.keys(getState().modes) as ModeId[]).find((id) => getState().modes[id]) ?? null;
+	const leading = (chip?.dataset.mode as ModeId | undefined) ?? null;
+	if (staged === leading) return;
+	if (leading) chooseMode(leading);
+	else clearModes();
 }
 
 /**
  * Stage `command` (with its slash or keyword form, no trailing space) as the
  * prompt's lead. The three mode commands stage their mode — the same chip and
  * theme as picking them from the ＋ menu — so typing `/goal` and picking Goal
- * look identical. Any other command replaces whatever was staged: the kernel
- * runs one leading command per message.
+ * look identical. Typing another mode's command replaces the staged one (the
+ * modes are mutually exclusive); any other command appends — commands stack,
+ * one input may carry several.
  */
-export function stageCommandLead(editor: HTMLElement, command: string): void {
+export function stageCommandLead(editor: HTMLElement, command: string, stageMode = true): void {
 	const name = command.replace(/^\//u, "");
 	const mode = modeFromCommand(name.replace(/:$/u, ""));
 	const meta = mode ? MODES.find((entry) => entry.id === mode) : undefined;
 	if (mode && meta) {
-		chooseMode(mode);
-		// Insert the chip synchronously (see the input sync note): it APPENDS to
-		// any leads already staged — commands stack, one input may carry several.
+		if (stageMode) chooseMode(mode);
+		// Insert the chip synchronously (see the input sync note): another mode's
+		// chip yields its place — one mode rides a message.
 		insertModeLead(editor, {
 			id: mode,
 			icon: meta.icon,
@@ -297,21 +317,39 @@ export function stageCommandLead(editor: HTMLElement, command: string): void {
 }
 
 /**
+ * Place a command picked for a `/word`: the chip goes exactly where the word
+ * was typed, so the words around it keep their order (`111 /` -> `111
+ * /skill:x`, `/skill:a 和 /` -> `/skill:a 和 /skill:b`). The kernel runs only
+ * a leading command; `promptMessageText` moves the first command to the front
+ * when the message is sent. Modes always lead. False when the `/word` is no
+ * longer at the caret.
+ */
+export function stageCommandAtSlashToken(editor: HTMLElement, token: SlashToken, command: string): boolean {
+	const name = command.replace(/^\//u, "");
+	if (!modeFromCommand(name.replace(/:$/u, ""))) {
+		return replaceSlashTokenWithCommand(editor, token, { command, icon: commandLeadIcon(name) });
+	}
+	if (!removeSlashToken(editor, token)) return false;
+	stageCommandLead(editor, command);
+	return true;
+}
+
+/**
  * After every prompt edit: a completed leading command (name plus its space)
  * leaves the text and becomes its lead chip, so every command line shows the
  * same icon and theme from the moment it is recognizable.
  */
-export function applyLeadingCommand(editor: HTMLElement): void {
+export function applyLeadingCommand(editor: HTMLElement, stageMode = true): void {
 	const name = stripLeadingCommand(editor);
 	if (name === null) return;
-	stageCommandLead(editor, name === "ultracode" ? "ultracode:" : `/${name}`);
+	stageCommandLead(editor, name === "ultracode" ? "ultracode:" : `/${name}`, stageMode);
 }
 
 /* ── Other-session context ────────────────────────────────────────────────── */
 
 /**
  * A skill or plugin picked from `#plusMenu`, staged as one light-purple icon
- * chip above `#prompt` (ZCode-style): `prefix` commands lead the next message
+ * chip above `#prompt`: `prefix` commands lead the next message
  * (one slash command per message, so a command pick replaces the previous
  * one), `note` picks ride at its tail.
  */
@@ -333,13 +371,13 @@ export interface ContextPackage {
 	readonly block: string;
 }
 
-/** Caps the packaged transcript, ZCode's selection limits shrunk to one pick. */
+/** Caps the packaged transcript for a single context pick. */
 const SESSION_CONTEXT_MAX_CHARS = 4000;
 const SESSION_CONTEXT_MAX_MESSAGES = 20;
 
 /**
- * Package another session's conversation as a prompt tail block (ZCode's
- * `# userselect:` pattern): a heading naming the source session and a fenced
+ * Package another session's conversation as a prompt tail block:
+ * a `# userselect:` heading naming the source session and a fenced
  * transcript of its user/assistant messages, oldest first, capped. The block
  * is ordinary prompt text — editable before sending, visible in the composer.
  */
@@ -380,23 +418,30 @@ function readFileAsBase64(file: File): Promise<string> {
 }
 
 /** Read each file (up to 5 MB) and stage it; oversized or unreadable files raise a toast. */
-export async function addAttachments(files: readonly File[]): Promise<void> {
-	for (const file of files) {
-		if (file.size > MAX_ATTACHMENT_BYTES) {
-			showError(t("attachmentTooLarge"));
-			continue;
+export async function addAttachments(files: readonly File[], stage?: (attachment: Attachment) => void): Promise<void> {
+	const owner = getState().composerDraftId;
+	const release = stage ? () => {} : retainComposerDraftWork(owner);
+	try {
+		for (const file of files) {
+			if (file.size > MAX_ATTACHMENT_BYTES) {
+				showError(t("attachmentTooLarge"));
+				continue;
+			}
+			try {
+				const attachment: Attachment = {
+					name: file.name,
+					mimeType: file.type || "application/octet-stream",
+					data: await readFileAsBase64(file),
+					kind: file.type.startsWith("image/") ? "image" : "text",
+				};
+				if (stage) stage(attachment);
+				else updateDraftAttachments(owner, (attachments) => [...attachments, attachment]);
+			} catch (error) {
+				showError((error instanceof Error && error.message) || t("attachmentUnreadable"));
+			}
 		}
-		try {
-			const attachment: Attachment = {
-				name: file.name,
-				mimeType: file.type || "application/octet-stream",
-				data: await readFileAsBase64(file),
-				kind: file.type.startsWith("image/") ? "image" : "text",
-			};
-			setState((state) => ({ attachments: [...state.attachments, attachment] }));
-		} catch (error) {
-			showError((error instanceof Error && error.message) || t("attachmentUnreadable"));
-		}
+	} finally {
+		release();
 	}
 }
 
@@ -437,6 +482,16 @@ export async function sendMessage(text: string, files: readonly PromptFile[] = [
 	const state = getState();
 	const { attachments, timelineItems } = state;
 	const active = turnActive(state);
+	// Read-only startup and migration need no model. Block an actual ordinary prompt
+	// before clearing attachments; the caller restores its editor when false is returned.
+	if (isDesktopHost() && !active && !text.startsWith("/")) {
+		const source = state.current ?? draftModelSource(state.draftModels, state.draftModel, state.draftThinking);
+		if (modelConfigurationRequired(source)) {
+			openSettings("models");
+			showError(t("modelConfigurationNeeded"), false);
+			return false;
+		}
+	}
 	// A queued or steered message waits for the turn, so only a new turn gets
 	// the immediate message and thinking indicator.
 	const images = attachments.filter((attachment) => attachment.kind === "image");
@@ -472,10 +527,11 @@ export async function sendMessage(text: string, files: readonly PromptFile[] = [
 		// A slash command journals no user message: the host echoes it as a
 		// command row through the snapshot, so pull the snapshot once the
 		// command has run (commands that drive no turn push no other event).
-		if (text.startsWith("/")) void refreshCurrent();
+		if (text.startsWith("/") && getState().composerDraftId === state.composerDraftId) void refreshCurrent();
 		return true;
 	} catch (error) {
-		setState({ attachments, pendingTurn: null });
+		updateDraftAttachments(state.composerDraftId, (newer) => [...attachments, ...newer]);
+		if (getState().composerDraftId === state.composerDraftId) setState({ pendingTurn: null });
 		if (steering && state.current) setSteering(state.current.id, steering);
 		showError(errorMessage(error));
 		return false;

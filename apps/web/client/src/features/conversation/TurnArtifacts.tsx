@@ -141,18 +141,18 @@ function AttachmentCard({
 	const meta = described ? artifact.label : [t(`deliveryKind.${artifact.kind}`), dir].filter(Boolean).join(" · ");
 	const change = artifact.change;
 	const toggleSource = () => void toggleDeliveryFile(cwd, artifact.path);
-	// The URL is minted per click: the Host forgets tokens on restart, and a stale one would 404. A turn that
-	// changed the file shows its own version, so cards of successive edits to one page each show theirs.
+	// The URL is minted per click: the Host forgets tokens on restart, and a stale one would 404. Every card
+	// shows the file as its own turn left it, so cards of successive edits to one page each show theirs. Only
+	// a turn that changed the file says so when that version is not on record; the others quietly show it now.
 	const openPage = (target: (url: string) => void) => {
 		if (pending) return;
 		setPending(true);
-		const minted =
-			change && sessionId
-				? turnSiteUrl(sessionId, change.turnId, artifact.path).then(({ url, exact }) => {
-						if (!exact) showError(t("deliveryVersionInexact"), false);
-						return url;
-					})
-				: workspaceSiteUrl(cwd, artifact.path);
+		const minted = sessionId
+			? turnSiteUrl(sessionId, artifact.turnId, artifact.path).then(({ url, exact }) => {
+					if (!exact && change) showError(t("deliveryVersionInexact"), false);
+					return url;
+				})
+			: workspaceSiteUrl(cwd, artifact.path);
 		void minted
 			.then(target)
 			.catch((failure: unknown) => showError(t("deliveryOpenFailed", { error: errorMessage(failure) })))

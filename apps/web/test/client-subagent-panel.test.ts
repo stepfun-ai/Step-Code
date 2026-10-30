@@ -36,12 +36,12 @@ test("the panel's default is the newest agent that is still working", () => {
 	// A running agent is what someone opening the panel cold is watching, even
 	// when a later agent already finished.
 	const items: TimelineItem[] = [task("a", "completed"), task("b", "running"), task("c", "completed")];
-	assert.equal(latestAgentRecord(items)?.key, "b:task:0");
+	assert.equal(latestAgentRecord(items)?.key, "child:b-child-0");
 });
 
 test("with nothing running the default is the newest record", () => {
 	const items: TimelineItem[] = [task("a", "completed"), task("b", "failed")];
-	assert.equal(latestAgentRecord(items)?.key, "b:task:0");
+	assert.equal(latestAgentRecord(items)?.key, "child:b-child-0");
 });
 
 test("a conversation with no agent has no default", () => {

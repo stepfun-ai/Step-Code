@@ -13,23 +13,39 @@ import { api, apiSend, errorMessage, setUnauthorizedHandler } from "../lib/api";
 import { splitAttachedFiles } from "../lib/attached-files";
 import { writeClipboard } from "../lib/clipboard";
 import { basename, clipDetail, compact, toolArgs, toolInputDetail, toolInputSummary } from "../lib/format";
+import { stripImportedUserControls } from "../lib/imported-content";
 import { contentText, skillInvocation } from "../lib/markdown";
 import { FULL_ACCESS_PRESET, isFullAccessRisk } from "../lib/permissions";
 import { isDesktopHost } from "../platform/host";
 import { assistantBlocks } from "./assistant-content";
+import {
+	composerDraftPatch,
+	forgetComposerDraft,
+	retainComposerDraftWork,
+	sessionComposerDraft,
+} from "./composer-drafts";
 import { observePerformance } from "./performance";
+import { arrangementChanged, pruneSessionPreferences, writeSessionPreferences } from "./session-order";
 import { type AppState, getState, mapWith, setState, setUi, type ToastState } from "./store";
-import { backgroundSubagentStatuses, subagentTasks } from "./subagent-tasks";
+import {
+	cacheSubagentLanes,
+	readCompletedSubagentEntry,
+	readSubagentLane,
+	subagentControl,
+	subagentTasks,
+	withSubagentLaneState,
+} from "./subagent-tasks";
+import { restoreTagGroups, updateTagGroups } from "./tag-group-persistence";
 import { pruneTagGroups, withoutSessionTag } from "./tag-groups";
 import { readThinkingTimings } from "./thinking-timing";
 import type {
 	AccountReport,
-	AgentMessage,
 	ApprovalRequest,
 	BootstrapPayload,
 	ChildAgentLink,
 	ClarificationRequest,
 	ContentPart,
+	DesktopOnboardingState,
 	DraftModels,
 	FileChange,
 	LoginReport,
@@ -195,13 +211,18 @@ export function showAuthBanner(): void {
 
 setUnauthorizedHandler(showAuthBanner);
 
-/** Copy to the clipboard and report the outcome in the toast (legacy `copyText`, 2098-2105). */
-export async function copyText(value: string, successText: string = t("copied")): Promise<void> {
+/**
+ * Copy to the clipboard and report the outcome in the toast (legacy `copyText`, 2098-2105).
+ * `successText: null` skips the success toast for a button that confirms in place.
+ */
+export async function copyText(value: string, successText: string | null = t("copied")): Promise<boolean> {
 	try {
 		await writeClipboard(value);
-		showError(successText, false);
+		if (successText !== null) showError(successText, false);
+		return true;
 	} catch {
 		showError(t("browserCopyDenied"));
+		return false;
 	}
 }
 
@@ -224,6 +245,12 @@ export function taskStatus(state: AppState, session: SessionSummary): SessionSta
 	return state.statusById.get(session.id) ?? ((session.messageCount ?? 0) > 0 ? "completed" : "idle");
 }
 
+/** A folder the user removed from workspace navigation; its chats stay readable. */
+export function isHiddenWorkspace(state: AppState, path: string | undefined): boolean {
+	if (!path) return false;
+	return state.workspaces.some((workspace) => workspace.hidden === true && workspace.path === path);
+}
+
 /** Every folder the UI knows as a workspace, sorted by name (legacy `knownWorkspaces`, 1082-1095). */
 export function knownWorkspaces(state: AppState): string[] {
 	const values = new Set<string>();
@@ -234,15 +261,86 @@ export function knownWorkspaces(state: AppState): string[] {
 	for (const session of state.sessions) {
 		if (session.cwd && session.cwdAvailable !== false) values.add(session.cwd);
 	}
-	const hidden = new Set(state.workspaces.filter((workspace) => workspace.hidden).map((workspace) => workspace.path));
 	return [...values]
-		.filter((path) => !hidden.has(path))
+		.filter((path) => !isHiddenWorkspace(state, path))
 		.sort((left, right) => basename(left).localeCompare(basename(right), "zh-CN"));
 }
 
 /** The cwd new work should target: current session, else draft, else launch folder. */
 export function activeCwd(state: AppState = getState()): string {
 	return state.current?.cwd || state.draftCwd || state.bootstrapCwd;
+}
+
+/**
+ * The folder the host falls back to for new work when no workspace is on offer.
+ * It is the launch folder, or the home folder when the user removed the launch
+ * folder from navigation (see the host's `defaultCwd`).
+ */
+export function defaultProjectCwd(state: AppState = getState()): string {
+	return state.defaultCwd || state.bootstrapCwd;
+}
+
+/**
+ * Whether `path` is the implicit default project instead of a workspace the user
+ * registered. That is the home fallback the host reports after the launch folder
+ * was removed: the page names it "默认项目" rather than the last user name.
+ * Registering the folder turns it back into a normal workspace with its own name.
+ */
+export function isDefaultProject(state: AppState, path: string | undefined): boolean {
+	if (!path || !state.defaultCwdFallback || !state.defaultCwd) return false;
+	if (path !== state.defaultCwd) return false;
+	return !state.workspaces.some(
+		(workspace) => workspace.available && workspace.hidden !== true && workspace.path === path,
+	);
+}
+
+/**
+ * Whether `path` is the first-use workspace the host created under Documents.
+ * Its folder name is the fixed, language-neutral `default-workspace`, so the
+ * page shows it in the reader's language instead.
+ */
+export function isDefaultWorkspace(state: AppState, path: string | undefined): boolean {
+	if (!path) return false;
+	return state.workspaces.some((workspace) => workspace.default === true && workspace.path === path);
+}
+
+/**
+ * The name to show for a workspace folder: "默认项目" for the fallback folder,
+ * "默认工作区" for the first-use workspace, otherwise the folder's own name.
+ * Without this the fallback was presented under the last user name, which named
+ * neither a workspace nor a project.
+ */
+export function workspaceLabel(state: AppState, path: string): string {
+	if (isDefaultProject(state, path)) return t("defaultProject");
+	return isDefaultWorkspace(state, path) ? t("defaultWorkspace") : basename(path);
+}
+
+/**
+ * Where a new conversation may start when the folder it would have used has
+ * been removed from workspace navigation.
+ *
+ * Removing a workspace keeps its chats, so one of them can still be open and
+ * "New conversation" would otherwise inherit that folder through `activeCwd()`.
+ * The picker cannot even list a removed folder, so the composer then named a
+ * workspace the user had deleted and sent a message into it — and any
+ * folder-scoped request (the file tree, git, `@` completion) came back with
+ * "Folder is not a known workspace". Prefer the launch folder, then any
+ * workspace still on offer.
+ *
+ * When none of those is on offer the fallback is the host's default workspace
+ * (`state.defaultCwd`), not the launch folder: the launch folder is Desktop's
+ * last picked folder, which is exactly the folder the user may have just
+ * removed, so reusing it made every "New conversation" in an empty workspace
+ * list start in the deleted folder. The default is the home folder there.
+ */
+export function workspaceForNewConversation(state: AppState = getState()): string {
+	const wanted = activeCwd(state);
+	if (!isHiddenWorkspace(state, wanted)) return wanted;
+	if (state.bootstrapCwd && !isHiddenWorkspace(state, state.bootstrapCwd)) return state.bootstrapCwd;
+	const offered = knownWorkspaces(state)[0];
+	if (offered) return offered;
+	if (state.defaultCwd && !isHiddenWorkspace(state, state.defaultCwd)) return state.defaultCwd;
+	return state.bootstrapCwd;
 }
 
 /** `${provider}\u0000${id}` key of a model (legacy `modelKey`). */
@@ -264,16 +362,29 @@ export function mergeSessionSummary(
 	return next;
 }
 
+/** File-changing tools: the built-in names and the Step tool profile's, which Web sessions use. */
+const FILE_CHANGE_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "edit_file", "write_file"]);
+
 /**
- * The file change of a finished edit/write call: both tools record a unified
- * patch in their result details; `write` says why when it recorded none.
+ * The file change of a finished edit/write call. `edit`, `write` and Step's
+ * `edit_file` record a unified patch in their result details; `write` says why
+ * when it recorded none. Step's `write_file` records no patch (an untracked
+ * change), and `changed: false` when the file already held the content.
+ * `result` is the recorded tool result, or a live `tool_execution_end`'s
+ * result with the event's own `isError`.
  */
-function fileChange(name: string, args: unknown, result: AgentMessage | undefined): FileChange | undefined {
-	if ((name !== "edit" && name !== "write") || !result || result.isError) return undefined;
+function fileChange(
+	name: string,
+	args: unknown,
+	result: { readonly details?: unknown; readonly isError?: boolean } | undefined,
+): FileChange | undefined {
+	if (!FILE_CHANGE_TOOLS.has(name) || !result || result.isError) return undefined;
 	const details = (result.details ?? {}) as {
 		patch?: unknown;
 		untracked?: unknown;
+		changed?: unknown;
 	};
+	if (details.changed === false) return undefined;
 	const input = (args ?? {}) as { path?: unknown; file_path?: unknown };
 	const path = typeof input.path === "string" ? input.path : input.file_path;
 	if (typeof path !== "string" || !path.trim()) return undefined;
@@ -476,8 +587,10 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 			if (duplicate) continue;
 		}
 		const index = messagePosition.get(entry.id) ?? 0;
-		const text = contentText(message.content);
+		const rawText = contentText(message.content);
+		const text = entry.imported && message.role === "user" ? stripImportedUserControls(rawText).text : rawText;
 		const images = message.role === "user" ? imageSources(message.content) : [];
+		if (entry.imported && message.role === "user" && !text && !images.length) continue;
 		// A failed request leaves an assistant message with no content; without a row the error was invisible.
 		const error =
 			message.role === "assistant" && message.stopReason === "error"
@@ -492,13 +605,19 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 			continue;
 		}
 		if (message.role !== "assistant" && (text || message.role === "user")) {
+			// A prompt command's expansion is shown as the line the user typed.
+			const promptCommand =
+				message.role === "user" && typeof entry.promptCommand === "string" && entry.promptCommand
+					? entry.promptCommand
+					: undefined;
 			// Every user message opens a turn (the host's turn boundary), even one without text.
 			items.push({
 				itemId: `message-${entry.id}`,
 				entryId: entry.id,
 				kind: "message",
 				role: message.role,
-				content: text,
+				content: promptCommand ?? text,
+				...(promptCommand ? { promptCommand: true } : {}),
 				...(images.length ? { images } : {}),
 				...(error ? { error } : {}),
 				usage: entry.usage,
@@ -535,12 +654,21 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 					continue;
 				}
 				const result = toolResults.get(String(block.id));
-				const change = fileChange(String(block.name ?? ""), block.arguments, result);
-				const links = childAgents(String(block.name ?? ""), result?.details);
+				const imported = Boolean(entry.imported);
+				const importedUnknown =
+					imported &&
+					(!result ||
+						(result.details &&
+							typeof result.details === "object" &&
+							"importedStatus" in result.details &&
+							result.details.importedStatus === "unknown"));
+				const change = imported ? undefined : fileChange(String(block.name ?? ""), block.arguments, result);
+				const links = imported ? {} : childAgents(String(block.name ?? ""), result?.details);
 				items.push({
 					itemId: `tool-${block.id}`,
 					kind: "tool",
-					state: result?.isError ? "failed" : result ? "completed" : "pending",
+					state: importedUnknown ? "unknown" : result?.isError ? "failed" : result ? "completed" : "pending",
+					...(imported ? { imported: true } : {}),
 					toolName: String(block.name ?? ""),
 					inputSummary: toolInputSummary(block.arguments),
 					outputSummary: result ? compact(contentText(result.content)) : "",
@@ -551,9 +679,12 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 					...links,
 					// The proposal comes from the persisted result, not the live event, so
 					// a snapshot refresh (which follows every finished message) keeps the
-					// review card. Without this it flashed once and vanished.
-					...(block.name === "exit_plan_mode" ? planReview(result?.details) : {}),
-					...(block.name === "subagent"
+					// review card. Imported calls are history, never native review requests.
+					...(!imported && block.name === "exit_plan_mode" ? planReview(result?.details) : {}),
+					...(!imported && block.name === "agent_send"
+						? { subagentControl: subagentControl(block.arguments, result?.details) }
+						: {}),
+					...(!imported && block.name === "subagent"
 						? {
 								subagentTasks: subagentTasks(
 									block.arguments,
@@ -587,28 +718,7 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 		// The failed attempt is not recorded yet (or not in this branch): the retry still shows.
 		else items.push({ itemId: "retry-live", kind: "retry", errors: [retry.errorMessage], live: retry });
 	}
-	const background = backgroundSubagentStatuses(entries);
-	const rows = items.map((item) =>
-		item.kind === "tool" && item.subagentTasks
-			? {
-					...item,
-					subagentTasks: item.subagentTasks.map((task, _index, tasks) => {
-						const laneStatus = task.backgroundAgentId ? background.get(task.backgroundAgentId) : undefined;
-						if (!laneStatus || (tasks.length > 1 && task.status !== "running" && task.status !== "queued"))
-							return task;
-						// A lane's completion does not establish whether a still-queued chain step executed.
-						return {
-							...task,
-							status:
-								tasks.length > 1 && task.status === "queued" && laneStatus !== "running"
-									? "unknown"
-									: laneStatus,
-						};
-					}),
-				}
-			: item,
-	);
-	return settlePlanReviews(rows);
+	return settlePlanReviews([...withSubagentLaneState(items, undefined, entries)]);
 }
 
 /**
@@ -645,6 +755,13 @@ const resolvedClarifications = new Set<string>();
 /** Kernel selections already answered; ids are unique per host process. */
 const resolvedSelections = new Set<string>();
 
+/**
+ * Newest stream revision seen per session. Status and agent events are pushed,
+ * so they are newer than an HTTP snapshot that was serialized before them; the
+ * revision is what tells the two apart (see `renderSnapshot`).
+ */
+const streamRevisions = new Map<string, number>();
+
 /** Record an answered selection so a snapshot that raced the answer does not reopen it. */
 export function forgetSelection(id: string): void {
 	resolvedSelections.add(id);
@@ -674,8 +791,33 @@ function approvalItems(snapshot: SessionSnapshot): TimelineItem[] {
  * Everything the legacy function painted is derived from these fields.
  * `adoptDraft` marks the session a draft just became: what the draft opened in
  * the rail (files, a waiting side answer) is that session's, so it stays.
+ * `fromStream` marks the snapshot this page's own stream opened with: it is the
+ * connection's current state, not a read that may have been overtaken.
+ * `fromAction` marks the answer to a mutation this page asked for (a policy or
+ * model change, answering a dialog): its fields carry that action, so a stream
+ * event that overtook it makes the page re-read rather than discard it.
  */
-export function renderSnapshot(snapshot: SessionSnapshot, options: { readonly adoptDraft?: boolean } = {}): void {
+export function renderSnapshot(
+	snapshot: SessionSnapshot,
+	options: { readonly adoptDraft?: boolean; readonly fromStream?: boolean; readonly fromAction?: boolean } = {},
+): void {
+	const newest = streamRevisions.get(snapshot.id);
+	// A stop is a stream event: a snapshot read issued while the turn still ran
+	// describes a state the page has already left. Painting it back restored the
+	// running status and the stop control after the stop.
+	const overtaken =
+		!options.fromStream && snapshot.revision !== undefined && newest !== undefined && snapshot.revision < newest;
+	// An answer to this page's own action still carries the change the user asked
+	// for, so it is applied even when a stream event overtook it; only the fields
+	// the stream owns (transcript, run status, its clock) are held back.
+	if (overtaken && !options.fromAction) return;
+	const holdStream = overtaken;
+	if (snapshot.revision !== undefined) {
+		streamRevisions.set(
+			snapshot.id,
+			options.fromStream ? snapshot.revision : Math.max(snapshot.revision, newest ?? 0),
+		);
+	}
 	const pending = new Map((snapshot.pendingClarifications ?? []).map((request) => [request.id, request]));
 	for (const request of liveClarifications.values()) {
 		if (request.sessionId === snapshot.id) pending.set(request.id, request);
@@ -688,13 +830,43 @@ export function renderSnapshot(snapshot: SessionSnapshot, options: { readonly ad
 		pendingSelections: (snapshot.pendingSelections ?? []).filter((request) => !resolvedSelections.has(request.id)),
 	};
 	const previousSessionId = getState().current?.id;
+	const inputPatch = composerDraftPatch(
+		sessionComposerDraft(snapshot.id, options.adoptDraft ? getState().composerDraftId : undefined),
+	);
 	setState((state) => {
-		const timelineItems = [...timelineFromEntries(snapshot.entries, snapshot.retry), ...approvalItems(snapshot)];
-		const pendingTurn =
-			state.pendingTurn && countUserMessages(timelineItems) > state.pendingTurn.userCount ? null : state.pendingTurn;
+		const live = state.current?.id === snapshot.id ? state.current : undefined;
+		const timelineItems = holdStream
+			? state.timelineItems
+			: [
+					...withSubagentLaneState(
+						timelineFromEntries(snapshot.entries, snapshot.retry),
+						snapshot.subagentLanes,
+						snapshot.entries,
+					),
+					...approvalItems(snapshot),
+				];
+		const pendingTurn = holdStream
+			? state.pendingTurn
+			: state.pendingTurn && countUserMessages(timelineItems) > state.pendingTurn.userCount
+				? null
+				: state.pendingTurn;
+		// The stream reported a newer run than this answer describes.
+		const current =
+			holdStream && live
+				? {
+						...snapshot,
+						status: live.status,
+						unread: live.unread,
+						compacting: live.compacting,
+						queuedMessages: live.queuedMessages,
+						steeringMessages: live.steeringMessages,
+						subagentLanes: live.subagentLanes,
+					}
+				: snapshot;
 		return {
-			current: snapshot,
-			performanceRun: state.current?.id === snapshot.id ? state.performanceRun : null,
+			...inputPatch,
+			current,
+			performanceRun: !holdStream && state.current?.id !== snapshot.id ? null : state.performanceRun,
 			policiesCache: snapshot.policies ?? state.policiesCache,
 			draftCwd: snapshot.cwd,
 			draftPolicy: snapshot.permissionPreset || "approve-for-me",
@@ -706,14 +878,14 @@ export function renderSnapshot(snapshot: SessionSnapshot, options: { readonly ad
 			// as the global default). An explicit pick is persisted by the server.
 			draftModel: "",
 			draftThinking: "",
-			statusById: mapWith(state.statusById, snapshot.id, snapshot.status),
-			unreadById: mapWith(state.unreadById, snapshot.id, false),
-			sessions: mergeSessionSummary(state.sessions, snapshot),
+			statusById: holdStream ? state.statusById : mapWith(state.statusById, snapshot.id, snapshot.status),
+			unreadById: holdStream ? state.unreadById : mapWith(state.unreadById, snapshot.id, false),
+			sessions: mergeSessionSummary(state.sessions, current),
 			timelineItems,
 			pendingTurn,
 			// The snapshot is authoritative when the page (re)loads; live
 			// `compaction_start` / `compaction_end` events refine it afterwards.
-			compacting: snapshot.compacting === true,
+			compacting: holdStream ? state.compacting : snapshot.compacting === true,
 		};
 	});
 	// File tabs and side answers belong to one session, so the previous session's
@@ -753,9 +925,11 @@ export function closeStream(): void {
 	liveApprovals.clear();
 	liveClarifications.clear();
 	resolvedClarifications.clear();
+	streamRevisions.clear();
 }
 
 interface AgentStreamEvent {
+	readonly entry?: unknown;
 	readonly type: string;
 	readonly message?: { readonly role?: string; readonly content?: unknown; readonly usage?: unknown };
 	readonly toolCallId?: string;
@@ -770,8 +944,54 @@ interface AgentStreamEvent {
 	readonly errorMessage?: string;
 }
 
+/** Remember the newest revision this page has applied for `id`. */
+function noteRevision(id: string, revision: number | undefined): void {
+	if (revision === undefined || !Number.isSafeInteger(revision)) return;
+	streamRevisions.set(id, Math.max(revision, streamRevisions.get(id) ?? 0));
+}
+
 function updateTimeline(update: (items: readonly TimelineItem[]) => readonly TimelineItem[]): void {
-	setState((state) => ({ timelineItems: update(state.timelineItems) }));
+	setState((state) => ({
+		timelineItems: withSubagentLaneState(
+			update(state.timelineItems),
+			state.current?.subagentLanes,
+			state.current?.entries,
+		),
+	}));
+}
+
+export function applySubagentLane(sessionId: string, value: unknown): void {
+	const lane = value === null ? null : readSubagentLane(value);
+	if (lane === undefined) return;
+	setState((state) => {
+		if (state.current?.id !== sessionId) return {};
+		const lanes = lane ? cacheSubagentLanes(state.current.subagentLanes ?? [], lane) : [];
+		return {
+			current: { ...state.current, subagentLanes: lanes },
+			timelineItems: withSubagentLaneState(state.timelineItems, lanes, state.current.entries),
+		};
+	});
+}
+
+/** Apply the durable SSE fact directly; live frames may overtake its HTTP refresh. */
+export function applyCompletedSubagentEntry(sessionId: string, value: unknown): void {
+	const response = readCompletedSubagentEntry(value);
+	if (!response) return;
+	setState((state) => {
+		if (state.current?.id !== sessionId || state.current.entries?.some((entry) => entry.id === response.id))
+			return {};
+		const entry: SessionEntry = {
+			id: response.id,
+			type: "custom",
+			customType: "step-subagent-response",
+			data: response,
+		};
+		const entries = [...(state.current.entries ?? []), entry];
+		return {
+			current: { ...state.current, entries },
+			timelineItems: withSubagentLaneState(state.timelineItems, state.current.subagentLanes, entries),
+		};
+	});
 }
 
 /** Replace the row with the same id in place, or append it. */
@@ -893,7 +1113,11 @@ function flushLiveMessage(): void {
 		);
 }
 
-function handleAgentEvent(agentEvent: AgentStreamEvent, thinkingTimings?: ThinkingTimings): void {
+function handleAgentEvent(
+	agentEvent: AgentStreamEvent,
+	thinkingTimings?: ThinkingTimings,
+	promptCommand?: string,
+): void {
 	if (
 		agentEvent.type === "agent_start" ||
 		agentEvent.type === "message_start" ||
@@ -948,8 +1172,9 @@ function handleAgentEvent(agentEvent: AgentStreamEvent, thinkingTimings?: Thinki
 	}
 	if (agentEvent.type === "message_start" && agentEvent.message?.role === "user") {
 		// The prompt entered the loop: show it in place now; the refresh after
-		// its message_end replaces this row with the recorded entry.
-		const content = contentText(agentEvent.message.content);
+		// its message_end replaces this row with the recorded entry. A prompt
+		// command shows as the line the user typed, not the template it became.
+		const content = promptCommand ?? contentText(agentEvent.message.content);
 		const images = imageSources(agentEvent.message.content);
 		setState((state) => ({
 			pendingTurn: null,
@@ -958,6 +1183,7 @@ function handleAgentEvent(agentEvent: AgentStreamEvent, thinkingTimings?: Thinki
 				kind: "message",
 				role: "user",
 				content,
+				...(promptCommand ? { promptCommand: true } : {}),
 				...(images.length ? { images } : {}),
 			}),
 		}));
@@ -974,6 +1200,9 @@ function handleAgentEvent(agentEvent: AgentStreamEvent, thinkingTimings?: Thinki
 				inputDetail: toolInputDetail(agentEvent.args),
 				outputDetail: "",
 				...withArgs(agentEvent.args),
+				...(agentEvent.toolName === "agent_send"
+					? { subagentControl: subagentControl(agentEvent.args, undefined) }
+					: {}),
 				...(agentEvent.toolName === "subagent"
 					? { subagentTasks: subagentTasks(agentEvent.args, undefined, "pending") }
 					: {}),
@@ -1007,7 +1236,17 @@ function handleAgentEvent(agentEvent: AgentStreamEvent, thinkingTimings?: Thinki
 			state: agentEvent.isError ? "failed" : "completed",
 			outputSummary: compact(output),
 			outputDetail: clipDetail(output),
+			// The end event carries no arguments: the row kept the path from the start event.
+			// Without this the turn's changes stayed empty until a snapshot read succeeded.
+			change: fileChange(
+				item.toolName,
+				item.args,
+				agentEvent.result && { details: agentEvent.result.details, isError: agentEvent.isError === true },
+			),
 			...childAgents(item.toolName, agentEvent.result?.details),
+			...(item.toolName === "agent_send"
+				? { subagentControl: subagentControl(undefined, agentEvent.result?.details, item.subagentControl) }
+				: {}),
 			...(item.toolName === "exit_plan_mode" ? planReview(agentEvent.result?.details) : {}),
 			...(item.toolName === "subagent"
 				? {
@@ -1043,24 +1282,36 @@ function handleAgentEvent(agentEvent: AgentStreamEvent, thinkingTimings?: Thinki
 export function connectStream(id: string): void {
 	stream?.close();
 	setState({ performanceRun: null });
+	// A new stream is a new order: its own snapshot is the current state, and the
+	// revisions this page saw before it belong to a connection that is gone.
+	streamRevisions.delete(id);
 	const source = new EventSource(`/api/v1/sessions/${id}/events`);
 	stream = source;
 	source.addEventListener("snapshot", (event) => {
-		if (stream === source) renderSnapshot(JSON.parse((event as MessageEvent).data));
+		if (stream === source) renderSnapshot(JSON.parse((event as MessageEvent).data), { fromStream: true });
 	});
 	source.addEventListener("agent", (event) => {
 		if (stream !== source) return;
 		const payload = JSON.parse((event as MessageEvent).data) as {
 			event: AgentStreamEvent;
 			thinkingTimings?: unknown;
+			promptCommand?: unknown;
+			revision?: number;
 		};
-		handleAgentEvent(payload.event, readThinkingTimings(payload.thinkingTimings));
+		noteRevision(id, payload.revision);
+		if (payload.event.type === "entry_appended") applyCompletedSubagentEntry(id, payload.event.entry);
+		const promptCommand =
+			typeof payload.promptCommand === "string" && payload.promptCommand ? payload.promptCommand : undefined;
+		handleAgentEvent(payload.event, readThinkingTimings(payload.thinkingTimings), promptCommand);
 	});
 	source.addEventListener("status", (event) => {
+		if (stream !== source) return;
 		const payload = JSON.parse((event as MessageEvent).data) as {
 			status: SessionStatus;
 			unread: boolean;
+			revision?: number;
 		};
+		noteRevision(id, payload.revision);
 		if (payload.status !== "waiting") liveApprovals.clear();
 		setState((state) => ({
 			// Only a running turn can still record the pending message.
@@ -1073,10 +1324,17 @@ export function connectStream(id: string): void {
 					: state.current,
 		}));
 	});
+	source.addEventListener("subagent_lane", (event) => {
+		if (stream !== source) return;
+		const payload = JSON.parse((event as MessageEvent).data) as { lane?: unknown; revision?: number };
+		noteRevision(id, payload.revision);
+		applySubagentLane(id, payload.lane);
+	});
 	source.addEventListener("queue", (event) => {
 		if (stream === source) applyQueueState(id, JSON.parse((event as MessageEvent).data) as QueueState);
 	});
 	source.addEventListener("approval_required", (event) => {
+		if (stream !== source) return;
 		const approval = JSON.parse((event as MessageEvent).data).approval as ApprovalRequest;
 		liveApprovals.set(approval.id, approval);
 		updateTimeline((items) =>
@@ -1233,8 +1491,8 @@ export function connectStream(id: string): void {
 
 /**
  * Sessions this page created that the host does not list yet. The host lists
- * session files, and a session's file is written only with its first assistant
- * reply; until then a list refresh would drop the new conversation's row.
+ * session files, so a session appears as soon as its first prompt is written;
+ * a draft that was created but never sent still needs the optimistic row.
  */
 const unlistedSessions = new Set<string>();
 
@@ -1244,35 +1502,68 @@ export function forgetUnlistedSession(id: string): void {
 }
 
 /**
- * A session the host deleted is forgotten completely: its optimistic row and
- * the group tag it carried. The tag is a record about that session, so leaving
- * it behind kept a group in the picker that no session could ever name again.
+ * A session the host deleted is forgotten completely: its optimistic row, the
+ * group tag it carried and its place in the sidebar arrangement. The tag is a
+ * record about that session, so leaving it behind kept a group in the picker
+ * that no session could ever name again; a place or a pin would outlive the row
+ * it belongs to.
  */
 export function forgetDeletedSession(id: string): void {
 	forgetUnlistedSession(id);
-	setState((state) => withoutSessionTag(state, id));
+	const state = getState();
+	const arrangement = pruneSessionPreferences(
+		state,
+		new Set(state.sessions.map((session) => session.id).filter((sessionId) => sessionId !== id)),
+	);
+	if (arrangementChanged(state, arrangement)) writeSessionPreferences(arrangement);
+	updateTagGroups((groups) => withoutSessionTag(groups, id));
+	setState({
+		pinnedSessions: arrangement.pinnedSessions,
+		sessionOrder: arrangement.sessionOrder,
+	});
 }
 
-/** Reload the session list (legacy `refreshSessions`, 3111-3115). */
+let sessionListRequest = 0;
+let sessionListApplied = 0;
+
+/** Reload the list immediately; successful recovery only gates the later group prune. */
 export async function refreshSessions(): Promise<void> {
+	const request = ++sessionListRequest;
+	const recovery = restoreTagGroups();
 	const data = await api<{ sessions: SessionSummary[] }>("/api/v1/sessions");
+	if (request < sessionListApplied) return;
+	sessionListApplied = request;
+	// The arrangement is pruned against what the list will hold, so a deleted
+	// session cannot keep a pin or a dragged place that no row can clear.
+	const before = getState();
+	const listed = new Set(data.sessions.map((session) => session.id));
+	for (const id of listed) unlistedSessions.delete(id);
+	const keptBefore = before.sessions.filter((session) => unlistedSessions.has(session.id));
+	const presentBefore = new Set([...keptBefore, ...data.sessions].map((session) => session.id));
+	if (before.current) presentBefore.add(before.current.id);
+	const arrangement = pruneSessionPreferences(before, presentBefore);
+	if (arrangementChanged(before, arrangement)) writeSessionPreferences(arrangement);
 	setState((state) => {
-		const listed = new Set(data.sessions.map((session) => session.id));
-		for (const id of listed) unlistedSessions.delete(id);
 		const kept = state.sessions.filter((session) => unlistedSessions.has(session.id));
 		const live = data.sessions.flatMap((session): SessionLiveStatus[] =>
 			session.status ? [{ id: session.id, status: session.status, unread: session.unread === true }] : [],
 		);
-		// A session the host no longer lists is gone for good; its group tag has to
-		// go with it, or the group stays in the picker with no session anywhere. The
-		// open session counts as listed even if this answer omitted it.
-		const present = new Set([...kept, ...data.sessions].map((session) => session.id));
-		if (state.current) present.add(state.current.id);
 		return {
 			sessions: [...kept, ...data.sessions],
-			...pruneTagGroups(state, present),
 			...foldLiveStatuses(state, live, listed),
+			pinnedSessions: arrangement.pinnedSessions,
+			sessionOrder: arrangement.sessionOrder,
 		};
+	});
+	void recovery.then((restored) => {
+		if (!restored || request !== sessionListApplied) return;
+		updateTagGroups((groups) => {
+			// Re-evaluate selection and the latest successful list before and after a pruning save.
+			const state = getState();
+			const present = new Set(state.sessions.map((session) => session.id));
+			if (state.current) present.add(state.current.id);
+			return pruneTagGroups(groups, present);
+		}, true);
 	});
 }
 
@@ -1343,6 +1634,7 @@ export async function runSessionAction(action: SessionAction, session: SessionSu
 			if (state.current?.id === session.id) startDraft(state.bootstrapCwd);
 			// After leaving it: leaving a session stashes its tabs.
 			forgetPreviewSession(session.id);
+			forgetComposerDraft(session.id);
 		}
 		await refreshSessions();
 	} catch (error) {
@@ -1409,29 +1701,57 @@ export async function refreshCurrent(): Promise<void> {
 	if (getState().current?.id === current.id) renderSnapshot(snapshot);
 }
 
-/** Reload the registered workspaces (legacy `refreshWorkspaces`, 1984-1987). */
+/**
+ * Reload the registered workspaces and the host's default workspace (legacy
+ * `refreshWorkspaces`, 1984-1987). The default comes along because removing the
+ * launch folder changes it mid-session, and the reroute that follows a removal
+ * has to land in the folder that replaced it.
+ */
 export async function refreshWorkspaces(): Promise<void> {
-	const data = await api<{ workspaces: WebWorkspace[] }>("/api/v1/workspaces");
-	setState({ workspaces: data.workspaces });
+	const data = await api<{
+		workspaces: WebWorkspace[];
+		defaultCwd?: string;
+		defaultCwdFallback?: boolean;
+	}>("/api/v1/workspaces");
+	setState((state) => ({
+		workspaces: data.workspaces,
+		defaultCwd: typeof data.defaultCwd === "string" && data.defaultCwd ? data.defaultCwd : state.defaultCwd,
+		defaultCwdFallback:
+			typeof data.defaultCwdFallback === "boolean" ? data.defaultCwdFallback : state.defaultCwdFallback,
+	}));
 }
 
-/** Open a session and follow its stream (legacy `openSession`, 3122-3130). */
-export async function openSession(id: string): Promise<void> {
+let sessionOpeningGeneration = 0;
+export type SessionOpenOutcome = "opened" | "failed" | "superseded";
+
+/** Legacy action keeps its void contract; navigation-sensitive callers use the explicit outcome. */
+export async function openSession(id: string, options: { reportErrors?: boolean } = {}): Promise<void> {
+	await openSessionWithOutcome(id, options);
+}
+
+/** Only this invocation applying its snapshot and stream can report opened, never an existing current ID. */
+export async function openSessionWithOutcome(
+	id: string,
+	options: { reportErrors?: boolean } = {},
+): Promise<SessionOpenOutcome> {
+	const generation = ++sessionOpeningGeneration;
 	choseSession = true;
-	// The draft this page left behind is gone: it was never a session, so its
-	// placeholder row must not survive under the workspace it named.
 	setUi({ midView: null, childView: null, openingSession: id, draftRow: null });
 	setState({ pendingTurn: null });
+	const ownsOpening = () => generation === sessionOpeningGeneration && getState().ui.openingSession === id;
 	try {
 		const snapshot = await api<SessionSnapshot>(`/api/v1/sessions/${id}`);
-		// A later pick owns the pane; this answer arriving late must not repaint it.
-		if (getState().ui.openingSession !== id) return;
+		if (!ownsOpening()) return "superseded";
+		if (snapshot.id !== id) return "failed";
 		renderSnapshot(snapshot);
 		connectStream(id);
+		return "opened";
 	} catch (error) {
-		if (getState().ui.openingSession === id) showError(errorMessage(error));
+		if (!ownsOpening()) return "superseded";
+		if (options.reportErrors !== false) showError(errorMessage(error));
+		return "failed";
 	} finally {
-		if (getState().ui.openingSession === id) setUi({ openingSession: null });
+		if (ownsOpening()) setUi({ openingSession: null });
 	}
 }
 
@@ -1456,9 +1776,14 @@ export function startDraft(cwd: string = getState().bootstrapCwd, options: { rea
 		dropSideAnswerTabs();
 	}
 	const draftCwd = cwd || getState().bootstrapCwd;
+	// A folder removed from workspace navigation keeps its chats but is no
+	// target for new work; see `workspaceForNewConversation`.
+	const startIn = isHiddenWorkspace(getState(), draftCwd) ? workspaceForNewConversation() : draftCwd;
+	const inputPatch = composerDraftPatch(`draft:${crypto.randomUUID()}`);
 	setState((state) => {
 		const current = state.current;
 		return {
+			...inputPatch,
 			draftPolicy: current ? current.permissionPreset || state.draftPolicy : state.draftPolicy,
 			draftSelection: null,
 			draftFullAccessAnswer: "",
@@ -1470,14 +1795,14 @@ export function startDraft(cwd: string = getState().bootstrapCwd, options: { rea
 			current: null,
 			timelineItems: [],
 			pendingTurn: null,
-			draftCwd,
+			draftCwd: startIn,
 		};
 	});
 	// A new conversation replaces whatever covers the pane (cron / plugin market, a child agent),
 	// and a session still loading from an earlier pick.
-	setUi({ midView: null, childView: null, openingSession: null, draftRow: options.listed ? draftCwd : null });
+	setUi({ midView: null, childView: null, openingSession: null, draftRow: options.listed ? startIn : null });
 	requestPromptFocus();
-	void loadDraftModels(draftCwd);
+	void loadDraftModels(startIn);
 }
 
 /**
@@ -1512,7 +1837,9 @@ export async function refreshModelCatalog(): Promise<void> {
 	const state = getState();
 	if (state.current) {
 		try {
-			renderSnapshot(await apiSend<SessionSnapshot>(`/api/v1/sessions/${state.current.id}/models/refresh`, "POST"));
+			renderSnapshot(await apiSend<SessionSnapshot>(`/api/v1/sessions/${state.current.id}/models/refresh`, "POST"), {
+				fromAction: true,
+			});
 		} catch (error) {
 			showError(errorMessage(error));
 		}
@@ -1521,72 +1848,97 @@ export async function refreshModelCatalog(): Promise<void> {
 	await loadDraftModels(state.draftCwd || state.bootstrapCwd);
 }
 
+const pendingDraftSessions = new Map<string, { promise: Promise<SessionSnapshot>; title: { firstMessage?: string } }>();
+
 /**
  * The current session, creating it from the draft (cwd, policy, model,
  * thinking level) when there is none yet (legacy `createSessionIfNeeded`,
  * 3153-3182). `firstMessage` titles the new sidebar row until the host lists it.
+ * Side questions and first sends share creation and setup only within their originating draft.
  */
 export async function createSessionIfNeeded(firstMessage?: string): Promise<SessionSnapshot> {
 	const state = getState();
+	const pending = pendingDraftSessions.get(state.composerDraftId);
+	if (pending) {
+		if (firstMessage && !pending.title.firstMessage) pending.title.firstMessage = firstMessage;
+		return pending.promise;
+	}
 	if (state.current) return state.current;
-	let snapshot = await apiSend<SessionSnapshot>("/api/v1/sessions", "POST", {
-		cwd: state.draftCwd || state.bootstrapCwd,
-	});
-	// A session whose settings already name Full Access asks the risk question
-	// itself at start (and runs as Approve for Me until answered). Switching
-	// tier on top of that would raise a second copy of the same question.
-	const askedAtStart = snapshot.pendingSelections?.some(isFullAccessRisk) ?? false;
-	if (!askedAtStart && state.draftPolicy && snapshot.permissionPreset !== state.draftPolicy) {
-		snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/policy`, "PATCH", {
-			preset: state.draftPolicy,
+	const title = { firstMessage };
+	const promise = createDraftSession(state, title);
+	pendingDraftSessions.set(state.composerDraftId, { promise, title });
+	return promise;
+}
+
+async function createDraftSession(state: AppState, title: { firstMessage?: string }): Promise<SessionSnapshot> {
+	const release = retainComposerDraftWork(state.composerDraftId);
+	try {
+		let snapshot = await apiSend<SessionSnapshot>("/api/v1/sessions", "POST", {
+			cwd: state.draftCwd || state.bootstrapCwd,
 		});
-	}
-	// The user already answered the risk question in the draft; hand that
-	// answer to the kernel instead of asking twice. Without one (a tier carried
-	// over from another session), the question stays open for the dialog.
-	const risk = snapshot.pendingSelections?.find(isFullAccessRisk);
-	if (risk && state.draftPolicy === FULL_ACCESS_PRESET && state.draftFullAccessAnswer) {
-		snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/selections/response`, "POST", {
-			id: risk.id,
-			value: state.draftFullAccessAnswer,
-		});
-	}
-	if (state.draftModel) {
-		const [provider, modelId] = state.draftModel.split("\u0000");
-		if (provider && modelId && (snapshot.model?.provider !== provider || snapshot.model?.id !== modelId)) {
-			snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/model`, "PATCH", {
-				provider,
-				modelId,
+		// A session whose settings already name Full Access asks the risk question
+		// itself at start (and runs as Approve for Me until answered). Switching
+		// tier on top of that would raise a second copy of the same question.
+		const askedAtStart = snapshot.pendingSelections?.some(isFullAccessRisk) ?? false;
+		if (!askedAtStart && state.draftPolicy && snapshot.permissionPreset !== state.draftPolicy) {
+			snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/policy`, "PATCH", {
+				preset: state.draftPolicy,
 			});
 		}
+		// The user already answered the risk question in the draft; hand that
+		// answer to the kernel instead of asking twice. Without one (a tier carried
+		// over from another session), the question stays open for the dialog.
+		const risk = snapshot.pendingSelections?.find(isFullAccessRisk);
+		if (risk && state.draftPolicy === FULL_ACCESS_PRESET && state.draftFullAccessAnswer) {
+			snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/selections/response`, "POST", {
+				id: risk.id,
+				value: state.draftFullAccessAnswer,
+			});
+		}
+		if (state.draftModel) {
+			const [provider, modelId] = state.draftModel.split("\u0000");
+			if (provider && modelId && (snapshot.model?.provider !== provider || snapshot.model?.id !== modelId)) {
+				snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/model`, "PATCH", {
+					provider,
+					modelId,
+				});
+			}
+		}
+		// Always send a draft's pick: the host clamps it to the model the session
+		// ended up on, the same way the draft panel did (`clampEffort`). Skipping
+		// a level the model lacks would start the session on the default instead.
+		if (state.draftThinking && snapshot.thinkingLevel !== state.draftThinking) {
+			snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/thinking`, "PATCH", {
+				level: state.draftThinking,
+			});
+		}
+		// Failed setup must leave the input unadopted so it can be retried or released.
+		sessionComposerDraft(snapshot.id, state.composerDraftId);
+		// Show the row now, titled by the message being sent; the host lists the
+		// session once its first prompt is written (see `unlistedSessions`).
+		unlistedSessions.add(snapshot.id);
+		const now = new Date().toISOString();
+		setState((current) => ({
+			sessions: mergeSessionSummary(current.sessions, {
+				id: snapshot.id,
+				cwd: snapshot.cwd,
+				created: now,
+				modified: now,
+				...(title.firstMessage ? { firstMessage: title.firstMessage } : {}),
+			}),
+		}));
+		// Creation may finish after the reader selected another conversation.
+		if (getState().composerDraftId !== state.composerDraftId || getState().ui.openingSession) return snapshot;
+		// The real row replaces the draft placeholder.
+		setUi({ draftRow: null });
+		renderSnapshot(snapshot, { adoptDraft: true });
+		connectStream(snapshot.id);
+		void refreshSessions().catch(() => {});
+		return snapshot;
+	} finally {
+		pendingDraftSessions.delete(state.composerDraftId);
+		release();
 	}
-	// Always send a draft's pick: the host clamps it to the model the session
-	// ended up on, the same way the draft panel did (`clampEffort`). Skipping
-	// a level the model lacks would start the session on the default instead.
-	if (state.draftThinking && snapshot.thinkingLevel !== state.draftThinking) {
-		snapshot = await apiSend<SessionSnapshot>(`/api/v1/sessions/${snapshot.id}/thinking`, "PATCH", {
-			level: state.draftThinking,
-		});
-	}
-	// Show the row now, titled by the message being sent; the host lists the
-	// session only after its first reply is saved (see `unlistedSessions`).
-	unlistedSessions.add(snapshot.id);
-	const now = new Date().toISOString();
-	setState((current) => ({
-		sessions: mergeSessionSummary(current.sessions, {
-			id: snapshot.id,
-			cwd: snapshot.cwd,
-			created: now,
-			modified: now,
-			...(firstMessage ? { firstMessage } : {}),
-		}),
-	}));
-	// The real row replaces the draft placeholder.
-	setUi({ draftRow: null });
-	renderSnapshot(snapshot, { adoptDraft: true });
-	connectStream(snapshot.id);
-	void refreshSessions().catch(() => {});
-	return snapshot;
 }
 
 /** Stop the running turn of the current session (legacy `interruptCurrent`, 3245-3254). */
@@ -1673,9 +2025,9 @@ export function continueWithoutLogin(): void {
 /**
  * Whether bootstrap must wait behind the sign-in gate.
  *
- * Only when no model can run at all: no Step credential and no usable custom
- * model. Desktop asks on every such start; plain Web keeps its terminal
- * `step login` path and asks only after an explicit sign-out from the page.
+ * Desktop stays usable without an account for local history, settings and migration.
+ * Plain Web keeps its terminal `step login` path and asks after an explicit sign-out.
+ * Model readiness is checked when the user actually sends a request.
  */
 export function signInGateNeeded(input: {
 	readonly desktop: boolean;
@@ -1684,15 +2036,48 @@ export function signInGateNeeded(input: {
 	readonly customModels: boolean;
 }): boolean {
 	if (!input.login || input.login.configured || input.customModels) return false;
-	return input.desktop || input.signedOut;
+	return !input.desktop && input.signedOut;
 }
 
-/**
- * Sign in, load workspaces and sessions, then open the most relevant session
- * (or start a draft in the launch folder). Runs once per page load; a second
- * call (React StrictMode double effects) is ignored because the launch token
- * cannot be exchanged twice.
- */
+let onboardingWrite: Promise<void> = Promise.resolve();
+function serializeOnboardingWrite(operation: () => Promise<void>): Promise<void> {
+	const result = onboardingWrite.then(operation);
+	// A failed optional write is reported by its caller; it must not poison later explicit actions.
+	onboardingWrite = result.catch(() => {});
+	return result;
+}
+
+/** Keep a durable pointer when the invitation starts a job; this does not change the job's state. */
+export function recordMigrationOnboardingJob(lastJobId: string): Promise<void> {
+	return serializeOnboardingWrite(async () => {
+		const current = getState().desktopOnboarding;
+		if (!current || current.status === "completed" || current.status === "skipped") return;
+		const next = await apiSend<DesktopOnboardingState>("/api/v1/desktop-onboarding", "PATCH", {
+			expectedRevision: current.revision,
+			status: "in_progress",
+			lastJobId,
+		});
+		setState({ desktopOnboarding: next });
+	});
+}
+
+/** Persist the user's decision; completing the invitation does not assert that every item imported. */
+export async function finishMigrationOnboarding(status: "completed" | "skipped", lastJobId?: string): Promise<void> {
+	await serializeOnboardingWrite(async () => {
+		const current = getState().desktopOnboarding;
+		if (!current) throw new Error("onboarding-unavailable");
+		const next = await apiSend<DesktopOnboardingState>("/api/v1/desktop-onboarding", "PATCH", {
+			expectedRevision: current.revision,
+			status,
+			...(lastJobId ? { lastJobId } : {}),
+		});
+		setState({ desktopOnboarding: next });
+		setUi({ migrationInvitation: false });
+	});
+	await Promise.all([refreshWorkspaces(), refreshSessions()]);
+}
+
+/** Establish local authentication, initialize once, then open history or a draft without a Desktop login barrier. */
 export async function bootstrap(options: BootstrapOptions = {}): Promise<void> {
 	if (bootstrapped) return;
 	bootstrapped = true;
@@ -1710,8 +2095,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<void> {
 		const boot = await api<BootstrapPayload>("/api/v1/bootstrap");
 		setState({
 			bootstrapCwd: boot.cwd,
+			// The launch folder unless the user removed it; then the host reports
+			// the home fallback the page names "默认项目".
+			defaultCwd: boot.defaultCwd || boot.cwd,
+			defaultCwdFallback: boot.defaultCwdFallback === true,
 			directoryPicker: boot.directoryPicker === "native" ? "native" : "browse",
 			login: boot.login ?? null,
+			desktopOnboarding: boot.desktopOnboarding ?? null,
+			migrationAvailable: boot.migrationAvailable === true,
 			draftCwd: boot.cwd,
 			// Only what the host actually reported: an absent field stays absent
 			// rather than being invented from the page's own bundle.
@@ -1744,6 +2135,24 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<void> {
 		}
 		await refreshWorkspaces();
 		await refreshSessions();
+		if (
+			isDesktopHost() &&
+			boot.migrationAvailable &&
+			boot.migrationSuggested &&
+			boot.desktopOnboarding?.status === "unseen"
+		) {
+			try {
+				const offered = await apiSend<DesktopOnboardingState>("/api/v1/desktop-onboarding", "PATCH", {
+					expectedRevision: boot.desktopOnboarding.revision,
+					status: "offered",
+				});
+				setState({ desktopOnboarding: offered });
+				setUi({ migrationInvitation: true });
+			} catch {
+				// Optional onboarding cannot prevent local use; its settings entry remains available.
+				showError(t("migrationOnboardingUnavailable"), false);
+			}
+		}
 		const sessions = getState().sessions;
 		const first =
 			sessions.find((session) => !session.archived && session.cwdAvailable !== false && session.cwd === boot.cwd) ??

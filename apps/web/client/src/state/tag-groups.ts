@@ -1,4 +1,7 @@
 import type { TagColor } from "../i18n/messages";
+import { STORAGE_KEYS } from "../lib/storage";
+import { parseTagGroupData, TAG_GROUP_DATA_LIMIT, type TagGroupData } from "../platform/desktop-bridge";
+import { isDesktopHost } from "../platform/host";
 import type { TagGroup } from "./types";
 
 /**
@@ -25,6 +28,27 @@ export interface PrunedTagGroups {
 	readonly groups: readonly TagGroup[];
 	readonly tags: ReadonlyMap<string, TagColor>;
 	readonly currentFilter: TagColor | null;
+}
+
+/** Group reads must distinguish absent metadata from unreadable or corrupt data. */
+export function readBrowserTagGroups(): TagGroupData | null {
+	const raw = localStorage.getItem(STORAGE_KEYS.tagGroups);
+	if (raw === null) return null;
+	if (raw.length > TAG_GROUP_DATA_LIMIT) throw new Error("Tag group data is too large");
+	return parseTagGroupData(JSON.parse(raw));
+}
+
+/** Initial render is synchronous; the persistence owner reports failures and blocks later writes. */
+export function readInitialTagGroups(): Pick<TagGroupState, "groups" | "tags"> {
+	if (!isDesktopHost()) {
+		try {
+			const data = readBrowserTagGroups();
+			if (data) return { groups: data.groups, tags: new Map(data.tags) };
+		} catch {
+			// Rendering can proceed, but restoration rechecks raw storage before edits or list pruning.
+		}
+	}
+	return { groups: [], tags: new Map() };
 }
 
 /** Keep only tags of `listed` sessions, and only groups some remaining tag still names. */

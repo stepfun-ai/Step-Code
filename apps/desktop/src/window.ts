@@ -23,21 +23,17 @@ import {
 import type { DesktopBrowserGuests } from "./browser-guests.ts";
 import { VERSION_ARGUMENT } from "./ipc-channels.ts";
 import { canvasColor } from "./pages.ts";
+import { isAllowedPermission, originOf } from "./permissions.ts";
 import type { DesktopStateStore, WindowState } from "./state.ts";
 
 const DEFAULT_SIZE = { width: 1280, height: 840 };
 const MIN_SIZE = { width: 720, height: 480 };
 /** Where macOS draws the traffic lights; the web client reserves this strip in its desktop CSS. */
 export const TRAFFIC_LIGHT_POSITION = { x: 16, y: 16 };
-/**
- * Permissions the web client uses: navigator.clipboard.writeText, fullscreen,
- * and `media` — the composer's microphone button records through getUserMedia,
- * which Electron denies by default. macOS still shows its own TCC prompt the
- * first time; that is expected and the client's error text says so.
- */
-const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write", "fullscreen", "media"]);
 
 export interface MainWindowOptions {
+	readonly onNativeClose: (window: BrowserWindow) => void;
+	readonly onDocumentChanged: (window: BrowserWindow, url: string) => void;
 	readonly preload: string;
 	readonly version: string;
 	readonly state: DesktopStateStore;
@@ -47,14 +43,6 @@ export interface MainWindowOptions {
 	readonly getServerOrigin: () => string | undefined;
 	/** Lease and policy owner for the embedded browser's `<webview>` guests. */
 	readonly browserGuests: DesktopBrowserGuests;
-}
-
-function originOf(url: string): string | undefined {
-	try {
-		return new URL(url).origin;
-	} catch {
-		return undefined;
-	}
 }
 
 function openIfWeb(url: string): void {
@@ -91,7 +79,7 @@ function configureSession(getServerOrigin: () => string | undefined): void {
 	// other origin gets Electron's default denial.
 	const allowed = (_contents: unknown, permission: string, requestingUrl: string): boolean => {
 		const origin = getServerOrigin();
-		return ALLOWED_PERMISSIONS.has(permission) && origin !== undefined && originOf(requestingUrl) === origin;
+		return isAllowedPermission(permission, requestingUrl, origin);
 	};
 	session.defaultSession.setPermissionCheckHandler((_contents, permission, requestingUrl) =>
 		allowed(_contents, permission, requestingUrl),
@@ -166,6 +154,9 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
 			additionalArguments: [`${VERSION_ARGUMENT}${options.version}`],
 		},
 	});
+	// Windows/Linux render the application menu as an in-window bar; hide it but
+	// keep the menu installed so its accelerators (zoom, reload, DevTools) still work.
+	if (!darwin) window.setMenuBarVisibility(false);
 	if (saved?.maximized) window.maximize();
 
 	window.webContents.setWindowOpenHandler(({ url }) => {
@@ -184,6 +175,8 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
 	// The page title is the product name; keep it stable in the Dock / taskbar.
 	window.on("page-title-updated", (event) => event.preventDefault());
 
+	window.on("close", () => options.onNativeClose(window));
+	window.webContents.on("did-navigate", (_event, url) => options.onDocumentChanged(window, url));
 	installContextMenu(window);
 	persistBounds(window, options.state);
 	return window;

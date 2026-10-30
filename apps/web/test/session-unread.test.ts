@@ -47,6 +47,8 @@ test("an outcome reached with no page watching stays unread until a page opens t
 		const statusOf = () => store.statuses().find((entry) => entry.id === session.id);
 
 		assert.deepEqual(statusOf(), { id: session.id, status: "idle", unread: false });
+		// Nothing has been published yet, so a read taken now orders before every event.
+		assert.equal(session.snapshot().revision, 0);
 
 		session.publishError("background failure");
 		assert.deepEqual(statusOf(), { id: session.id, status: "failed", unread: true });
@@ -54,7 +56,20 @@ test("an outcome reached with no page watching stays unread until a page opens t
 		// Opening the stream is looking at the session: the outcome is read, and the page is told.
 		const unwatch = session.watch();
 		assert.deepEqual(statusOf(), { id: session.id, status: "failed", unread: false });
-		assert.deepEqual(events.at(-1), { type: "status", status: "failed", unread: false });
+		const watched = events.at(-1);
+		assert.ok(watched?.type === "status" && watched.revision > 0, "the status event carries its revision");
+		assert.deepEqual({ type: watched.type, status: watched.status, unread: watched.unread }, {
+			type: "status",
+			status: "failed",
+			unread: false,
+		});
+		assert.ok(
+			events.every((event, index) => index === 0 || event.revision > events[index - 1].revision),
+			"revisions increase with the events a listener receives",
+		);
+		// A snapshot is stamped with the newest revision when it is serialized, so a
+		// client can drop one that an event has already overtaken.
+		assert.equal(session.snapshot().revision, watched.revision);
 
 		// An outcome reached while a page watches is seen as it happens.
 		session.publishError("watched failure");

@@ -243,8 +243,11 @@ function parseThinkingLevelMap(value: unknown, id: string): ThinkingLevelMap | u
 	return thinkingLevelMapOf(value);
 }
 
+/** One model row as the form sent it: the id, plus whatever the form edits. */
+type DeclaredModel = { readonly id: string } & Record<string, unknown>;
+
 /** The model catalog from the client: an id per row is required, the rest is optional. */
-function parseModelEntries(input: unknown): Array<Record<string, unknown>> {
+function parseModelEntries(input: unknown): DeclaredModel[] {
 	if (input === undefined) return [];
 	if (!Array.isArray(input)) throw new SettingsError(400, "models must be an array");
 	const seen = new Set<string>();
@@ -276,6 +279,51 @@ function parseModelEntries(input: unknown): Array<Record<string, unknown>> {
 	});
 }
 
+/**
+ * Declaration fields this page never displays, so saving it must neither read
+ * nor drop them.
+ *
+ * They are not decoration: a model's `compat` decides the request shape (for an
+ * Anthropic-compatible endpoint, `compat.forceAdaptiveThinking` is the
+ * difference between adaptive thinking and the legacy budget payload a newer
+ * model rejects), while `cost`, `samplingParams` and `headers` are values the
+ * user wrote by hand. Rebuilding the declaration from the form alone would
+ * silently change how requests are made — the reason these lists exist.
+ */
+const MODEL_FIELDS_KEPT_ON_SAVE = ["api", "baseUrl", "cost", "samplingParams", "headers", "compat"] as const;
+const PROVIDER_FIELDS_KEPT_ON_SAVE = ["headers", "compat", "authHeader", "modelOverrides"] as const;
+
+function fieldsKept(
+	declaration: Record<string, unknown> | undefined,
+	fields: readonly string[],
+): Record<string, unknown> {
+	const kept: Record<string, unknown> = {};
+	if (!declaration) return kept;
+	for (const field of fields) {
+		if (declaration[field] !== undefined) kept[field] = declaration[field];
+	}
+	return kept;
+}
+
+/**
+ * Re-attach the per-model fields the form does not show.
+ *
+ * A row that is no longer sent was removed on purpose, so it stays removed; a
+ * row that is still listed keeps the values this page cannot display.
+ */
+function keepUnmanagedModelFields(
+	existing: Record<string, unknown> | undefined,
+	models: readonly DeclaredModel[],
+): DeclaredModel[] {
+	const stored = new Map<string, Record<string, unknown>>();
+	if (Array.isArray(existing?.models)) {
+		for (const entry of existing.models) {
+			if (isRecord(entry) && typeof entry.id === "string") stored.set(entry.id, entry);
+		}
+	}
+	return models.map((model) => ({ ...fieldsKept(stored.get(model.id), MODEL_FIELDS_KEPT_ON_SAVE), ...model }));
+}
+
 export interface ModelProviderInput {
 	readonly name?: unknown;
 	readonly baseUrl?: unknown;
@@ -284,15 +332,26 @@ export interface ModelProviderInput {
 	readonly models?: unknown;
 }
 
+/** What the form sends, as `models.json` stores it, before unshown fields are restored. */
+export interface ModelProviderDeclaration extends Record<string, unknown> {
+	readonly baseUrl: string;
+	readonly api: string;
+	readonly name?: string;
+	readonly models?: readonly DeclaredModel[];
+}
+
 /**
- * Build the declaration `models.json` stores.
+ * Build the declaration `models.json` stores from what the form sent.
+ *
+ * Only the fields this page shows are rebuilt here; `saveModelProvider` puts
+ * back the ones it does not.
  *
  * The API key is deliberately not part of it. A secret belongs in `auth.json`,
  * while `models.json` is a file users copy between machines and paste into bug
  * reports; the schema would accept an `apiKey` here, and this page still keeps
  * it out.
  */
-export function parseModelProvider(input: ModelProviderInput): Record<string, unknown> {
+export function parseModelProvider(input: ModelProviderInput): ModelProviderDeclaration {
 	const typedUrl = stringOf(input.baseUrl);
 	if (!typedUrl) throw new SettingsError(400, "API address is required");
 	try {
@@ -354,6 +413,10 @@ export async function setStoredApiKey(id: string, key: string | undefined): Prom
  * browser — so a blank field means "leave it as it is" rather than "remove it".
  * `options.removeKey` is the explicit removal the editor sends when the user
  * asks for one; a typed key always wins over it.
+ *
+ * The same rule covers everything else this page cannot show: an edit replaces
+ * what the form renders and keeps the rest (see {@link MODEL_FIELDS_KEPT_ON_SAVE}).
+ * A user who only rotates a key must not thereby change how requests are built.
  */
 export async function saveModelProvider(
 	id: string,
@@ -370,7 +433,13 @@ export async function saveModelProvider(
 		// so replacing the declaration must not drop it. Only the key the page owns
 		// (in auth.json) is managed here.
 		const keepKey = existing?.apiKey === undefined ? {} : { apiKey: existing.apiKey };
-		return { ...keepKey, ...declaration };
+		const models = declaration.models;
+		return {
+			...fieldsKept(existing, PROVIDER_FIELDS_KEPT_ON_SAVE),
+			...keepKey,
+			...declaration,
+			...(models && models.length > 0 ? { models: keepUnmanagedModelFields(existing, models) } : {}),
+		};
 	});
 	if (key) await setStoredApiKey(id, key);
 	else if (options.removeKey) await setStoredApiKey(id, undefined);
@@ -389,9 +458,26 @@ export async function deleteModelProvider(id: string): Promise<void> {
 }
 
 export interface DiscoverModelsInput {
+	readonly providerId?: unknown;
 	readonly baseUrl?: unknown;
 	readonly api?: unknown;
 	readonly apiKey?: unknown;
+}
+
+/**
+ * The key a session would use for `providerId`, resolved by the kernel from the
+ * credential file and `models.json` (stored entry first, then the declaration's
+ * own key), or `undefined` when there is none or the id is not a custom provider.
+ *
+ * The key stays on the host: it is only attached to the outgoing request.
+ */
+async function storedProviderApiKey(providerId: string): Promise<string | undefined> {
+	if (!PROVIDER_ID.test(providerId) || providerId.length > MAX_PROVIDER_ID || providerId === STEP_PROVIDER_ID) {
+		return undefined;
+	}
+	const runtime = await ModelRuntime.create({ authPath: modelsAuthPath(), modelsPath: modelsJsonPath() });
+	await runtime.refresh({ allowNetwork: false });
+	return (await runtime.getAuth(providerId))?.auth.apiKey || undefined;
 }
 
 /**
@@ -399,18 +485,23 @@ export interface DiscoverModelsInput {
  *
  * Nothing is stored: this answers for a declaration the user is still editing, so
  * a provider can be filled in and saved in one pass instead of save-then-return.
- * The key, when given, is used for this request only.
+ * A key typed in the form is used for this request only; a blank key field means
+ * "keep the stored key", as on save and in the connection test, so the stored
+ * credential for `providerId` is used instead.
  *
  * A failure keeps the endpoint's own words where the protocol reported them (an
  * HTTP status, a JSON parse failure), and maps the rest to a 4xx that names what
  * the user can change: the address, the protocol, or the key.
  */
 export async function discoverProviderModels(input: DiscoverModelsInput): Promise<DiscoveredModel[]> {
+	const typedKey = stringOf(input.apiKey);
+	const providerId = stringOf(input.providerId);
+	const apiKey = typedKey || (providerId ? await storedProviderApiKey(providerId) : undefined);
 	try {
 		return await discoverModels({
 			api: stringOf(input.api) || undefined,
 			baseUrl: stringOf(input.baseUrl),
-			apiKey: stringOf(input.apiKey) || undefined,
+			apiKey,
 		});
 	} catch (error) {
 		if (error instanceof ModelDiscoveryError) {
