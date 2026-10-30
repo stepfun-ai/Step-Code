@@ -4,6 +4,9 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MarkdownContent, type MarkdownContentProps } from "../client/src/ui/MarkdownView/markdown-content.ts";
 
+/** The globe every web link starts with. */
+const GLOBE = '<svg class="md-link-icon" aria-hidden="true"><use href="#i-globe"></use></svg>';
+
 const labels = { code: "Code", copy: "Copy", table: "Table", diagram: "Diagram" };
 
 /** Rendered body without the Streamdown root wrapper. */
@@ -15,7 +18,7 @@ function render(source: string, props: Partial<MarkdownContentProps> = {}): stri
 test("renders named sources with escaped URLs and safe new-tab attributes", () => {
 	assert.equal(
 		render("- [今日金价](https://example.com/price?a=1&b=2)"),
-		'<ul>\n<li><a href="https://example.com/price?a=1&amp;b=2" target="_blank" rel="noopener noreferrer">今日金价</a></li>\n</ul>',
+		`<ul>\n<li><a href="https://example.com/price?a=1&amp;b=2" target="_blank" rel="noopener noreferrer">${GLOBE}今日金价</a></li>\n</ul>`,
 	);
 });
 
@@ -24,13 +27,13 @@ test("supports parentheses in destinations and bare URLs beside punctuation", ()
 		"[Source](https://example.com/wiki/Gold_(metal)) (https://example.com/price). https://example.com/报价。",
 	);
 	assert.match(html, /href="https:\/\/example.com\/wiki\/Gold_\(metal\)"/);
-	assert.match(html, /href="https:\/\/example.com\/price"[^>]*>https:\/\/example.com\/price<\/a>\)\./);
-	assert.match(html, /href="https:\/\/example.com\/%E6%8A%A5%E4%BB%B7"[^>]*>https:\/\/example.com\/报价<\/a>。/);
+	assert.match(html, /href="https:\/\/example.com\/price"[^>]*><svg[^]*?<\/svg>https:\/\/example.com\/price<\/a>\)\./);
+	assert.match(html, /href="https:\/\/example.com\/%E6%8A%A5%E4%BB%B7"[^>]*><svg[^]*?<\/svg>https:\/\/example.com\/报价<\/a>。/);
 });
 
 test("emphasis around a bare URL never becomes part of the link", () => {
 	const url = "https://github.com/stepfun-ai/Step-Code/pull/320";
-	const link = `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`;
+	const link = `<a href="${url}" target="_blank" rel="noopener noreferrer">${GLOBE}${url}</a>`;
 	for (const [source, expected] of [
 		[`**${url}** done`, `<strong>${link}</strong> done`],
 		[`已创建：**${url}**。仓库在`, `已创建：<strong>${link}</strong>。仓库在`],
@@ -63,7 +66,7 @@ test("rejects executable and local destinations while showing raw HTML as text",
 test("images never load: they read as a link to their source", () => {
 	const html = render("![chart](https://example.com/p.png) ![local](./out/a.png)");
 	assert.doesNotMatch(html, /<img/);
-	assert.match(html, /<a href="https:\/\/example.com\/p.png"[^>]*>chart<\/a>/);
+	assert.match(html, /<a href="https:\/\/example.com\/p.png"[^>]*><svg[^]*?<\/svg>chart<\/a>/);
 	assert.match(html, / local<\/p>$/);
 });
 
@@ -71,7 +74,7 @@ test("handles incomplete streaming Markdown and keeps surrounding formatting", (
 	assert.doesNotMatch(render("[Source](https://", { streaming: true }), /<a /);
 	assert.equal(
 		render("## Sources\n**Read [source](https://example.com)**"),
-		'<h3>Sources</h3>\n<p><strong>Read <a href="https://example.com" target="_blank" rel="noopener noreferrer">source</a></strong></p>',
+		`<h3>Sources</h3>\n<p><strong>Read <a href="https://example.com" target="_blank" rel="noopener noreferrer">${GLOBE}source</a></strong></p>`,
 	);
 	// Streaming closes an unfinished emphasis instead of showing its marker.
 	assert.equal(render("**bold so far", { streaming: true }), "<p><strong>bold so far</strong></p>");

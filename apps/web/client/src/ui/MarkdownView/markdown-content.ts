@@ -115,10 +115,16 @@ function Destination({ destination, children }: { readonly destination: string; 
 			: h(Fragment, null, children);
 	}
 	if (isWebDestination(destination)) {
-		return h("a", { href: destination, target: "_blank", rel: "noopener noreferrer" }, children);
+		return h("a", { href: destination, target: "_blank", rel: "noopener noreferrer" }, LINK_ICON, children);
 	}
 	return h(Fragment, null, children);
 }
+
+/**
+ * The globe marks a web link at a glance. It references the shared sprite
+ * directly, because this module stays free of CSS imports (and so of `Icon`).
+ */
+const LINK_ICON = h("svg", { className: "md-link-icon", "aria-hidden": "true" }, h("use", { href: "#i-globe" }));
 
 function MarkdownLink({ href, children }: JSX.IntrinsicElements["a"] & ExtraProps) {
 	return h(Destination, { destination: typeof href === "string" ? href : "" }, children);

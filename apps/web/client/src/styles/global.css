@@ -198,6 +198,9 @@
   --focus-border: #9d9da1;
   --accent: #1677ff;
   --accent-ring: rgb(22 119 255 / 12%);
+  /* Links in replies and Markdown previews: blue in every theme, so they read apart from the prose. */
+  --link: #1677ff;
+  --link-hover: #0958d9;
   /* ── Session-mode accents ────────────────────────────────────────── */
   /* Shared by the composer (card glow, prompt lead chips, ＋ menu rows) and
      the conversation's command-echo rows: fixed values, mixed with the theme
@@ -243,6 +246,8 @@ html[data-theme="dark"] {
   --term-yellow: #e8c06a;
   --term-cyan: #6cc6d4;
   --term-blue: #8ab8ff;
+  --link: #5ea2ff;
+  --link-hover: #8ab8ff;
   --term-magenta: #d39af0;
   --danger: #ff7b6f;
   --attention: #f2bf58;
@@ -635,17 +640,17 @@ html[data-theme="dark"] .sidebar {
   margin: 0 0.45em 0 0;
   vertical-align: -0.1em;
 }
-/* Links read in the text's own ink; the underline marks them, so a reply is not dotted with violet. */
+/* Links take the link blue (MarkdownView adds a globe) so they stand out from the prose; hover underlines them. */
 .message-body a {
-  color: inherit;
-  text-decoration: underline;
-  text-decoration-color: var(--line-strong);
+  color: var(--link);
+  text-decoration: none;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
-  transition: text-decoration-color var(--fast);
+  transition: color var(--fast);
 }
 .message-body a:hover {
-  text-decoration-color: currentColor;
+  color: var(--link-hover);
+  text-decoration: underline;
 }
 .message-body strong {
   font-weight: 600;
