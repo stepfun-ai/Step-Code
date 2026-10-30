@@ -153,20 +153,23 @@ function triggerRatioKey(providerId: string, modelId: string): string {
 
 /**
  * Set this provider's per-model trigger ratios to exactly `ratios` (model id ->
- * ratio): its other keys are removed, keys of other providers are untouched.
+ * ratio). The table is rewritten under the settings file lock from what is on
+ * disk then, so keys of other providers (even ones the trigger policy ignores)
+ * and keys another process wrote meanwhile are kept. `action` names what the
+ * caller already did, for an error that arrives after it.
  */
-async function replaceProviderTriggerRatios(providerId: string, ratios: ReadonlyMap<string, number>): Promise<void> {
+async function replaceProviderTriggerRatios(
+	providerId: string,
+	ratios: ReadonlyMap<string, number>,
+	action: string,
+): Promise<void> {
 	const prefix = `${providerId}/`;
+	const failed = (message: string) =>
+		new SettingsError(500, `${action}, but its compaction thresholds could not be saved: ${message}`);
 	const settings = userSettings();
 	// Load-time reports (an invalid value elsewhere in the file) are not this
 	// write's failure; drop them so only errors from the write below remain.
 	settings.drainErrors();
-	const current = settings.getGlobalCompactionModelTriggerRatios();
-	const owned = Object.keys(current).filter((key) => key.startsWith(prefix));
-	const unchanged =
-		owned.length === ratios.size &&
-		[...ratios].every(([modelId, ratio]) => current[triggerRatioKey(providerId, modelId)] === ratio);
-	if (unchanged) return;
 	try {
 		settings.updateGlobalCompactionModelTriggerRatios((existing) => {
 			const next = Object.fromEntries(Object.entries(existing).filter(([key]) => !key.startsWith(prefix)));
@@ -174,11 +177,24 @@ async function replaceProviderTriggerRatios(providerId: string, ratios: Readonly
 			return next;
 		});
 	} catch (error) {
-		throw new SettingsError(500, `Could not save the compaction threshold: ${(error as Error).message}`);
+		throw failed((error as Error).message);
 	}
 	await settings.flush();
 	const [failure] = settings.drainErrors();
-	if (failure) throw new SettingsError(500, `Could not save the compaction threshold: ${failure.error.message}`);
+	if (failure) throw failed(failure.error.message);
+}
+
+/**
+ * The user's per-model trigger ratios for the list. An unreadable or unwritable
+ * config must not hide the providers, so it reads as "no thresholds" here; the
+ * save path reports the same problem when the user tries to change one.
+ */
+function readTriggerRatios(): Record<string, number> {
+	try {
+		return userSettings().getGlobalCompactionModelTriggerRatios();
+	} catch {
+		return {};
+	}
 }
 
 function stringOf(value: unknown): string {
@@ -247,7 +263,7 @@ export async function hasUsableCustomModel(): Promise<boolean> {
 /** Every custom provider in `models.json`, sorted so the list is stable between reads. */
 export async function listModelProviders(): Promise<WebModelProvider[]> {
 	const stored = await storedCredentialIds();
-	const ratios = userSettings().getGlobalCompactionModelTriggerRatios();
+	const ratios = readTriggerRatios();
 	const providers: WebModelProvider[] = [];
 	for (const [id, config] of Object.entries(readModelsJsonProviders(modelsJsonPath()))) {
 		providers.push({
@@ -539,7 +555,7 @@ export async function saveModelProvider(
 	// Written last, like the key: a threshold without its provider would be
 	// unreachable, while a provider whose threshold failed to save still runs
 	// at the default and the error says so.
-	await replaceProviderTriggerRatios(id, thresholds);
+	await replaceProviderTriggerRatios(id, thresholds, `Provider '${id}' was saved`);
 }
 
 /** Remove one provider and the key this page stored for it. */
@@ -552,7 +568,7 @@ export async function deleteModelProvider(id: string): Promise<void> {
 	// Only an api-key credential this page could have written is cleared; an
 	// account login for the same id would not be an api_key entry.
 	await setStoredApiKey(id, undefined);
-	await replaceProviderTriggerRatios(id, new Map());
+	await replaceProviderTriggerRatios(id, new Map(), `Provider '${id}' was removed`);
 }
 
 export interface DiscoverModelsInput {

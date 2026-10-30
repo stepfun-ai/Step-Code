@@ -51,13 +51,53 @@ describe("global per-model compaction trigger ratios", () => {
 	});
 
 	it("rejects a ratio outside the trigger policy range without writing", async () => {
-		const { home, agentDir } = fixture('[compaction.modelTriggerRatios]\n"gw/a" = 0.6\n');
+		const { home, agentDir, configPath } = fixture('[compaction.modelTriggerRatios]\n"gw/a" = 0.6\n');
+		const before = readFileSync(configPath, "utf8");
+		for (const bad of [0.99, 0.4]) {
+			const manager = createStepSettingsManager(home, agentDir, { configDirName: ".stepcode" });
+			manager.updateGlobalCompactionModelTriggerRatios(() => ({ "gw/a": bad }));
+			await manager.flush();
+			const errors = manager.drainErrors();
+			expect(errors.map((error) => error.error.message).join("\n")).toMatch(/must be a number in 0\.5-0\.95/u);
+		}
+		expect(readFileSync(configPath, "utf8")).toBe(before);
+	});
+
+	it("keeps entries it does not own byte-for-byte, even ones the trigger policy ignores", async () => {
+		const { home, agentDir } = fixture('[compaction.modelTriggerRatios]\n"bad/z" = 0.4\n"gw/a" = 0.6\n');
 		const manager = createStepSettingsManager(home, agentDir, { configDirName: ".stepcode" });
-		expect(() => manager.updateGlobalCompactionModelTriggerRatios(() => ({ "gw/a": 0.99 }))).toThrow(RangeError);
-		expect(() => manager.updateGlobalCompactionModelTriggerRatios(() => ({ "gw/a": 0.4 }))).toThrow(RangeError);
+		manager.drainErrors();
+		manager.updateGlobalCompactionModelTriggerRatios((current) => ({ ...current, "gw/a": 0.7 }));
+		await manager.flush();
+		expect(manager.drainErrors()).toEqual([]);
+		const reread = createStepSettingsManager(home, agentDir, { configDirName: ".stepcode" });
+		expect(reread.getGlobalSettings().compaction?.modelTriggerRatios).toEqual({ "bad/z": 0.4, "gw/a": 0.7 });
+	});
+
+	it("reads the table under the lock, so a key written after the manager loaded survives", async () => {
+		const { home, agentDir, configPath } = fixture('[compaction.modelTriggerRatios]\n"gw/a" = 0.6\n');
+		const manager = createStepSettingsManager(home, agentDir, { configDirName: ".stepcode" });
+		writeFileSync(configPath, '[compaction.modelTriggerRatios]\n"gw/a" = 0.6\n"cli/m" = 0.75\n');
+		manager.updateGlobalCompactionModelTriggerRatios((current) => ({ ...current, "gw/b": 0.8 }));
 		await manager.flush();
 		const reread = createStepSettingsManager(home, agentDir, { configDirName: ".stepcode" });
-		expect(reread.getGlobalCompactionModelTriggerRatios()).toEqual({ "gw/a": 0.6 });
+		expect(reread.getGlobalCompactionModelTriggerRatios()).toEqual({ "gw/a": 0.6, "cli/m": 0.75, "gw/b": 0.8 });
+		expect(manager.getGlobalCompactionModelTriggerRatios()).toEqual({ "gw/a": 0.6, "cli/m": 0.75, "gw/b": 0.8 });
+	});
+
+	it("removes the table when the last entry goes, and writes nothing when nothing changes", async () => {
+		const { home, agentDir, configPath } = fixture(
+			'[compaction]\ntriggerRatio = 0.85\n\n[compaction.modelTriggerRatios]\n"gw/a" = 0.6\n',
+		);
+		const manager = createStepSettingsManager(home, agentDir, { configDirName: ".stepcode" });
+		manager.updateGlobalCompactionModelTriggerRatios(() => ({}));
+		await manager.flush();
+		const cleared = readFileSync(configPath, "utf8");
+		expect(cleared).not.toContain("modelTriggerRatios");
+		expect(cleared).toContain("triggerRatio = 0.85");
+		manager.updateGlobalCompactionModelTriggerRatios(() => ({}));
+		await manager.flush();
+		expect(readFileSync(configPath, "utf8")).toBe(cleared);
 	});
 
 	it("refuses to write when the user config cannot be loaded", async () => {

@@ -926,6 +926,12 @@ test(
 			return until(() => $("[data-model-row='e2e-model-large'] [data-model-field='maxTokens']"), "the max-output field");
 		};
 		const first = await openEditor();
+		// A stored row starts folded; its chevron opens the parameter panel.
+		const panel = first.closest(".settings-model-details");
+		const startedClosed = panel.hidden;
+		const chevron = $("[data-model-row='e2e-model-large'] .settings-model-expand");
+		chevron.click();
+		await until(() => !panel.hidden && chevron.getAttribute("aria-expanded") === "true", "the opened parameter panel");
 		const before = {
 			value: first.value,
 			placeholder: first.placeholder,
@@ -959,13 +965,14 @@ test(
 		const reopenedThreshold = $("[data-model-row='e2e-model-large'] [data-model-field='compactionThreshold']").value;
 		$("#settingsModelEditor .settings-form-footer button[type='button']").click();
 		await until(() => !$("#settingsModelEditor"), "the editor to close after cancelling");
-		return { before, saved, reopened, heldOpen, savedThreshold, reopenedThreshold };
+		return { before, saved, reopened, heldOpen, savedThreshold, reopenedThreshold, startedClosed };
 	`)
     assert.equal(maxOutput.before.value, "", "a model saved without a cap keeps the field empty")
     assert.equal(maxOutput.before.title, "最大输出")
     assert.match(maxOutput.before.placeholder, /16384/u, "the placeholder names the kernel default")
     assert.equal(maxOutput.saved, 64000, "the typed cap reaches models.json")
     assert.equal(maxOutput.reopened, "64000", "the stored cap comes back into the form")
+    assert.equal(maxOutput.startedClosed, true, "a stored model's parameters start folded")
     assert.equal(maxOutput.heldOpen, true, "an out-of-range threshold keeps the editor open on that row")
     assert.equal(maxOutput.savedThreshold, 0.7, "the threshold is saved as the model's trigger ratio")
     assert.equal(maxOutput.reopenedThreshold, "0.7", "the stored threshold comes back into the form")

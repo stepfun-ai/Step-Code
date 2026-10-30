@@ -430,6 +430,42 @@ test("a model's compaction threshold is stored in config.toml, not models.json, 
 	assert.match(afterDelete, /"other\/x" = 0\.8/u);
 });
 
+test("saving a provider keeps another provider's threshold even when the CLI would ignore it", async () => {
+	await mkdir(join(home, ".stepcode"), { recursive: true });
+	await writeFile(join(home, ".stepcode", "config.toml"), '[compaction.modelTriggerRatios]\n"hand/edited" = 0.4\n');
+	await saveModelProvider(
+		"gw-keep",
+		{ baseUrl: "https://gw.example/v1", api: "openai-completions", models: [{ id: "m", compactionThreshold: 0.8 }] },
+		{ replace: false },
+	);
+	const toml = await configToml();
+	assert.match(toml, /"hand\/edited" = 0\.4/u, "an entry this page does not own is left as written");
+	assert.match(toml, /"gw-keep\/m" = 0\.8/u);
+	await deleteModelProvider("gw-keep");
+	assert.match(await configToml(), /"hand\/edited" = 0\.4/u);
+	assert.doesNotMatch(await configToml(), /gw-keep/u);
+});
+
+test("an unreadable config.toml is reported on save and does not hide the provider list", async () => {
+	await mkdir(join(home, ".stepcode"), { recursive: true });
+	const broken = "[compaction\nbroken = ";
+	await writeFile(join(home, ".stepcode", "config.toml"), broken);
+	await assert.rejects(
+		saveModelProvider(
+			"gw-broken",
+			{ baseUrl: "https://gw.example/v1", api: "openai-completions", models: [{ id: "m", compactionThreshold: 0.8 }] },
+			{ replace: false },
+		),
+		(error: unknown) =>
+			error instanceof SettingsError && error.status === 500 && /was saved, but its compaction thresholds/u.test(error.message),
+	);
+	assert.equal(await configToml(), broken, "the unreadable file is never overwritten");
+	const listed = (await listModelProviders()).find((provider) => provider.id === "gw-broken");
+	assert.deepEqual(listed?.models.map((model) => [model.id, model.compactionThreshold]), [["m", undefined]]);
+	await writeFile(join(home, ".stepcode", "config.toml"), "");
+	await deleteModelProvider("gw-broken");
+});
+
 test("discovery reads an OpenAI-shaped listing and sends the key as a bearer token", async () => {
 	let seenPath = "";
 	let seenAuth: string | undefined;

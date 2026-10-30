@@ -988,37 +988,59 @@ export class SettingsManager {
 	}
 
 	/**
-	 * Replace the user (global) per-model trigger ratios with what `update`
-	 * returns for the current valid set. Every value must be within the trigger
-	 * policy's range; the write is rejected before anything changes otherwise.
-	 * Unlike the fire-and-forget setters, it throws when the global settings
-	 * file could not be loaded, since the caller asked for this value to stick.
+	 * Rewrite the user (global) `compaction.modelTriggerRatios` table.
+	 *
+	 * `update` receives the table as it is on disk at write time, inside the
+	 * settings file lock, including entries the trigger policy would ignore,
+	 * and returns the table to store. Reading under the lock keeps keys another
+	 * process wrote meanwhile, and passing raw entries keeps keys the caller does
+	 * not own byte-for-byte, even invalid ones. Every added or changed value must
+	 * be within the trigger policy's range, or nothing is written and the error
+	 * is reported through {@link drainErrors} after {@link flush}. An empty
+	 * result removes the table. Unlike the fire-and-forget setters, this throws
+	 * when the global settings file could not be loaded, since the caller asked
+	 * for this value to stick.
 	 */
 	updateGlobalCompactionModelTriggerRatios(
-		update: (current: Readonly<Record<string, number>>) => Record<string, number>,
+		update: (current: Readonly<Record<string, unknown>>) => Record<string, unknown>,
 	): void {
 		if (this.globalSettingsLoadError) {
 			throw new Error(`Global settings could not be loaded: ${this.globalSettingsLoadError.message}`);
 		}
-		const next = update(this.getGlobalCompactionModelTriggerRatios());
-		for (const [key, value] of Object.entries(next)) {
-			if (
-				typeof value !== "number" ||
-				!Number.isFinite(value) ||
-				value < MIN_COMPACTION_TRIGGER_RATIO ||
-				value > MAX_COMPACTION_TRIGGER_RATIO
-			) {
-				throw new RangeError(
-					`compaction.modelTriggerRatios["${key}"] must be a number in ${MIN_COMPACTION_TRIGGER_RATIO}-${MAX_COMPACTION_TRIGGER_RATIO}`,
-				);
-			}
-		}
-		if (!this.globalSettings.compaction) {
-			this.globalSettings.compaction = {};
-		}
-		this.globalSettings.compaction.modelTriggerRatios = next;
-		this.markModified("compaction", "modelTriggerRatios");
-		this.save();
+		const isTable = (value: unknown): value is Record<string, unknown> =>
+			typeof value === "object" && value !== null && !Array.isArray(value);
+		this.enqueueWrite("global", () => {
+			this.storage.withLock("global", (current) => {
+				const file = current
+					? SettingsManager.migrateSettings(JSON.parse(stripBom(current)) as Record<string, unknown>)
+					: {};
+				const compaction: Record<string, unknown> = isTable(file.compaction) ? { ...file.compaction } : {};
+				const before = isTable(compaction.modelTriggerRatios) ? compaction.modelTriggerRatios : {};
+				const next = update(before);
+				const nextKeys = Object.keys(next);
+				const changed = nextKeys.filter((key) => !Object.hasOwn(before, key) || before[key] !== next[key]);
+				for (const key of changed) {
+					const value = next[key];
+					if (
+						typeof value !== "number" ||
+						!Number.isFinite(value) ||
+						value < MIN_COMPACTION_TRIGGER_RATIO ||
+						value > MAX_COMPACTION_TRIGGER_RATIO
+					) {
+						throw new RangeError(
+							`compaction.modelTriggerRatios["${key}"] must be a number in ${MIN_COMPACTION_TRIGGER_RATIO}-${MAX_COMPACTION_TRIGGER_RATIO}`,
+						);
+					}
+				}
+				if (changed.length === 0 && nextKeys.length === Object.keys(before).length) return undefined;
+				if (nextKeys.length === 0) delete compaction.modelTriggerRatios;
+				else compaction.modelTriggerRatios = next;
+				const written = { ...file, compaction } as Settings;
+				this.globalSettings = { ...this.globalSettings, compaction: written.compaction };
+				this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+				return JSON.stringify(written, null, 2);
+			});
+		});
 	}
 
 	getBranchSummarySettings(): { reserveTokens: number; skipPrompt: boolean } {

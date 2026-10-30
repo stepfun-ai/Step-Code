@@ -3574,7 +3574,9 @@ components:
         deletable: { type: boolean }
     ModelsJsonModelEntry:
       type: object
-      description: One catalog entry as `models.json` stores it.
+      description: >-
+        One catalog entry of the models settings page: the fields `models.json` stores, plus
+        `compactionThreshold`, which comes from the user's `config.toml`.
       required: [id]
       properties:
         id: { type: string }
