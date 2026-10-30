@@ -514,6 +514,9 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	isError: boolean;
 }
 
+/** Registration provenance used to select the appropriate permission policy. */
+export type ToolOrigin = "core" | "builtin" | "extension" | "mcp";
+
 /**
  * Tool definition for registerTool().
  */
@@ -524,6 +527,8 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	label: string;
 	/** Description for LLM */
 	description: string;
+	/** Registration provenance used by permission policy. */
+	origin?: ToolOrigin;
 	/** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */
 	promptSnippet?: string;
 	/** Optional guideline bullets appended to the default system prompt Guidelines section when this tool is active. */
@@ -965,6 +970,8 @@ export type InputEventResult =
 interface ToolCallEventBase {
 	type: "tool_call";
 	toolCallId: string;
+	/** Provenance of the registered tool, when known. Missing origins remain conservative. */
+	origin?: ToolOrigin;
 }
 
 export interface BashToolCallEvent extends ToolCallEventBase {
@@ -1733,7 +1740,7 @@ export type GetSessionNameHandler = () => string | undefined;
 export type GetActiveToolsHandler = () => string[];
 
 /** Tool info with name, description, parameter schema, prompt guidelines, and source metadata. */
-export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters" | "promptGuidelines"> & {
+export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "origin" | "parameters" | "promptGuidelines"> & {
 	sourceInfo: SourceInfo;
 };
 

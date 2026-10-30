@@ -13,6 +13,7 @@ import type {
 	ExtensionUIContext,
 	ToolCallEvent,
 	ToolCallEventResult,
+	ToolOrigin,
 } from "../core/extensions/types.ts";
 import { getShellConfig } from "../utils/shell.ts";
 
@@ -414,16 +415,24 @@ export function decideStepToolCall(
 	state: StepPermissionState,
 	overrides: Readonly<Record<string, StepToolPermissionMode>> | undefined = state.toolOverrides,
 	shellContext?: ShellExecutionContext,
+	origin?: ToolOrigin,
 ): StepToolDecision {
 	const thenRun = getThenRunCommand(toolName, input);
 	if (thenRun !== undefined) {
 		const { then_run: _thenRun, ...mutationInput } = input;
-		const mutation = decideStepToolCall(toolName, mutationInput, state, overrides, shellContext);
-		const verification = decideStepToolCall("run_command", { command: thenRun }, state, overrides, shellContext);
+		const mutation = decideStepToolCall(toolName, mutationInput, state, overrides, shellContext, origin);
+		const verification = decideStepToolCall(
+			"run_command",
+			{ command: thenRun },
+			state,
+			overrides,
+			shellContext,
+			"core",
+		);
 		return combineThenRunDecisions(mutation, verification, thenRun);
 	}
 	const normalizedName = toolName.trim().toLowerCase();
-	const command = extractCommand(input);
+	const command = extractCommand(normalizedName, input, origin);
 	let analysis: CommandPolicyAnalysis | undefined;
 	if (command !== undefined) {
 		try {
@@ -560,9 +569,16 @@ export class StepPermissionController {
 	 * differs without a terminal (see unattendedCause). A caller that omits it
 	 * asks for the interactive policy.
 	 */
-	decide(toolName: string, input: Record<string, unknown>, hasUI = true): StepToolDecision {
+	decide(toolName: string, input: Record<string, unknown>, hasUI = true, origin?: ToolOrigin): StepToolDecision {
 		const cause = this.unattendedCause(hasUI);
-		return decideStepToolCall(toolName, input, this.effectiveState(cause), this.toolOverrides, this.shellContext());
+		return decideStepToolCall(
+			toolName,
+			input,
+			this.effectiveState(cause),
+			this.toolOverrides,
+			this.shellContext(),
+			origin,
+		);
 	}
 
 	getOverrides(): Record<string, StepToolPermissionMode> {
@@ -618,7 +634,14 @@ export class StepPermissionController {
 		const input = event.input;
 		const cause = this.unattendedCause(context.hasUI);
 		const state = this.effectiveState(cause);
-		const decision = decideStepToolCall(event.toolName, input, state, this.toolOverrides, this.shellContext());
+		const decision = decideStepToolCall(
+			event.toolName,
+			input,
+			state,
+			this.toolOverrides,
+			this.shellContext(),
+			event.origin,
+		);
 		if (decision.action === "allow") return undefined;
 
 		if (decision.action === "deny") {
@@ -761,7 +784,15 @@ function findToolOverride(
 	return undefined;
 }
 
-function extractCommand(input: Record<string, unknown>): string | undefined {
+function extractCommand(
+	toolName: string,
+	input: Record<string, unknown>,
+	origin: ToolOrigin | undefined,
+): string | undefined {
+	if (origin === "core" || origin === "builtin") {
+		if (toolName !== "run_command" && toolName !== "bash" && toolName !== "powershell") return undefined;
+		return typeof input.command === "string" ? input.command : undefined;
+	}
 	for (const key of ["command", "cmd", "script"]) {
 		const value = input[key];
 		if (typeof value === "string") return value;

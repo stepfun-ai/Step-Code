@@ -608,7 +608,7 @@ const { session } = await createAgentSession({
 
 Use `defineTool()` for standalone definitions and arrays like `customTools: [myTool]`. Inline `pi.registerTool({ ... })` already infers parameter types correctly.
 
-Custom tools passed via `customTools` are combined with extension-registered tools. Extensions loaded by the ResourceLoader can also register tools via `pi.registerTool()`.
+Custom tools passed via `customTools` are combined with extension-registered tools. Extensions loaded by the ResourceLoader can also register tools via `pi.registerTool()`. Ordinary SDK custom tools always use the `extension` tool origin, so a self-declared `origin` cannot switch them to a trusted command-permission tier. Definitions emitted by `createStepToolProfile` retain their registered `core` provenance when the host injects that profile through `customTools`; cloning a definition removes this exception.
 
 If you pass `tools`, include each custom or extension tool name you want enabled, for example `tools: ["read", "bash", "my_tool"]`.
 

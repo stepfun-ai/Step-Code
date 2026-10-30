@@ -71,6 +71,7 @@ export {
 	type ToolCallEvent,
 	type ToolCallEventResult,
 	type ToolDefinition,
+	type ToolOrigin,
 	type ToolRenderResultOptions,
 	type ToolResultEvent,
 	type TurnEndEvent,

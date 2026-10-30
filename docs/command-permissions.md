@@ -53,6 +53,25 @@ command execution must supply the corresponding `shellContext` to the controller
 Manual `!` input and RPC `bash` use the separate `user_bash` event and are outside
 this agent-tool policy.
 
+### Tool-origin routing
+
+Tool registrations carry optional `origin` provenance: `core`, `builtin`,
+`extension`, or `mcp`. Core tools and built-in capabilities run command analysis
+only for the dedicated `run_command`, `bash`, and `powershell` tools. Their other
+structured inputs, including workflow source text, are not reinterpreted as shell
+commands. MCP tools, extension tools, and calls without provenance retain the
+conservative heuristic scan of command-bearing fields.
+
+The host assigns this provenance at registration. Disk-loaded extensions and
+ordinary SDK `customTools` always use `extension`. Definitions emitted by
+`createStepToolProfile` retain `core` through an object-identity marker when the
+host injects that profile through `customTools`; cloning a definition loses this
+exception. Inline extension factories are host-composed code and may identify
+first-party capabilities as `builtin` and MCP adapters as `mcp`. Core provenance
+is otherwise reserved for the base tool registry. An `origin` value is not an
+authorization grant: explicit tool overrides still run first, and trusted shell
+tools retain dangerous-command and incomplete-analysis checks.
+
 ## Syntax, command semantics, and rules
 
 `shell-analysis.ts` uses the pinned `unbash` parser and explicitly traverses its

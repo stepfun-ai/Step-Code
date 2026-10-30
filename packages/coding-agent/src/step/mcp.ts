@@ -775,6 +775,7 @@ function createRemoteTool(server: ConnectedServer, remote: McpTool) {
 		name,
 		label: remote.title?.trim() || remote.name,
 		description: remote.description?.trim() || `MCP tool '${remote.name}' from server '${server.name}'.`,
+		origin: "mcp" as const,
 		// The provider boundary accepts JSON Schema directly. Reconstructing it
 		// as TypeBox types loses constraints, local references and combinators.
 		parameters: remote.inputSchema,

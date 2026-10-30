@@ -2045,6 +2045,8 @@ pi.registerTool({
 });
 ```
 
+**Tool origin:** `origin?: "core" | "builtin" | "extension" | "mcp"` is optional host provenance used by command-permission routing and propagated to `tool_call` handlers. Ordinary extension tools should omit it. Disk-loaded extensions and ordinary SDK `customTools` are always registered as `extension`; the host-injected `createStepToolProfile` definitions retain `core` through an object-identity marker. Inline factories are host-composed code and may mark first-party capabilities as `builtin` and MCP adapters as `mcp`; `core` is otherwise reserved for the base tool registry. See [Command permissions](../../../docs/command-permissions.md#tool-origin-routing).
+
 **Usage accounting:** If a tool makes nested LLM calls, return their combined `Usage` as `usage`. Step persists it on the tool result and includes it in footer, `/session`, and RPC session totals. `tool_result` handlers can inspect or replace this value.
 
 **Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.

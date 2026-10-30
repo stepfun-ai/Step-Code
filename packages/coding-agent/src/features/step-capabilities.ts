@@ -10,6 +10,19 @@ import { registerWorkflowChildAcl } from "./workflow/acl-extension.ts";
 import { createStepWorkflowExtension, type StepWorkflowExtensionOptions } from "./workflow/step-workflow.ts";
 import { createUltraloopOptInExtension, type UltraloopTurnState } from "./workflow/ultraloop-opt-in.ts";
 
+/** Tag every tool registered by the first-party capability bundle without naming individual tools in policy code. */
+function withBuiltinToolOrigin(pi: ExtensionAPI): ExtensionAPI {
+	return {
+		...pi,
+		registerTool: (tool) => pi.registerTool({ ...tool, origin: "builtin" }),
+		registerTools: (tools, options) =>
+			pi.registerTools(
+				tools.map((tool) => ({ ...tool, origin: "builtin" })),
+				options,
+			),
+	};
+}
+
 export interface StepCapabilitiesExtensionOptions {
 	subagent?: StepSubagentExtensionOptions;
 	/** Optional process reporter; capability adapters never own delivery. */
@@ -38,13 +51,14 @@ export function createStepCapabilitiesExtension(options: StepCapabilitiesExtensi
 		turnState: workflowTurnState,
 	});
 	return (pi: ExtensionAPI): void => {
-		registerWorkflowChildAcl(pi, options.telemetry);
-		registerStepClarifyUserExtension(pi, options.telemetry);
-		plan(pi);
-		tasks(pi);
-		subagent(pi);
-		workflow(pi);
-		ultraloopOptIn(pi);
+		const builtinPi = withBuiltinToolOrigin(pi);
+		registerWorkflowChildAcl(builtinPi, options.telemetry);
+		registerStepClarifyUserExtension(builtinPi, options.telemetry);
+		plan(builtinPi);
+		tasks(builtinPi);
+		subagent(builtinPi);
+		workflow(builtinPi);
+		ultraloopOptIn(builtinPi);
 	};
 }
 

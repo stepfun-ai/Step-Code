@@ -23,6 +23,7 @@ import type {
 	ToolRenderContext,
 	ToolRenderResultOptions,
 } from "../core/extensions/types.ts";
+import { markCoreToolDefinition } from "../core/tool-origin.ts";
 import { ShellToolError } from "../core/tools/bash.ts";
 import type { EditToolOptions } from "../core/tools/edit.ts";
 import { generateDiffString, generateUnifiedPatch, normalizeToLF } from "../core/tools/edit-diff.ts";
@@ -1771,8 +1772,8 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 		editFile,
 		runCommand,
 	];
-	const findTools = createFindToolsDefinition(profileWithoutFindTools);
-	return [...profileWithoutFindTools, findTools];
+	const findTools: AnyToolDefinition = createFindToolsDefinition(profileWithoutFindTools);
+	return [...profileWithoutFindTools, findTools].map(markCoreToolDefinition);
 }
 
 /** True for the Step model-facing names. */

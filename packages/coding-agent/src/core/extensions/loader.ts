@@ -263,6 +263,17 @@ export function createExtensionRuntime(): ExtensionRuntime {
 }
 
 /**
+ * Disk-loaded extensions cannot self-assign a trusted tier. Inline factories
+ * come directly from the host and may tag first-party capabilities and MCP
+ * adapters; core provenance is reserved for the base tool registry.
+ */
+function withExtensionToolOrigin(tool: ToolDefinition, extension: Extension): ToolDefinition {
+	const isInline = extension.path.startsWith("<") && extension.path.endsWith(">");
+	const origin = isInline && (tool.origin === "builtin" || tool.origin === "mcp") ? tool.origin : "extension";
+	return { ...tool, origin };
+}
+
+/**
  * Create the ExtensionAPI for an extension.
  * Registration methods write to the extension object.
  * Action methods delegate to the shared runtime.
@@ -305,7 +316,7 @@ function createExtensionAPI(
 		registerTool(tool: ToolDefinition): void {
 			assertActive();
 			extension.tools.set(tool.name, {
-				definition: tool,
+				definition: withExtensionToolOrigin(tool, extension),
 				sourceInfo: extension.sourceInfo,
 			});
 			runtime.refreshTools();
@@ -319,7 +330,7 @@ function createExtensionAPI(
 			}
 			for (const tool of tools) {
 				extension.tools.set(tool.name, {
-					definition: tool,
+					definition: withExtensionToolOrigin(tool, extension),
 					sourceInfo: extension.sourceInfo,
 				});
 				changed = true;
