@@ -548,6 +548,8 @@ export interface SubagentTask {
 	readonly usage?: SubagentUsage;
 	readonly error?: string;
 	readonly activeText?: string;
+	/** Reasoning the child is streaming in its current message; cleared when the message ends. */
+	readonly activeThinking?: string;
 	readonly activeTool?: string;
 	readonly activeToolOutput?: string;
 	readonly completedOutputs?: ReadonlyArray<{ readonly id: string; readonly output: string }>;
@@ -942,6 +944,8 @@ export interface SettingsModelProvider {
 		readonly contextWindow?: number;
 		readonly maxTokens?: number;
 		readonly input?: readonly string[];
+		/** Fraction of the context window that triggers auto-compaction (`compaction.modelTriggerRatios` in config.toml). */
+		readonly compactionThreshold?: number;
 		readonly reasoning?: boolean;
 		readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
 	}>;

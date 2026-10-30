@@ -32,6 +32,45 @@ test.each(["agent_end", "auto_clm_end", "compaction_end"] as const)(
 	},
 );
 
+test("restores the working indicator when compaction ends inside an active agent run", async () => {
+	const showWorkingStatusIndicator = vi.fn();
+	const createContext = (isStreaming: boolean) =>
+		({
+			isInitialized: true,
+			footer: { invalidate: vi.fn() },
+			settingsManager: { getShowTerminalProgress: () => false },
+			ui: { terminal: { setProgress: vi.fn() } },
+			session: { agent: { state: { isStreaming } } },
+			workingVisible: true,
+			activeStatusIndicator: undefined,
+			showWorkingStatusIndicator,
+			clearStatusIndicator: vi.fn(),
+			redraw: { requestRender: vi.fn() },
+			flushCompactionQueue: vi.fn(),
+		}) as unknown as RuntimeContext;
+	await handleSessionEvent(createContext(true), {
+		type: "compaction_end",
+		reason: "threshold",
+		result: undefined,
+		aborted: false,
+		willRetry: false,
+	});
+	await handleSessionEvent(createContext(true), {
+		type: "auto_clm_end",
+		result: { attempted: true, accepted: false, fallback: false, reason: "no-edit", requests: 1 },
+	});
+	expect(showWorkingStatusIndicator).toHaveBeenCalledTimes(2);
+	// An idle session (pre-prompt compaction or /compact) must not show a working indicator.
+	await handleSessionEvent(createContext(false), {
+		type: "compaction_end",
+		reason: "manual",
+		result: undefined,
+		aborted: false,
+		willRetry: false,
+	});
+	expect(showWorkingStatusIndicator).toHaveBeenCalledTimes(2);
+});
+
 test("turn tips follow the current goal branch and respect the disabled setting", async () => {
 	const now = new Date().toISOString();
 	const goal = { id: "goal-1", sessionId: "session-1", objective: "Ship it", status: "active", createdAt: now, updatedAt: now };

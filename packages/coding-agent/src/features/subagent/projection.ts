@@ -124,6 +124,9 @@ export function liveRecord(record: StepSubagentResultRecord): StepSubagentResult
 		...(record.stopReason === undefined ? {} : { stopReason: clipMiddle(record.stopReason, LIVE_IDENTIFIER_CHARS) }),
 		...(record.errorMessage === undefined ? {} : { errorMessage: tailChars(record.errorMessage, LIVE_ERROR_CHARS) }),
 		...(record.activeText === undefined ? {} : { activeText: tailChars(record.activeText, LIVE_TEXT_CHARS) }),
+		...(record.activeThinking === undefined
+			? {}
+			: { activeThinking: tailChars(record.activeThinking, LIVE_TEXT_CHARS) }),
 		...(record.activeTool === undefined ? {} : { activeTool: clipMiddle(record.activeTool, LIVE_IDENTIFIER_CHARS) }),
 		...(record.activeToolArgs === undefined
 			? {}

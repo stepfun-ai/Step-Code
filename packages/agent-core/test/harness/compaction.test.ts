@@ -24,9 +24,7 @@ import {
 	generateSummary,
 	generateSummaryWithUsage,
 	getLastAssistantUsage,
-	pickSummaryMaxTokens,
 	prepareCompaction,
-	SUMMARY_OUTPUT_TOKENS_CEILING,
 	shouldCompact,
 } from "../../src/harness/compaction/compaction.ts";
 import { serializeConversation } from "../../src/harness/compaction/utils.ts";
@@ -182,29 +180,8 @@ describe("harness compaction", () => {
 		expect(shouldCompact(95000, 100000, { ...settings, enabled: false })).toBe(false);
 	});
 
-	it("DEFAULT_COMPACTION_SETTINGS.reserveTokens is 24576 (bumped from 16384 for rich sessions)", () => {
+	it("preserves the existing automatic trigger reserve", () => {
 		expect(DEFAULT_COMPACTION_SETTINGS.reserveTokens).toBe(24576);
-	});
-
-	it("SUMMARY_OUTPUT_TOKENS_CEILING is 32000 (safely under Anthropic per-response cap)", () => {
-		expect(SUMMARY_OUTPUT_TOKENS_CEILING).toBe(32000);
-	});
-
-	it("pickSummaryMaxTokens prefers the model output cap when it exceeds the reserve budget", () => {
-		expect(pickSummaryMaxTokens({ maxTokens: 30000 }, 24576, 0.8)).toBe(30000);
-	});
-
-	it("pickSummaryMaxTokens clamps the model output cap to SUMMARY_OUTPUT_TOKENS_CEILING", () => {
-		expect(pickSummaryMaxTokens({ maxTokens: 64000 }, 24576, 0.8)).toBe(32000);
-	});
-
-	it("pickSummaryMaxTokens falls back to reserveBudget when the model does not expose a cap", () => {
-		expect(pickSummaryMaxTokens({ maxTokens: 0 }, 24576, 0.8)).toBe(19660);
-		expect(pickSummaryMaxTokens({ maxTokens: -1 }, 24576, 0.8)).toBe(19660);
-	});
-
-	it("pickSummaryMaxTokens uses the smaller 0.5 fraction for turn-prefix summaries", () => {
-		expect(pickSummaryMaxTokens({ maxTokens: 0 }, 24576, 0.5)).toBe(12288);
 	});
 
 	it("finds a cut point based on token differences", () => {
@@ -611,7 +588,7 @@ describe("harness compaction", () => {
 		expect(abortedResult).toMatchObject({ ok: false, error: { code: "aborted", message: "stopped" } });
 	});
 
-	it("clamps compaction summary maxTokens to the summary output ceiling for large-output models", async () => {
+	it("uses provider output budgets for both split-turn summary requests", async () => {
 		const messages: AgentMessage[] = [createUserMessage("Summarize this.")];
 		const seenOptions: Array<Record<string, unknown> | undefined> = [];
 		const { faux, model } = createFauxModel(false, 128000);
@@ -637,14 +614,11 @@ describe("harness compaction", () => {
 
 		getOrThrow(await compact(preparation, models, model));
 
-		// The 128k model budget is clamped to SUMMARY_OUTPUT_TOKENS_CEILING and beats
-		// both reserve budgets (floor(0.8 * 24576) = 19660, floor(0.5 * 24576) = 12288).
-		expect(seenOptions.map((options) => options?.maxTokens)).toEqual([
-			SUMMARY_OUTPUT_TOKENS_CEILING,
-			SUMMARY_OUTPUT_TOKENS_CEILING,
-		]);
+		expect(seenOptions).toHaveLength(2);
+		for (const options of seenOptions) expect(options).not.toHaveProperty("maxTokens");
 		expect(seenOptions.map((options) => options?.cacheRetention)).toEqual(["none", "none"]);
 		const sessionIds = seenOptions.map((options) => options?.sessionId);
+		expect(sessionIds).toEqual([expect.any(String), expect.any(String)]);
 		expect(sessionIds[0]).not.toBe(sessionIds[1]);
 	});
 

@@ -86,6 +86,7 @@ interface ModelRowState {
 	readonly contextWindow: string;
 	readonly maxTokens: string;
 	readonly input: readonly ("text" | "image")[];
+	readonly compactionThreshold: string;
 	/** Only a stored `false` is kept; every other row is saved as a reasoning model. */
 	readonly reasoning?: boolean;
 	/** The stored map, kept as is; a row without one is saved with {@link DEFAULT_THINKING_LEVEL_MAP}. */
@@ -194,6 +195,7 @@ function newRow(entry?: Partial<ModelRowState>): ModelRowState {
 		// Image input is what a current endpoint usually serves, so a new row
 		// starts with it on; a row built from a stored declaration keeps what it says.
 		input: entry?.input ?? ["text", "image"],
+		compactionThreshold: entry?.compactionThreshold ?? "",
 		...(entry?.reasoning === false ? { reasoning: false } : {}),
 		...(entry?.thinkingLevelMap ? { thinkingLevelMap: entry.thinkingLevelMap } : {}),
 	};
@@ -217,6 +219,7 @@ function formFromProvider(provider: SettingsModelProvider | undefined): FormStat
 				input: (model.input ?? ["text"]).filter(
 					(value): value is "text" | "image" => value === "text" || value === "image",
 				),
+				compactionThreshold: model.compactionThreshold?.toString() ?? "",
 				...(model.reasoning === false ? { reasoning: false } : {}),
 				...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
 			}),
@@ -232,6 +235,21 @@ function formFromProvider(provider: SettingsModelProvider | undefined): FormStat
  */
 const DEFAULT_CONTEXT_WINDOW = 1_000_000;
 
+const MIN_COMPACTION_THRESHOLD = 0.5;
+const MAX_COMPACTION_THRESHOLD = 0.95;
+
+/**
+ * A row's compaction threshold, or `undefined` when the field is blank and the
+ * runtime default (0.9) applies. `null` marks a value outside [0.5, 0.95].
+ */
+function parseCompactionThreshold(value: string): number | undefined | null {
+	if (!value.trim()) return undefined;
+	const threshold = Number(value);
+	return Number.isFinite(threshold) && threshold >= MIN_COMPACTION_THRESHOLD && threshold <= MAX_COMPACTION_THRESHOLD
+		? threshold
+		: null;
+}
+
 /**
  * The request body: rows without an id are dropped rather than rejected.
  *
@@ -241,19 +259,27 @@ const DEFAULT_CONTEXT_WINDOW = 1_000_000;
  * because that default is a ceiling on one reply and the thinking budget is
  * spent from the same ceiling, so a long answer or a high effort can end in
  * `stopReason: "length"` until the user raises it.
+ *
+ * A blank compaction threshold is likewise left out so the runtime default
+ * applies. The host stores it as `compaction.modelTriggerRatios["provider/id"]`
+ * in the user's config.toml, not in models.json.
  */
 function modelsPayload(rows: readonly ModelRowState[]): Array<Record<string, unknown>> {
 	return rows
 		.filter((row) => row.id.trim())
-		.map((row) => ({
-			id: row.id.trim(),
-			...(row.name.trim() ? { name: row.name.trim() } : {}),
-			contextWindow: Number(row.contextWindow) > 0 ? Number(row.contextWindow) : DEFAULT_CONTEXT_WINDOW,
-			...(Number(row.maxTokens) > 0 ? { maxTokens: Number(row.maxTokens) } : {}),
-			...(row.input.length > 0 ? { input: row.input } : {}),
-			reasoning: row.reasoning !== false,
-			thinkingLevelMap: row.thinkingLevelMap ?? DEFAULT_THINKING_LEVEL_MAP,
-		}));
+		.map((row) => {
+			const compactionThreshold = parseCompactionThreshold(row.compactionThreshold);
+			return {
+				id: row.id.trim(),
+				...(row.name.trim() ? { name: row.name.trim() } : {}),
+				contextWindow: Number(row.contextWindow) > 0 ? Number(row.contextWindow) : DEFAULT_CONTEXT_WINDOW,
+				...(Number(row.maxTokens) > 0 ? { maxTokens: Number(row.maxTokens) } : {}),
+				...(row.input.length > 0 ? { input: row.input } : {}),
+				...(typeof compactionThreshold === "number" ? { compactionThreshold } : {}),
+				reasoning: row.reasoning !== false,
+				thinkingLevelMap: row.thinkingLevelMap ?? DEFAULT_THINKING_LEVEL_MAP,
+			};
+		});
 }
 
 /**
@@ -484,6 +510,21 @@ export function ModelEditor({
 			models: current.models.map((row) => (row.key === key ? { ...row, ...patch } : row)),
 		}));
 
+	/** Rows whose parameter panel is open, by row key. Typed-in rows open; stored and discovered rows start closed. */
+	const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+	const toggleExpanded = (key: string) =>
+		setExpanded((current) => {
+			const next = new Set(current);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
+			return next;
+		});
+	const addRow = () => {
+		const row = newRow();
+		update({ models: [...form.models, row] });
+		setExpanded((current) => new Set(current).add(row.key));
+	};
+
 	/** Connection tests started this visit, keyed by row key (rows are re-keyed, not reused). */
 	const [tests, setTests] = useState<Record<string, ModelTestState>>({});
 
@@ -540,6 +581,17 @@ export function ModelEditor({
 		const firstInvalid = (["id", "baseUrl"] as const).find((name) => fieldErrors[name]);
 		if (firstInvalid) {
 			document.getElementById(field(firstInvalid))?.focus();
+			return;
+		}
+		const invalidThreshold = form.models.find(
+			(row) => row.id.trim() && parseCompactionThreshold(row.compactionThreshold) === null,
+		);
+		if (invalidThreshold) {
+			setExpanded((current) => new Set(current).add(invalidThreshold.key));
+			// The panel opens on the next render; focus once it is visible.
+			requestAnimationFrame(() =>
+				document.getElementById(field(`${invalidThreshold.key}-compactionThreshold`))?.focus(),
+			);
 			return;
 		}
 		setSaving(true);
@@ -699,95 +751,148 @@ export function ModelEditor({
 						</div>
 					) : (
 						<ul className="settings-model-rows">
-							{form.models.map((row) => (
-								<li className="settings-model-row" data-model-row={row.id || row.key} key={row.key}>
-									<label className="settings-model-field">
-										<span>{t("settingsModelsModelId")}</span>
-										<input
-											className="mono"
-											data-model-field="id"
-											value={row.id}
-											placeholder="model-id"
-											spellCheck={false}
-											onChange={(event) => updateRow(row.key, { id: event.target.value })}
-										/>
-									</label>
-									<label className="settings-model-field">
-										<span>{t("settingsModelsModelName")}</span>
-										<input
-											data-model-field="name"
-											value={row.name}
-											placeholder={t("settingsModelsModelName")}
-											onChange={(event) => updateRow(row.key, { name: event.target.value })}
-										/>
-									</label>
-									<label className="settings-model-field">
-										<span>{t("settingsModelsContextWindow")}</span>
-										<input
-											type="number"
-											min="1"
-											data-model-field="contextWindow"
-											value={row.contextWindow}
-											placeholder={t("settingsModelsContextWindowPlaceholder")}
-											onChange={(event) => updateRow(row.key, { contextWindow: event.target.value })}
-										/>
-									</label>
-									{/* The kernel's own default is smaller than a long answer needs,
-									    and it is shared with the thinking budget; say so once, here. */}
-									<label className="settings-model-field">
-										<Tooltip content={t("settingsModelsMaxTokensHint")}>
-											<span>{t("settingsModelsMaxTokens")}</span>
-										</Tooltip>
-										<input
-											type="number"
-											min="1"
-											data-model-field="maxTokens"
-											value={row.maxTokens}
-											placeholder={t("settingsModelsMaxTokensPlaceholder")}
-											onChange={(event) => updateRow(row.key, { maxTokens: event.target.value })}
-										/>
-									</label>
-									<div className="settings-model-field">
-										<span>{t("settingsModelsInputTypes")}</span>
-										<label className="settings-inline-check">
-											<input
-												type="checkbox"
-												checked={row.input.includes("image")}
-												onChange={() =>
-													updateRow(row.key, {
-														input: row.input.includes("image") ? ["text"] : ["text", "image"],
-													})
-												}
+							{form.models.map((row) => {
+								const isExpanded = expanded.has(row.key);
+								const thresholdInvalid =
+									submitted && parseCompactionThreshold(row.compactionThreshold) === null;
+								const detailsId = field(`${row.key}-details`);
+								return (
+									<li
+										className="settings-model-row"
+										data-model-row={row.id || row.key}
+										data-expanded={isExpanded ? "true" : undefined}
+										key={row.key}
+									>
+										<div className="settings-model-row-head">
+											<label className="settings-model-field">
+												<input
+													className="mono"
+													data-model-field="id"
+													value={row.id}
+													placeholder={t("settingsModelsModelId")}
+													aria-label={t("settingsModelsModelId")}
+													spellCheck={false}
+													onChange={(event) => updateRow(row.key, { id: event.target.value })}
+												/>
+											</label>
+											<label className="settings-model-field">
+												<input
+													data-model-field="name"
+													value={row.name}
+													placeholder={t("settingsModelsModelName")}
+													aria-label={t("settingsModelsModelName")}
+													onChange={(event) => updateRow(row.key, { name: event.target.value })}
+												/>
+											</label>
+											<Tooltip
+												content={t(isExpanded ? "settingsModelsHideDetails" : "settingsModelsShowDetails")}
+											>
+												<IconButton
+													icon="chevronRight"
+													iconSize="xs"
+													className="settings-icon-action settings-model-expand"
+													aria-label={t(
+														isExpanded ? "settingsModelsHideDetails" : "settingsModelsShowDetails",
+													)}
+													aria-expanded={isExpanded}
+													aria-controls={detailsId}
+													onClick={() => toggleExpanded(row.key)}
+												/>
+											</Tooltip>
+											<ModelTestAction
+												state={tests[row.key]}
+												disabled={!row.id.trim() || !form.baseUrl.trim()}
+												onTest={() => testRow(row)}
 											/>
-											{t("settingsModelsImageInput")}
-										</label>
-									</div>
-									<ModelTestAction
-										state={tests[row.key]}
-										disabled={!row.id.trim() || !form.baseUrl.trim()}
-										onTest={() => testRow(row)}
-									/>
-									<Tooltip content={t("settingsDelete")}>
-										<IconButton
-											icon="trash"
-											iconSize="xs"
-											className="settings-icon-action danger"
-											aria-label={t("settingsDelete")}
-											onClick={() =>
-												update({ models: form.models.filter((candidate) => candidate.key !== row.key) })
-											}
-										/>
-									</Tooltip>
-								</li>
-							))}
+											<Tooltip content={t("settingsDelete")}>
+												<IconButton
+													icon="trash"
+													iconSize="xs"
+													className="settings-icon-action danger"
+													aria-label={t("settingsDelete")}
+													onClick={() =>
+														update({
+															models: form.models.filter((candidate) => candidate.key !== row.key),
+														})
+													}
+												/>
+											</Tooltip>
+										</div>
+										{/* Stays mounted while closed: tests and the save check reach the fields through `hidden`. */}
+										<div className="settings-model-details" id={detailsId} hidden={!isExpanded}>
+											<label className="settings-model-field">
+												<span>{t("settingsModelsContextWindow")}</span>
+												<input
+													type="number"
+													min="1"
+													data-model-field="contextWindow"
+													value={row.contextWindow}
+													placeholder={t("settingsModelsContextWindowPlaceholder")}
+													onChange={(event) => updateRow(row.key, { contextWindow: event.target.value })}
+												/>
+											</label>
+											{/* The kernel's own default is smaller than a long answer needs,
+											    and it is shared with the thinking budget; say so once, here. */}
+											<label className="settings-model-field">
+												<Tooltip content={t("settingsModelsMaxTokensHint")}>
+													<span>{t("settingsModelsMaxTokens")}</span>
+												</Tooltip>
+												<input
+													type="number"
+													min="1"
+													data-model-field="maxTokens"
+													value={row.maxTokens}
+													placeholder={t("settingsModelsMaxTokensPlaceholder")}
+													onChange={(event) => updateRow(row.key, { maxTokens: event.target.value })}
+												/>
+											</label>
+											<label className="settings-model-field">
+												<Tooltip content={t("settingsModelsCompactionThresholdHint")}>
+													<span>{t("settingsModelsCompactionThreshold")}</span>
+												</Tooltip>
+												<input
+													id={field(`${row.key}-compactionThreshold`)}
+													type="number"
+													min={MIN_COMPACTION_THRESHOLD}
+													max={MAX_COMPACTION_THRESHOLD}
+													step="0.01"
+													inputMode="decimal"
+													data-model-field="compactionThreshold"
+													value={row.compactionThreshold}
+													placeholder={t("settingsModelsCompactionThresholdPlaceholder")}
+													aria-invalid={thresholdInvalid ? true : undefined}
+													onChange={(event) =>
+														updateRow(row.key, { compactionThreshold: event.target.value })
+													}
+												/>
+												{thresholdInvalid ? (
+													<small className="settings-field-error">
+														{t("settingsModelsCompactionThresholdInvalid")}
+													</small>
+												) : null}
+											</label>
+											<div className="settings-model-field">
+												<span>{t("settingsModelsInputTypes")}</span>
+												<label className="settings-inline-check">
+													<input
+														type="checkbox"
+														checked={row.input.includes("image")}
+														onChange={() =>
+															updateRow(row.key, {
+																input: row.input.includes("image") ? ["text"] : ["text", "image"],
+															})
+														}
+													/>
+													{t("settingsModelsImageInput")}
+												</label>
+											</div>
+										</div>
+									</li>
+								);
+							})}
 						</ul>
 					)}
-					<button
-						type="button"
-						className="settings-dashed-add"
-						id="settingsModelAddRow"
-						onClick={() => update({ models: [...form.models, newRow()] })}
-					>
+					<button type="button" className="settings-dashed-add" id="settingsModelAddRow" onClick={addRow}>
 						<Icon name="plus" size="xs" />
 						{t("settingsModelsAddModel")}
 					</button>

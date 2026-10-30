@@ -109,7 +109,11 @@ For VS Code, include `--wait` so step resumes after the editor exits:
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
-| `compaction.reserveTokens` | number | `16384` | Tokens reserved for LLM response |
+| `compaction.triggerRatio` | number | `0.9` | Fraction of the context window that triggers auto-compaction (0.5-0.95); small windows trigger earlier to keep response room |
+| `compaction.modelTriggerRatios` | object | `{}` | Per-model trigger ratios keyed by `provider/model-id` |
+| `compaction.tokenLimit` | number | - | Absolute trigger ceiling; can only trigger earlier |
+| `compaction.triggerPolicy` | string | `"v2"` | `"legacy"` restores the previous `contextWindow - reserveTokens` trigger and checkpoints |
+| `compaction.reserveTokens` | number | `16384` | Legacy trigger headroom; under v2 an explicit value also caps the trigger at `contextWindow - reserveTokens` |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens to keep (not summarized) |
 | `compaction.contextProjection` | string | `"clm-v1"` | CLM working view; `off` selects native compaction, `lightweight-v1` selects deterministic projection |
 | `compaction.autoClm.enabled` | boolean | `true` | Attempt bounded CLM maintenance before native compaction |
@@ -118,17 +122,20 @@ For VS Code, include `--wait` so step resumes after the editor exits:
 {
   "compaction": {
     "enabled": true,
-    "reserveTokens": 16384,
+    "triggerRatio": 0.9,
     "keepRecentTokens": 20000
   }
 }
 ```
 
+Compaction summaries use the provider's normal model/output and remaining-context
+budget. `compaction.reserveTokens` does not set a separate summary output cap.
+
 ### Branch Summary
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `branchSummary.reserveTokens` | number | `16384` | Tokens reserved for branch summarization |
+| `branchSummary.reserveTokens` | number | `16384` | Headroom left when selecting branch history; output is sized by the provider |
 | `branchSummary.skipPrompt` | boolean | `false` | Skip "Summarize branch?" prompt on `/tree` navigation (defaults to no summary) |
 
 ### Retry
@@ -349,7 +356,7 @@ See [packages.md](packages.md) for package management details.
   "theme": "dark",
   "compaction": {
     "enabled": true,
-    "reserveTokens": 16384,
+    "triggerRatio": 0.9,
     "keepRecentTokens": 20000
   },
   "retry": {
@@ -372,18 +379,18 @@ Project settings (`.stepcode/settings.json`) override global settings. Nested ob
 // ~/.stepcode/agent/settings.json (global)
 {
   "theme": "dark",
-  "compaction": { "enabled": true, "reserveTokens": 16384 }
+  "compaction": { "enabled": true, "triggerRatio": 0.9 }
 }
 
 // .stepcode/settings.json (project)
 {
-  "compaction": { "reserveTokens": 8192 }
+  "compaction": { "triggerRatio": 0.8 }
 }
 
 // Result
 {
   "theme": "dark",
-  "compaction": { "enabled": true, "reserveTokens": 8192 }
+  "compaction": { "enabled": true, "triggerRatio": 0.8 }
 }
 ```
 
@@ -393,7 +400,7 @@ Project settings (`.stepcode/settings.json`) override global settings. Nested ob
 enabled. It also accepts `off` (native compaction) and `lightweight-v1`
 (deterministic request projection); explicit settings remain unchanged.
 Default CLM maintenance inherits native compaction's
-`contextWindow - compaction.reserveTokens` threshold and falls back to native
+`contextWindow * compaction.triggerRatio` threshold and falls back to native
 compaction if no valid useful edit can be accepted.
 
 `compaction.autoClm.enabled = false` disables automatic CLM maintenance while

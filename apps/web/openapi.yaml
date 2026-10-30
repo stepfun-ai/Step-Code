@@ -3340,7 +3340,9 @@ components:
         deletable: { type: boolean }
     ModelsJsonModelEntry:
       type: object
-      description: One catalog entry as `models.json` stores it.
+      description: >-
+        One catalog entry of the models settings page: the fields `models.json` stores, plus
+        `compactionThreshold`, which comes from the user's `config.toml`.
       required: [id]
       properties:
         id: { type: string }
@@ -3357,6 +3359,14 @@ components:
             Effort value sent for each thinking level; `null` hides the level. Keys are off, minimal, low,
             medium, high, xhigh and max.
           additionalProperties: { type: [string, "null"] }
+        compactionThreshold:
+          type: number
+          minimum: 0.5
+          maximum: 0.95
+          description: >-
+            Fraction of the context window that triggers automatic compaction for this model. Not stored in
+            `models.json`: it is `compaction.modelTriggerRatios["<provider>/<id>"]` in the user's `config.toml`.
+            Omitted (or blank on save) means the global `compaction.triggerRatio` applies.
     SettingsModelProvider:
       type: object
       properties:

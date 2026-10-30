@@ -146,6 +146,19 @@ export interface AgentLoopTurnUpdate {
 
 export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 
+/** Context passed to `beforeModelRequest`. */
+export interface BeforeModelRequestContext {
+	/**
+	 * `initial` for the first provider request of a loop invocation (prompt or continue);
+	 * `follow-up` for every later request in the same invocation.
+	 */
+	phase: "initial" | "follow-up";
+	/** Context that the next provider request will send, including prompts, tool results, and injected steering. */
+	context: AgentContext;
+	/** Messages that this loop invocation will return if it exits at this point. */
+	newMessages: AgentMessage[];
+}
+
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
 
@@ -241,6 +254,20 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 */
 	prepareNextTurn?: (
 		context: PrepareNextTurnContext,
+	) => AgentLoopTurnUpdate | undefined | Promise<AgentLoopTurnUpdate | undefined>;
+
+	/**
+	 * Called immediately before every provider request, including the first request of a prompt or
+	 * continuation, after pending steering messages have been appended to the context. Tool-call
+	 * markup resampling of the same request does not call it again. On follow-up requests that have
+	 * not received steering yet, the loop polls steering once more after this hook returns, so input
+	 * queued during a long-running hook (for example, compaction) reaches the same request.
+	 * Return replacement context/model/thinking state to affect that request, or undefined to keep it.
+	 *
+	 * Contract: must not throw or reject. Throwing interrupts the low-level agent loop without producing a normal event sequence.
+	 */
+	beforeModelRequest?: (
+		context: BeforeModelRequestContext,
 	) => AgentLoopTurnUpdate | undefined | Promise<AgentLoopTurnUpdate | undefined>;
 
 	/**

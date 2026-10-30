@@ -97,6 +97,17 @@ describe("generateSummary reasoning options", () => {
 		});
 	});
 
+	it.each([
+		{ modelMax: 8192, reserve: 2000 },
+		{ modelMax: 65536, reserve: 2000 },
+		{ modelMax: 65536, reserve: 851968 },
+	])("does not impose an output cap for model=$modelMax and reserve=$reserve", async ({ modelMax, reserve }) => {
+		await generateSummaryWithUsage(messages, createModel(true, modelMax), reserve, "test-key");
+
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+		expect(completeSimpleMock.mock.calls[0][2]).not.toHaveProperty("maxTokens");
+	});
+
 	it("preserves the string result from generateSummary", async () => {
 		await expect(generateSummary(messages, createModel(false), 2000, "test-key")).resolves.toBe(
 			"## Goal\nTest summary",
@@ -273,7 +284,7 @@ describe("generateSummary reasoning options", () => {
 		expect(completeSimpleMock.mock.calls[0][2]).not.toHaveProperty("refusalFallbacks");
 	});
 
-	it("caps compaction summary maxTokens at the summary output ceiling for large-output models", async () => {
+	it("leaves both split-turn summary output budgets to the provider", async () => {
 		const preparation: CompactionPreparation = {
 			firstKeptEntryId: "entry-keep",
 			messagesToSummarize: messages,
@@ -293,10 +304,9 @@ describe("generateSummary reasoning options", () => {
 			totalTokens: 40,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		});
-		// DEFAULT reserveTokens = 24576, so reserveBudget = floor(0.8 * 24576) = 19660
-		// (initial) and floor(0.5 * 24576) = 12288 (turn-prefix). Model exposes 128000
-		// which gets clamped to SUMMARY_OUTPUT_TOKENS_CEILING (32000). pickSummaryMaxTokens
-		// returns max(reserveBudget, clampedModelBudget) = 32000 for both.
-		expect(completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens)).toEqual([32000, 32000]);
+		expect(completeSimpleMock.mock.calls).toHaveLength(2);
+		for (const call of completeSimpleMock.mock.calls) {
+			expect(call[2]).not.toHaveProperty("maxTokens");
+		}
 	});
 });

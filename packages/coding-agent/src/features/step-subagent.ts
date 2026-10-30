@@ -121,8 +121,10 @@ export interface StepSubagentRunResult {
 	model?: string;
 	stopReason?: string;
 	errorMessage?: string;
-	/** Live projection populated from Pi's JSON event stream. */
+	/** Live projection populated from Pi's JSON event stream: the reply text being streamed. */
 	activeText?: string;
+	/** Reasoning being streamed in the current message, kept apart from the reply text; cleared at `message_end`. */
+	activeThinking?: string;
 	activeTool?: string;
 	activeToolArgs?: string;
 	activeToolOutput?: string;
@@ -481,6 +483,7 @@ export function parseJsonEvent(
 	// messages as the authoritative result.
 	if (type === "message_start") {
 		current.activeText = "";
+		current.activeThinking = undefined;
 		current.activeTool = undefined;
 		current.activeToolArgs = undefined;
 		current.activeToolOutput = undefined;
@@ -489,8 +492,12 @@ export function parseJsonEvent(
 		const updateType = typeof update?.type === "string" ? update.type : "";
 		const delta =
 			typeof update?.delta === "string" ? update.delta : typeof update?.text === "string" ? update.text : "";
-		if (delta && /(?:text|reasoning|thinking).*delta|delta/u.test(updateType)) {
+		// Only reply text is `activeText`; reasoning is a separate stream so hosts can
+		// render it as thinking, and tool-call argument JSON belongs to the tool.
+		if (delta && updateType === "text_delta") {
 			current.activeText = `${current.activeText ?? ""}${delta}`.slice(-50_000);
+		} else if (delta && updateType === "thinking_delta") {
+			current.activeThinking = `${current.activeThinking ?? ""}${delta}`.slice(-50_000);
 		}
 		if (update && updateType === "toolcall_start") {
 			current.activeTool =
@@ -524,6 +531,7 @@ export function parseJsonEvent(
 			current.stopReason = message.stopReason;
 			current.errorMessage = message.errorMessage;
 			current.activeText = assistantText(message) || current.activeText;
+			current.activeThinking = undefined;
 			current.activeTool = undefined;
 			current.activeToolArgs = undefined;
 		}

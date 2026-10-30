@@ -357,11 +357,11 @@ telemetry 和 evidence 在进程内串行 append；读取时容忍被杀进程�
 
 | 决策 | 选择 | 原因 |
 |---|---|---|
-| Loop 工具名 | `schedule_wakeup` / `list_wakeups` / `cancel_wakeup` | 与 Claude Code 语料一致，表达 session continuation |
+| Loop 工具名 | `schedule_wakeup` / `list_wakeups` / `cancel_wakeup` | 名称直接表达 session continuation |
 | Loop 时钟 | 标准 timer + 注入 clock | 零运行时依赖，测试可控 |
 | Cron 表达式 | 五字段、项目本地时区 | 足够覆盖 agent 场景，避免秒级复杂度 |
 | Cron durable 位置 | `.stepcode/cron/tasks.json` | 项目边界清晰、可备份、可迁移 |
-| Workflow DSL | JavaScript | 能表达控制流且接近 Claude Code Workflow 心智 |
+| Workflow DSL | JavaScript | 能直接表达控制流，模型和用户都熟悉 |
 | Workflow 隔离 | `isolated-vm` 或等效强隔离 | 禁止把 `node:vm` 当安全边界 |
 | schema 校验 | TypeBox JSON Schema engine | VM 只传 JSON，错误可解释且不重复实现 validator |
 | schema retry | 默认最多三次，可下调 | 防止无界 token 消耗 |
@@ -422,7 +422,6 @@ telemetry 和 evidence 在进程内串行 append；读取时容忍被杀进程�
 
 ## 参考
 
-- Claude Code：`ScheduleWakeup`、`CronCreate`/`CronDelete`/`CronList`、Workflow DSL。
 - Yan et al., *Harness-of-Harness: Multi-Day Autonomous Software Development with
   Continual Improvement*, arXiv:2609.01481 (2026-09-01)。本文借鉴其 planner →
   developer → independent QA、evidence carry-over、single-writer、版本化 artifact

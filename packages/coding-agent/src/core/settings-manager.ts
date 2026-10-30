@@ -11,12 +11,32 @@ import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 import { type AutoClmSettings, resolveAutoClmSettings } from "./compaction/live-context/auto-options.ts";
 import type { ContextProjectionMode } from "./compaction/projection.ts";
+import {
+	type CompactionTriggerPolicy,
+	type CompactionTriggerSettings,
+	MAX_COMPACTION_TRIGGER_RATIO,
+	MIN_COMPACTION_TRIGGER_RATIO,
+	resolveCompactionTriggerSettings,
+} from "./compaction/trigger-policy.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
+	/**
+	 * Trigger headroom for the legacy policy (`contextWindow - reserveTokens`). Under v2 an
+	 * explicit value only caps the trigger earlier; the default does not affect it. It never
+	 * sets the summary output limit, which the provider sizes from the model and context.
+	 */
 	reserveTokens?: number; // default: 16384
 	keepRecentTokens?: number; // default: 20000
+	/** `v2` (default): one pre-request check at `resolveCompactionThreshold()`. `legacy`: previous checkpoints and threshold. */
+	triggerPolicy?: CompactionTriggerPolicy;
+	/** Fraction of the context window that triggers automatic compaction (0.5-0.95, default 0.9). */
+	triggerRatio?: number;
+	/** Per-model trigger ratios keyed by `provider/id`. */
+	modelTriggerRatios?: Record<string, number>;
+	/** Absolute token ceiling that can only make automatic compaction trigger earlier. */
+	tokenLimit?: number;
 	/** Projection mode: clm-v1 by default when automatic compaction is enabled. */
 	contextProjection?: ContextProjectionMode;
 	/** Host-triggered maintenance inside clm-v1; native compaction remains the fallback. */
@@ -404,6 +424,10 @@ export class SettingsManager {
 		if (projectLoad.error) {
 			initialErrors.push(toSettingsError("project", projectLoad.error, settingsPaths.project));
 		}
+		for (const warning of globalLoad.warnings)
+			initialErrors.push(toSettingsError("global", warning, settingsPaths.global));
+		for (const warning of projectLoad.warnings)
+			initialErrors.push(toSettingsError("project", warning, settingsPaths.project));
 
 		return new SettingsManager(
 			storage,
@@ -447,11 +471,16 @@ export class SettingsManager {
 		storage: SettingsStorage,
 		scope: SettingsScope,
 		projectTrusted = true,
-	): { settings: Settings; error: Error | null } {
+	): { settings: Settings; error: Error | null; warnings: Error[] } {
 		try {
-			return { settings: SettingsManager.loadFromStorage(storage, scope, projectTrusted), error: null };
+			const settings = SettingsManager.loadFromStorage(storage, scope, projectTrusted);
+			// Invalid trigger values fall back to defaults at read time; report them once per load.
+			const warnings = resolveCompactionTriggerSettings(settings.compaction ?? {}).warnings.map(
+				(warning) => new Error(warning),
+			);
+			return { settings, error: null, warnings };
 		} catch (error) {
-			return { settings: {}, error: error as Error };
+			return { settings: {}, error: error as Error, warnings: [] };
 		}
 	}
 
@@ -551,6 +580,7 @@ export class SettingsManager {
 		if (projectLoad.error) {
 			this.recordError("project", projectLoad.error);
 		}
+		for (const warning of projectLoad.warnings) this.recordError("project", warning);
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 	}
 
@@ -564,6 +594,7 @@ export class SettingsManager {
 			this.globalSettingsLoadError = globalLoad.error;
 			this.recordError("global", globalLoad.error);
 		}
+		for (const warning of globalLoad.warnings) this.recordError("global", warning);
 
 		this.modifiedFields.clear();
 		this.modifiedNestedFields.clear();
@@ -578,6 +609,7 @@ export class SettingsManager {
 			this.projectSettingsLoadError = projectLoad.error;
 			this.recordError("project", projectLoad.error);
 		}
+		for (const warning of projectLoad.warnings) this.recordError("project", warning);
 
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 	}
@@ -939,6 +971,76 @@ export class SettingsManager {
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
 			contextProjection: this.getContextProjectionMode(),
 		};
+	}
+
+	/** Automatic compaction trigger configuration; invalid values were reported when settings loaded. */
+	getCompactionTriggerSettings(): CompactionTriggerSettings {
+		return resolveCompactionTriggerSettings(this.settings.compaction ?? {}).settings;
+	}
+
+	/**
+	 * The per-model trigger ratios in the user (global) settings, keyed by
+	 * `provider/id`. Only values the trigger policy accepts are returned; a
+	 * project file can still override them for its own sessions.
+	 */
+	getGlobalCompactionModelTriggerRatios(): Record<string, number> {
+		return { ...resolveCompactionTriggerSettings(this.globalSettings.compaction ?? {}).settings.modelTriggerRatios };
+	}
+
+	/**
+	 * Rewrite the user (global) `compaction.modelTriggerRatios` table.
+	 *
+	 * `update` receives the table as it is on disk at write time, inside the
+	 * settings file lock, including entries the trigger policy would ignore,
+	 * and returns the table to store. Reading under the lock keeps keys another
+	 * process wrote meanwhile, and passing raw entries keeps keys the caller does
+	 * not own byte-for-byte, even invalid ones. Every added or changed value must
+	 * be within the trigger policy's range, or nothing is written and the error
+	 * is reported through {@link drainErrors} after {@link flush}. An empty
+	 * result removes the table. Unlike the fire-and-forget setters, this throws
+	 * when the global settings file could not be loaded, since the caller asked
+	 * for this value to stick.
+	 */
+	updateGlobalCompactionModelTriggerRatios(
+		update: (current: Readonly<Record<string, unknown>>) => Record<string, unknown>,
+	): void {
+		if (this.globalSettingsLoadError) {
+			throw new Error(`Global settings could not be loaded: ${this.globalSettingsLoadError.message}`);
+		}
+		const isTable = (value: unknown): value is Record<string, unknown> =>
+			typeof value === "object" && value !== null && !Array.isArray(value);
+		this.enqueueWrite("global", () => {
+			this.storage.withLock("global", (current) => {
+				const file = current
+					? SettingsManager.migrateSettings(JSON.parse(stripBom(current)) as Record<string, unknown>)
+					: {};
+				const compaction: Record<string, unknown> = isTable(file.compaction) ? { ...file.compaction } : {};
+				const before = isTable(compaction.modelTriggerRatios) ? compaction.modelTriggerRatios : {};
+				const next = update(before);
+				const nextKeys = Object.keys(next);
+				const changed = nextKeys.filter((key) => !Object.hasOwn(before, key) || before[key] !== next[key]);
+				for (const key of changed) {
+					const value = next[key];
+					if (
+						typeof value !== "number" ||
+						!Number.isFinite(value) ||
+						value < MIN_COMPACTION_TRIGGER_RATIO ||
+						value > MAX_COMPACTION_TRIGGER_RATIO
+					) {
+						throw new RangeError(
+							`compaction.modelTriggerRatios["${key}"] must be a number in ${MIN_COMPACTION_TRIGGER_RATIO}-${MAX_COMPACTION_TRIGGER_RATIO}`,
+						);
+					}
+				}
+				if (changed.length === 0 && nextKeys.length === Object.keys(before).length) return undefined;
+				if (nextKeys.length === 0) delete compaction.modelTriggerRatios;
+				else compaction.modelTriggerRatios = next;
+				const written = { ...file, compaction } as Settings;
+				this.globalSettings = { ...this.globalSettings, compaction: written.compaction };
+				this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+				return JSON.stringify(written, null, 2);
+			});
+		});
 	}
 
 	getBranchSummarySettings(): { reserveTokens: number; skipPrompt: boolean } {
