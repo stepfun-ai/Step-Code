@@ -261,7 +261,8 @@ function parseCompactionThreshold(value: string): number | undefined | null {
  * `stopReason: "length"` until the user raises it.
  *
  * A blank compaction threshold is likewise left out so the runtime default
- * applies. The host does not persist the field yet and drops it on save.
+ * applies. The host stores it as `compaction.modelTriggerRatios["provider/id"]`
+ * in the user's config.toml, not in models.json.
  */
 function modelsPayload(rows: readonly ModelRowState[]): Array<Record<string, unknown>> {
 	return rows

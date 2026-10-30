@@ -361,6 +361,75 @@ function jsonResponse(response: import("node:http").ServerResponse, body: unknow
 	response.end(JSON.stringify(body));
 }
 
+async function configToml(): Promise<string> {
+	return readFile(join(home, ".stepcode", "config.toml"), "utf8").catch(() => "");
+}
+
+test("a model's compaction threshold is stored in config.toml, not models.json, and read back", async () => {
+	await mkdir(join(home, ".stepcode"), { recursive: true });
+	await writeFile(
+		join(home, ".stepcode", "config.toml"),
+		'[compaction]\ntriggerRatio = 0.85\n\n[compaction.modelTriggerRatios]\n"other/x" = 0.8\n',
+	);
+	await saveModelProvider(
+		"gw-ratio",
+		{
+			baseUrl: "https://gw.example/v1",
+			api: "openai-completions",
+			models: [{ id: "big", compactionThreshold: 0.7 }, { id: "small" }],
+		},
+		{ replace: false },
+	);
+	const declared = (await onDisk()).providers as Record<string, { models: Array<Record<string, unknown>> }>;
+	assert.equal(
+		declared["gw-ratio"]?.models.some((model) => "compactionThreshold" in model),
+		false,
+		"the threshold is a setting, not part of the model declaration",
+	);
+	const listed = (await listModelProviders()).find((provider) => provider.id === "gw-ratio");
+	assert.deepEqual(
+		listed?.models.map((model) => [model.id, model.compactionThreshold]),
+		[
+			["big", 0.7],
+			["small", undefined],
+		],
+	);
+	assert.match(await configToml(), /triggerRatio = 0\.85/u, "sibling compaction settings are kept");
+
+	// An edit replaces this provider's thresholds: a cleared field and a removed
+	// row drop their keys, another provider's key stays.
+	await saveModelProvider(
+		"gw-ratio",
+		{
+			baseUrl: "https://gw.example/v1",
+			api: "openai-completions",
+			models: [{ id: "small", compactionThreshold: 0.6 }],
+		},
+		{ replace: true },
+	);
+	const edited = (await listModelProviders()).find((provider) => provider.id === "gw-ratio");
+	assert.deepEqual(edited?.models.map((model) => [model.id, model.compactionThreshold]), [["small", 0.6]]);
+	const toml = await configToml();
+	assert.doesNotMatch(toml, /gw-ratio\/big/u);
+	assert.match(toml, /"other\/x" = 0\.8/u);
+
+	// Out-of-range values are refused before anything is written.
+	await rejectsWith(
+		saveModelProvider(
+			"gw-ratio",
+			{ baseUrl: "https://gw.example/v1", api: "openai-completions", models: [{ id: "small", compactionThreshold: 0.99 }] },
+			{ replace: true },
+		),
+		400,
+	);
+	assert.match(await configToml(), /"gw-ratio\/small" = 0\.6/u);
+
+	await deleteModelProvider("gw-ratio");
+	const afterDelete = await configToml();
+	assert.doesNotMatch(afterDelete, /gw-ratio\//u, "deleting a provider removes its thresholds");
+	assert.match(afterDelete, /"other\/x" = 0\.8/u);
+});
+
 test("discovery reads an OpenAI-shaped listing and sends the key as a bearer token", async () => {
 	let seenPath = "";
 	let seenAuth: string | undefined;

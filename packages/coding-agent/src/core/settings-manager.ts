@@ -14,6 +14,8 @@ import type { ContextProjectionMode } from "./compaction/projection.ts";
 import {
 	type CompactionTriggerPolicy,
 	type CompactionTriggerSettings,
+	MAX_COMPACTION_TRIGGER_RATIO,
+	MIN_COMPACTION_TRIGGER_RATIO,
 	resolveCompactionTriggerSettings,
 } from "./compaction/trigger-policy.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
@@ -974,6 +976,49 @@ export class SettingsManager {
 	/** Automatic compaction trigger configuration; invalid values were reported when settings loaded. */
 	getCompactionTriggerSettings(): CompactionTriggerSettings {
 		return resolveCompactionTriggerSettings(this.settings.compaction ?? {}).settings;
+	}
+
+	/**
+	 * The per-model trigger ratios in the user (global) settings, keyed by
+	 * `provider/id`. Only values the trigger policy accepts are returned; a
+	 * project file can still override them for its own sessions.
+	 */
+	getGlobalCompactionModelTriggerRatios(): Record<string, number> {
+		return { ...resolveCompactionTriggerSettings(this.globalSettings.compaction ?? {}).settings.modelTriggerRatios };
+	}
+
+	/**
+	 * Replace the user (global) per-model trigger ratios with what `update`
+	 * returns for the current valid set. Every value must be within the trigger
+	 * policy's range; the write is rejected before anything changes otherwise.
+	 * Unlike the fire-and-forget setters, it throws when the global settings
+	 * file could not be loaded, since the caller asked for this value to stick.
+	 */
+	updateGlobalCompactionModelTriggerRatios(
+		update: (current: Readonly<Record<string, number>>) => Record<string, number>,
+	): void {
+		if (this.globalSettingsLoadError) {
+			throw new Error(`Global settings could not be loaded: ${this.globalSettingsLoadError.message}`);
+		}
+		const next = update(this.getGlobalCompactionModelTriggerRatios());
+		for (const [key, value] of Object.entries(next)) {
+			if (
+				typeof value !== "number" ||
+				!Number.isFinite(value) ||
+				value < MIN_COMPACTION_TRIGGER_RATIO ||
+				value > MAX_COMPACTION_TRIGGER_RATIO
+			) {
+				throw new RangeError(
+					`compaction.modelTriggerRatios["${key}"] must be a number in ${MIN_COMPACTION_TRIGGER_RATIO}-${MAX_COMPACTION_TRIGGER_RATIO}`,
+				);
+			}
+		}
+		if (!this.globalSettings.compaction) {
+			this.globalSettings.compaction = {};
+		}
+		this.globalSettings.compaction.modelTriggerRatios = next;
+		this.markModified("compaction", "modelTriggerRatios");
+		this.save();
 	}
 
 	getBranchSummarySettings(): { reserveTokens: number; skipPrompt: boolean } {

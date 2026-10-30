@@ -458,6 +458,8 @@ keepRecentTokens = 20000
 
 Invalid trigger values fall back to their defaults and are reported as settings warnings at startup.
 
+The Web and Desktop models page edits `compaction.modelTriggerRatios` in the user `config.toml` for the models of custom providers (`SettingsManager.updateGlobalCompactionModelTriggerRatios()`); a trusted project file can still override a key for its own sessions. Sessions read it from settings when they start.
+
 Disable auto-compaction with `enabled = false`. You can still compact manually with `/compact`.
 
 `reserveTokens` never sets the summary output limit.

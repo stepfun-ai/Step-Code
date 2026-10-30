@@ -945,7 +945,8 @@ const zhCN = {
 	settingsModelsImageInput: "支持图片",
 	settingsModelsCompactionThreshold: "压缩阈值",
 	settingsModelsCompactionThresholdPlaceholder: "默认值为 0.9",
-	settingsModelsCompactionThresholdHint: "上下文用量达到窗口的该比例时自动压缩。留空则使用默认值 0.9。",
+	settingsModelsCompactionThresholdHint:
+		"上下文用量达到窗口的该比例时自动压缩，保存后对新会话生效。留空则使用全局设置（默认 0.9）。",
 	settingsModelsCompactionThresholdInvalid: "请输入 0.5 到 0.95 之间的小数，例如 0.9。",
 	settingsModelsShowDetails: "展开模型参数",
 	settingsModelsHideDetails: "收起模型参数",
@@ -2029,7 +2030,7 @@ const enUS: Record<MessageKey, string> = {
 	settingsModelsCompactionThreshold: "Compaction threshold",
 	settingsModelsCompactionThresholdPlaceholder: "Defaults to 0.9",
 	settingsModelsCompactionThresholdHint:
-		"Context is compacted automatically once usage reaches this fraction of the window. Left blank, the default of 0.9 applies.",
+		"Context is compacted automatically once usage reaches this fraction of the window; applies to new sessions after saving. Left blank, the global setting applies (0.9 by default).",
 	settingsModelsCompactionThresholdInvalid: "Enter a decimal from 0.5 to 0.95, such as 0.9.",
 	settingsModelsShowDetails: "Show model parameters",
 	settingsModelsHideDetails: "Hide model parameters",

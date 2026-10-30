@@ -972,7 +972,7 @@ export interface SettingsModelProvider {
 		readonly contextWindow?: number;
 		readonly maxTokens?: number;
 		readonly input?: readonly string[];
-		/** Fraction of the context window at which auto-compaction starts; reserved until the host persists it. */
+		/** Fraction of the context window that triggers auto-compaction (`compaction.modelTriggerRatios` in config.toml). */
 		readonly compactionThreshold?: number;
 		readonly reasoning?: boolean;
 		readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
