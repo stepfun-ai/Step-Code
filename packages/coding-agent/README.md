@@ -326,7 +326,6 @@ The default export can also be `async`. step waits for async extension factories
 - Git checkpointing and auto-commit
 - SSH and sandbox execution
 - MCP server integration
-- Make step look like Claude Code
 - Games while waiting (yes, Doom runs)
 - ...anything you can dream up
 

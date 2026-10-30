@@ -98,38 +98,19 @@ assert: quadrupling the child does not move the number. With
 `--include-live-events` the same 40-turn run writes 0.010 MiB, of which 0.005 MiB
 is frames, and no frame carries a transcript.
 
-## 4. Competitor survey
+## 4. Where the classification belongs
 
-Six implementations, source-read. Versions: opencode `f669c46c`, codex `970111f6`
-(Rust under `codex-rs/`), kimi-code `743f14097`, minimax-code `da22f11`,
-deepseek-harness, ZCode.
+The usual answer to this problem is a durability split: an event either flows
+to live consumers only, or it is a durable fact. Deltas and progress frames are
+never persisted; the successor event (`message_end`, `tool_execution_end`)
+carries the replayable value, so a reader can skip every frame. Once a frame is
+never written, emitting one per token is free — capability, not throttling, is
+what makes the stream live. A child's transcript has its own home and is
+referenced by id.
 
-| implementation | where the decision lives | deltas persisted | progress persisted | persistence trigger | child history |
-| --- | --- | --- | --- | --- | --- |
-| opencode | **event type**: `durable` / `ephemeral` are mutually exclusive | no | no | `text.ended`, `tool.success`, `step.ended` | own session; parent keeps sessionID + final text |
-| codex | **storage boundary**: `rollout/policy.rs` transient list | no | no | `ItemCompleted`, full `ResponseItem` | own thread; parent keeps agent_thread_id |
-| kimi-code | **event type**: static `durable` flag, default false | no | no | durable event; content parts at step end | own agent log; parent keeps resultSummary |
-| minimax-code | **transport**: `VOLATILE_EVENT_TYPES` | no | no | `message_end`, `tool_execution_end` | own child session; parent keeps a report |
-| deepseek-harness | **event vocabulary**: no progress event type exists | no | no | turn/step boundaries, 200ms batches | own session; parent keeps childId + label |
-| ZCode | **event type set**: `TRANSIENT_SESSION_EVENT_TYPES` | no | no | pending/running/completed upserts | own session; parent keeps childSessionId + outputPath |
-
-What all six share:
-
-1. **A non-durable event flows to the UI and not to storage.** codex's
-   `SubAgentActivity` is durable only when `kind == Completed`, so `Started`,
-   `Interacted` and `Interrupted` never reach the rollout; opencode's
-   `session.tool.progress` is `Event.ephemeral`, whose type has no durable
-   envelope at all.
-2. **The successor is the replayable value.** `message_end` / `tool_execution_end`
-   / `Text.Ended` carry the authoritative payload; a reader can skip every frame.
-3. **Capability, not throttling, is what makes them more live.** Because a frame
-   is never written, emitting one per token is free — there is no trade between
-   latency and log size to make.
-4. **The child's transcript has its own home**, referenced by id.
-
-One structural difference matters for us: in all six the log file *is* their
-storage layer, so filtering at the storage boundary works. Our `stepcode.jsonl`
-is a **redirected stdout**, and the session file itself only ever received
+One structural detail matters for us. When the log file *is* the storage layer,
+filtering at the storage boundary is enough. Our `stepcode.jsonl` is a
+**redirected stdout**, and the session file itself only ever received
 `message_end` — it was never the problem. So the classification has to be applied
 by the serialized transports, not by the session store.
 
@@ -160,8 +141,7 @@ export function sessionEventDurability(event): "durable" | "ephemeral" {
 
 It is an allowlist of *frames*, so an event added later is durable by default:
 forgetting to classify cannot silently opt a new event into a log. The criterion
-is "payload is a cumulative snapshot of in-flight work", the same boundary
-opencode draws at `Text.Ended`.
+is "payload is a cumulative snapshot of in-flight work".
 
 The classification is applied in `modes/json-event.ts`, and nowhere else.
 `toJsonEvent(event, { includeLiveEvents })` returns `undefined` for a frame the
@@ -345,7 +325,7 @@ the revert — read the child session instead.
 1. **Progress does not yet have a channel of its own.** It is classified as
    non-durable and excluded from the log, which removes the amplification, but it
    still travels as a session event. The target design gives live progress a
-   dedicated surface — the shape codex and opencode converge on — so that
+   dedicated surface so that
    `omittedResults`, the roster byte budget and `rosterFields` can be deleted
    outright. **Removal condition:** when a live frame no longer carries a roster,
    all three go, and no test needs them.
@@ -354,8 +334,7 @@ the revert — read the child session instead.
    clarity only, at the cost of a new type plus every consumer. Prefer to revisit
    it together with (1).
 3. **Session-file compaction.** After this change growth is linear, not quadratic,
-   but a long session is still large. Competitors have zstd or a file cap; we do
-   not.
+   but a long session is still large; there is no compression or file cap yet.
 4. **Full backpressure.** One frame in flight bounds the loop's queue, but
    `output-guard`'s stdout queue has no hard limit. With facts only, that traffic
    is small, so this is secondary.
@@ -368,4 +347,5 @@ the revert — read the child session instead.
    boundary.
 6. **Type-level durability.** The classification is enforced in one projection
    module, not by the event type, and a check script fails the build if a second
-   policy appears. opencode makes it a compile-time property; we do not yet.
+   policy appears. Making it a compile-time property of the event type is not
+   done yet.

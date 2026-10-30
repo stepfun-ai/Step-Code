@@ -180,7 +180,7 @@ They do not alter the session file format or agent loop. Callers that supply a
 custom or in-memory manager should pass explicit `stepSettingsPaths` when
 they need to control where the Step sidecar is stored.
 
-`/init` submits a Codex-style repository-instructions prompt through the
+`/init` submits a repository-instructions prompt through the
 normal user-message path. The model inspects the project and uses the native
 write and approval flow; the prompt explicitly preserves an existing
 `AGENTS.md` instead of replacing it.
@@ -435,11 +435,8 @@ tools a profile lacks (`version: 2` entries) store no replaced list, so a branch
 written by them never replays an older snapshot. There is no
 additional `TodoWrite` / `update_plan` alias or second checklist store.
 
-The separation follows [Claude Code's plan and task tools](https://code.claude.com/docs/en/tools-reference)
-and [permission modes](https://code.claude.com/docs/en/permission-modes). The
-[Codex checklist handler](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/plan.rs)
-also distinguishes its `update_plan` checklist from Plan mode. Step borrows the
-separation, not model-specific restrictions on which task tools are available.
+Plan mode and the task checklist remain separate tools. Step does not restrict
+which task tools are available by model.
 
 ## Compatibility matrix
 

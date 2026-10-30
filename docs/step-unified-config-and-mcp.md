@@ -260,10 +260,10 @@ if (ctx.mode !== "tui") await startup;         // 仅 TUI 分离
 **解决**:先 `resolve()` 成绝对路径再取 `dirname()`;若已经是文件系统根,则退回
 agent 目录本身,而不是把凭据写到宿主指定的命名空间之外。
 
-### 4.4 OAuth 借用了 Codex 的应用身份
+### 4.4 OAuth 借用了第三方应用身份
 
-早期实现硬编码了 Codex 的 client id,导致授权页面显示 "Figma MCP in Codex"。该硬编码
-已移除,**不得恢复或借用 Claude / Codex 的应用身份**。
+早期实现硬编码了其他客户端的 OAuth client id,导致授权页面显示的应用不是 Step。该硬编码
+已移除,**不得恢复或借用其他产品的应用身份**。
 
 官方 Figma MCP 对 Step 返回 403,现在会给出明确指引:
 

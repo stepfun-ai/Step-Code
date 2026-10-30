@@ -289,8 +289,7 @@ drains at `agent_settled`, after retry and compaction recovery. Due work waits
 while the current turn runs; missed intervals do not create a burst of catch-up
 turns.
 
-Offsets follow the documented Claude Code bounds and are derived from the task
-ID by default:
+Offsets are derived from the task ID by default:
 
 | Task | Offset from the matching local-time minute |
 | --- | --- |
@@ -347,20 +346,15 @@ If the process crashes or a disk write fails after handoff, the stored occurrenc
 can be delivered again on recovery. Atomic exactly-once execution would require
 an acknowledged outbox/consumer protocol across that boundary.
 
-## Remaining Claude Code differences
+## Follow-ups
 
-The comparison uses official documentation retrieved on 2026-09-20:
-[workflows](https://code.claude.com/docs/en/workflows),
-[goals](https://code.claude.com/docs/en/goal), and
-[scheduled tasks](https://code.claude.com/docs/en/scheduled-tasks).
-
-| Area | Current StepCode behavior | Follow-up for closer alignment |
+| Area | Current StepCode behavior | Follow-up |
 | --- | --- | --- |
 | Workflow entry | `/ultracode` and `/ultraloop` share session controls; `ultracode: <task>` and `ultraloop: <task>` opt in for one turn | — |
 | Workflow execution | Foreground tool with live agent counts/tasks, journals, cancellation, replay | Background workflow task view with pause/resume controls |
 | Goal completion | Working agent calls `update_goal`; user pause/resume and persisted budgets | Independent completion evaluator with visible verdict/reason and a no-progress stop policy |
 | Interval scheduling | `cron_create`, `cron_list`, `cron_delete`, `/cron` | `/loop` convenience command, including a design for completion-relative intervals |
-| Scheduling persistence | Optional shared project store | Claude Code session schedules are session-local; retain the stronger StepCode persistence contract explicitly |
+| Scheduling persistence | Optional shared project store | Keep the project-store persistence contract explicit |
 
 See [session goal lifecycle](goal-lifecycle.md) for goal controls, budget recovery,
 and cancellation semantics. The prior
