@@ -164,7 +164,7 @@ every host that ships the CLI, web, or desktop front end reuses that provider.
 
 | Event | When | Main fields |
 | --- | --- | --- |
-| `device_daily_active` | Every model HTTP response (error statuses included, with or without `x-trace-id`), at most once per process, UTC+8 day, and user type. Selecting a model without sending a request does not count | `user_type` (`internal` / `external` / `third_party`), `provider_kind`, `provider`, `model`, `local_day`, `client`, `opened_at` |
+| `device_daily_active` | A model HTTP response (error statuses included, with or without `x-trace-id`) to a request made through the session's stream function, at most once per process, UTC+8 day, and user type. Selecting a model without sending a request does not count, nor does a request that never gets a response, a `/btw` side question (it calls the model registry directly), or an extension provider that never invokes `onResponse` / `onErrorResponse` | `user_type` (`internal` / `external` / `third_party`), `provider_kind`, `provider`, `model`, `local_day`, `client`, `opened_at` |
 | `session_trace_recorded` | Every model HTTP response carrying an `x-trace-id` header, including error responses and attempts the provider retries | `session_id`, `trace_id`, `user_type`, `provider_kind`, `provider`, `model`, `status_code`, `attempt` (response count within one provider call; session-level auto-retries each start at 1), `local_day`, `client` |
 
 `provider_kind` is `internal` for a configured internal gateway, the Step login
@@ -173,7 +173,9 @@ for a Step endpoint matching a login profile, or the configured provider id
 otherwise (including a Step host on a path no profile uses); endpoint
 addresses are never sent. A device that uses several kinds of endpoint in one
 day reports one `device_daily_active` record per user type, so a daily-active
-count de-duplicates by device id.
+count de-duplicates by device id. Each record carries the `provider` and
+`model` of the first counted response of that day and type; later responses of
+the same type do not update it.
 Envelopes carry the device id, the `auth.json` Step `uid` when present (not when
 the process runs on `--api-key` or `STEP_API_KEY`, which is a different
 credential), and the session id for trace records. `opened_at` is the process start time, so a launch

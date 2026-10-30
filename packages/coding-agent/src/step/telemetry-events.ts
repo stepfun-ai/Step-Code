@@ -913,8 +913,8 @@ export const STEP_TELEMETRY_EVENT_DEFINITIONS: {
 			user_type:
 				"internal for configured internal gateways, external for Step endpoints, third_party for any other provider.",
 			provider_kind: "internal, a Step login profile id, or the configured provider id.",
-			provider: "Configured provider id of the model in use.",
-			model: "Model identifier in use.",
+			provider: "Provider id that answered the day's first counted response of this user type.",
+			model: "Model identifier that answered that response.",
 			local_day: "Calendar day in UTC+8, YYYY-MM-DD.",
 			client: "cli, web, or desktop.",
 			opened_at: "Process start time (ISO 8601); omitted when the process started on an earlier UTC+8 day.",

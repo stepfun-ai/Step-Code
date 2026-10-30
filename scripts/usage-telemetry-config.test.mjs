@@ -33,6 +33,13 @@ sampleRate: 0.5
 	});
 });
 
+test("the shipped config names both internal gateways", () => {
+	// Dropping a host here would silently reclassify that gateway's users as third_party.
+	const shipped = readUsageTelemetryConfig({ file: fileURLToPath(new URL("../config/usage-telemetry.yaml", import.meta.url)) });
+	assert.equal(shipped.enabled, true);
+	assert.deepEqual(shipped.internalProviderHosts, ["mp.z01.normandyfunc.com", "i-ai-gw.stepx.com"]);
+});
+
 test("a file with no values means no reporting, which is how the public tree ships", () => {
 	assert.deepEqual(readUsageTelemetryConfig({ file: fileWith("# only comments\n") }), {});
 	assert.deepEqual(normalizeConfig({ endpoint: "  ", internalProviderHosts: [] }), {});
