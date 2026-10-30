@@ -263,6 +263,7 @@ async function executeNativeDialog(
 		let optionIndex = 0;
 		let inputMode = questions[0]?.options.length === 0;
 		let inputQuestionId: string | null = inputMode ? (questions[0]?.id ?? null) : null;
+		let emptyAnswerError = false;
 		let cachedLines: string[] | undefined;
 		const answers = new Map<string, StepQuestionnaireAnswer>();
 		const totalTabs = questions.length + 1;
@@ -306,6 +307,7 @@ async function executeNativeDialog(
 			const question = currentQuestion();
 			inputMode = Boolean(question && question.options.length === 0);
 			inputQuestionId = inputMode ? (question?.id ?? null) : null;
+			emptyAnswerError = false;
 			editor.setText("");
 			refresh();
 		};
@@ -335,12 +337,23 @@ async function executeNativeDialog(
 		editor.onSubmit = (value) => {
 			if (!inputQuestionId) return;
 			const answer = value.trim();
-			if (!answer) return;
+			if (!answer) {
+				emptyAnswerError = true;
+				refresh();
+				return;
+			}
+			emptyAnswerError = false;
 			saveAnswer(inputQuestionId, answer, answer, true);
 			editor.setText("");
 			inputMode = false;
 			inputQuestionId = null;
 			advance();
+		};
+
+		editor.onChange = () => {
+			if (!emptyAnswerError) return;
+			emptyAnswerError = false;
+			refresh();
 		};
 
 		const handleInput = (data: string): void => {
@@ -488,6 +501,9 @@ async function executeNativeDialog(
 					addWrapped(" ", theme.fg("muted", "Your answer:"));
 					for (const line of editor.render(Math.max(1, renderWidth - 2))) {
 						lines.push(` ${line}`);
+					}
+					if (emptyAnswerError) {
+						addWrapped(" ", theme.fg("warning", "Enter an answer before submitting"));
 					}
 				}
 			}
