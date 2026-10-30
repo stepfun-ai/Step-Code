@@ -1,5 +1,5 @@
 import { useT } from "../../i18n";
-import type { MigrationAcknowledgement, MigrationPreview, MigrationScope } from "../../state/types";
+import type { MigrationAcknowledgement, MigrationScope } from "../../state/types";
 import { Button, Spinner } from "../../ui";
 import { acknowledgePreview, deselectCandidate, previewCandidate } from "./actions";
 import { DiagnosticList } from "./CandidateList";
@@ -29,50 +29,6 @@ export function PreviewText({ label, text }: { readonly label: string; readonly 
 		</section>
 	);
 }
-export function RuleImpact({ preview }: { readonly preview: MigrationPreview }) {
-	const t = useT();
-	const impact = preview.ruleImpact;
-	return (
-		<section className="migration-rule-impact">
-			<h3>{t("migrationRuleWarning")}</h3>
-			<p>
-				{preview.target.scope.kind === "global"
-					? t("migrationRuleGlobalScope")
-					: t("migrationRuleProjectScope", { cwd: preview.target.scope.cwd })}
-			</p>
-			<p>{t("migrationRuleTiming")}</p>
-			<p>{t("migrationRuleModel")}</p>
-			<p>{t("migrationRulePermissions")}</p>
-			<p>{t("migrationRecoveryLimit")}</p>
-			<p>{t("migrationSourcePreserved")}</p>
-			{impact ? (
-				<>
-					<div className="migration-rule-paths">
-						{(["before", "after", "shadowed"] as const).map((type) => (
-							<section key={type}>
-								<h4>{t(`migrationRules.${type}`)}</h4>
-								{impact[type].length ? (
-									<ul>
-										{impact[type].map((path) => (
-											<li key={path}>
-												<code>{path}</code>
-											</li>
-										))}
-									</ul>
-								) : (
-									<p>{t("migrationNone")}</p>
-								)}
-							</section>
-						))}
-					</div>
-					{impact.backupRequired ? <p>{t("migrationBackupRequired")}</p> : null}
-				</>
-			) : (
-				<p className="migration-danger">{t("migrationRuleImpactMissing")}</p>
-			)}
-		</section>
-	);
-}
 export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 	const t = useT();
 	const id = useMigrationStore((state) => state.focusedId);
@@ -83,16 +39,12 @@ export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 	if (!id || !draft) return <aside className="migration-preview" hidden />;
 	const preview = draft.preview;
 	const candidateKind = preview?.candidate.kind ?? candidate?.kind;
-	if (candidateKind === "sessions" || candidateKind === "mcp")
-		return (
-			<ResourcePreview id={id} kind={candidateKind} draft={draft} expired={expired} onPickTarget={onPickTarget} />
-		);
-	const isRule = candidateKind === "rules";
+	// MCP and rules have no detail panel: MCP migrates as-is, enabled; a rule row already shows source and target.
+	if (candidateKind === "mcp" || candidateKind === "rules") return <aside className="migration-preview" hidden />;
+	if (candidateKind === "sessions")
+		return <ResourcePreview draft={draft} expired={expired} onPickTarget={onPickTarget} />;
 	return (
-		<aside
-			className={`migration-preview${isRule ? " migration-rule-review" : ""}`}
-			aria-label={t("migrationPreview")}
-		>
+		<aside className="migration-preview" aria-label={t("migrationPreview")}>
 			<header className="migration-toolbar">
 				<h3>{preview?.candidate.name ?? t("migrationPreview")}</h3>
 				<Button id="migrationRefreshPreview" onClick={() => void previewCandidate(id)} disabled={draft.loading}>
@@ -119,9 +71,6 @@ export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 			) : null}
 			{preview ? (
 				<>
-					{preview.candidate.kind === "mcp" ? (
-						<p>{t(`migrationMcpTransport.${preview.candidate.mcpTransport ?? "stdio"}`)}</p>
-					) : null}
 					<div className="migration-map">
 						<div>
 							<span>{t("migrationSourcePath")}</span>
@@ -150,7 +99,7 @@ export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 							))}
 						</select>
 					</label>
-					{!isRule && preview.candidate.kind !== "sessions" ? (
+					{preview.candidate.kind !== "sessions" ? (
 						<label className="migration-field">
 							<span>
 								{t(preview.candidate.kind === "mcp" ? "migrationMcpTargetName" : "migrationTargetName")}
@@ -162,26 +111,11 @@ export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 							/>
 						</label>
 					) : null}
-					{preview.candidate.kind === "mcp" ? (
-						<>
-							<p>{t("migrationMcpBoundary")}</p>
-							<label className="migration-check">
-								<input
-									type="checkbox"
-									checked={draft.request.includeSensitiveValues ?? false}
-									onChange={(event) =>
-										void previewCandidate(id, { includeSensitiveValues: event.currentTarget.checked })
-									}
-								/>
-								{t("migrationIncludeSensitive")}
-							</label>
-						</>
-					) : null}
 					<DiagnosticList diagnostics={preview.warnings} />
 					<div className="migration-danger">
 						<DiagnosticList diagnostics={preview.blockers} />
 					</div>
-					{isRule ? <RuleImpact preview={preview} /> : <p>{t(`migrationActivation.${preview.activation}`)}</p>}
+					<p>{t(`migrationActivation.${preview.activation}`)}</p>
 					<div className="migration-content-review">
 						<PreviewText label={t("migrationSourceContent")} text={preview.sourceText} />
 						<PreviewText label={t("migrationTargetContent")} text={preview.targetText} />
@@ -199,19 +133,17 @@ export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 							</ul>
 						</details>
 					) : null}
-					{preview.requiredAcknowledgements
-						.filter((ack) => ack !== "rules-impact")
-						.map((ack: MigrationAcknowledgement) => (
-							<label className="migration-check" key={`${preview.id}:${ack}`}>
-								<input
-									type="checkbox"
-									checked={draft.acknowledged.includes(ack)}
-									disabled={draft.loading}
-									onChange={(event) => acknowledgePreview(id, ack, event.currentTarget.checked)}
-								/>
-								{t(`migrationAcknowledgement.${ack}`)}
-							</label>
-						))}
+					{preview.requiredAcknowledgements.map((ack: MigrationAcknowledgement) => (
+						<label className="migration-check" key={`${preview.id}:${ack}`}>
+							<input
+								type="checkbox"
+								checked={draft.acknowledged.includes(ack)}
+								disabled={draft.loading}
+								onChange={(event) => acknowledgePreview(id, ack, event.currentTarget.checked)}
+							/>
+							{t(`migrationAcknowledgement.${ack}`)}
+						</label>
+					))}
 					<Button variant="secondary" onClick={() => deselectCandidate(id)}>
 						{t("migrationDoNotMigrate")}
 					</Button>

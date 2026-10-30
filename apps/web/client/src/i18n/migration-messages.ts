@@ -1,12 +1,10 @@
 // Paired dictionary input only; the existing i18n module remains the sole translator.
 const labels = {
-	migrationEntryFirst: ["首次使用", "First run"],
-	migrationEntrySettings: ["设置 / 数据迁移", "Settings / Data migration"],
 	"migrationStepHint.sessions": ["", ""],
 	"migrationStepHint.mcp": ["选择要带到 StepCode 的 MCP。", "Choose the MCP servers to bring to StepCode."],
 	"migrationStepHint.rules": [
-		"规则会影响后续模型行为。暂不迁移也能继续；写入前需完整审阅并单独确认。",
-		"Rules shape future model behavior. Skipping is fine; writes need a full review and separate confirmation.",
+		"规则会影响后续模型行为。暂不迁移也能继续。",
+		"Rules shape future model behavior. Skipping is fine.",
 	],
 	migrationPlanHint: ["", ""],
 	migrationCheckingNotice: [
@@ -115,7 +113,7 @@ const labels = {
 	migrationImportMode: ["导入方式", "Import mode"],
 	migrationHistoryCopy: ["新建历史副本", "New history copy"],
 	migrationIndependentCopyMode: ["独立复制", "Independent copy"],
-	migrationMcpDisabledMode: ["配置合并 · 保持禁用", "Merge configuration · keep disabled"],
+	migrationMcpDisabledMode: ["配置合并 · 默认启用", "Merge configuration · enabled"],
 	migrationBatchTarget: ["本类导入目标", "Target for this category"],
 	migrationKeepItemTargets: ["保留每项目标", "Keep individual targets"],
 	migrationBatchTargetHelp: [
@@ -260,8 +258,8 @@ const labels = {
 	migrationAction: ["迁移动作", "Migration action"],
 	migrationDoNotMigrate: ["不迁移这项", "Do not migrate this item"],
 	migrationMcpBoundary: [
-		"仅迁移连接配置，不迁移服务、已有连接或登录状态。普通 MCP 仅支持全局目标，导入后默认禁用。",
-		"Only connection configuration is migrated, not services, existing connections, or sign-in state. Ordinary MCP supports global targets only and is disabled on import.",
+		"仅迁移连接配置，不迁移服务、已有连接或登录状态。连接所需的请求头、环境变量和 API Key 会一并迁移，导入后默认启用。",
+		"Only connection configuration is migrated, not services, existing connections, or sign-in state. Headers, environment variables and API keys the connection needs are migrated too, and the server is enabled on import.",
 	],
 	migrationIncludeSensitive: [
 		"请求包含可迁移的敏感字面值（预览仍脱敏，需单独同意）",
@@ -360,6 +358,9 @@ const states = {
 	"migrationKind.mcp": ["MCP", "MCP"],
 	"migrationKind.prompts": ["提示词模板", "Prompt templates"],
 	"migrationKind.rules": ["AGENTS.md", "AGENTS.md"],
+	"migrationTitle.sessions": ["迁移会话记录至 StepCode", "Migrate session history to StepCode"],
+	"migrationTitle.mcp": ["迁移 MCP 至 StepCode", "Migrate MCP to StepCode"],
+	"migrationTitle.rules": ["迁移 AGENTS.md 至 StepCode", "Migrate AGENTS.md to StepCode"],
 	"migrationSource.codex": ["Codex", "Codex"],
 	"migrationSource.claude-code": ["Claude Code", "Claude Code"],
 	"migrationSource.workbuddy": ["WorkBuddy", "WorkBuddy"],

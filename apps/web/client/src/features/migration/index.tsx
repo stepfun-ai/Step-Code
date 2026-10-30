@@ -219,13 +219,10 @@ export function MigrationOnboarding({
 				<div className="migration-main">
 					<header className="migration-dialog-head">
 						<div className="migration-heading">
-							<span className="migration-eyebrow">
-								{t(origin === "onboarding" ? "migrationEntryFirst" : "migrationEntrySettings")}
-							</span>
 							<h2 id="migrationDialogTitle">
 								{t(
 									stage === "select"
-										? `migrationKind.${kind}`
+										? `migrationTitle.${kind}`
 										: stage === "review"
 											? "migrationConfirmStep"
 											: isActiveJob(job)
@@ -260,7 +257,7 @@ export function MigrationOnboarding({
 						{stage === "select" || stage === "invitation" ? (
 							<>
 								<div
-									className={`migration-resource-layout${focusedId ? " migration-has-preview" : ""}${kind === "rules" ? " migration-resource-rules" : ""}`}
+									className={`migration-resource-layout${focusedId && kind !== "mcp" && kind !== "rules" ? " migration-has-preview" : ""}${kind === "rules" ? " migration-resource-rules" : ""}`}
 								>
 									<CandidateList key={kind} onPickTarget={featureProps.onPickTarget} />
 									<PreviewPanel {...featureProps} />
