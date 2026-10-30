@@ -123,12 +123,39 @@ function signTree(dir) {
 	return signed;
 }
 
-/** Throws unless the file carries a valid Authenticode signature; prints signtool's report. */
+/**
+ * SHA-1 thumbprint of the certificate that signed the file, from `signtool verify /v`.
+ * The report lists the signing chain root first and the signer last, then the
+ * timestamp chain; the signer is the last certificate before the timestamp
+ * section. (Its "Issued to" line is not usable: the console drops the
+ * certificate's Chinese subject.)
+ */
+function signerThumbprint(report) {
+	const start = report.indexOf("Signing Certificate Chain:");
+	if (start < 0) return undefined;
+	const end = report.indexOf("The signature is timestamped", start);
+	const chain = report.slice(start, end < 0 ? undefined : end);
+	const hashes = [...chain.matchAll(/SHA1 hash:\s*([0-9A-Fa-f]{40})/gu)].map((match) => match[1].toUpperCase());
+	return hashes.at(-1);
+}
+
+/**
+ * Throws unless the file carries a valid, timestamped Authenticode signature by
+ * the EV certificate (not just any certificate that chains to a trusted root).
+ */
 function verifySigned(file) {
 	const result = run(["verify", "/pa", "/all", "/v", file], SIGN_TIMEOUT_MS);
 	if (!result.ok) throw new Error(`[win-sign] signature check failed for ${file}:\n${result.output.slice(-1500)}`);
-	const signer = result.output.match(/Issued to:\s*(.+)/u)?.[1]?.trim();
-	console.log(`[win-sign] verified ${path.basename(file)}${signer ? ` (signed by ${signer})` : ""}`);
+	const signer = signerThumbprint(result.output);
+	if (signer !== thumbprint()) {
+		throw new Error(
+			`[win-sign] ${path.basename(file)} is signed by certificate ${signer ?? "(unreadable)"}, not the EV certificate ${thumbprint()}`,
+		);
+	}
+	if (!result.output.includes("The signature is timestamped")) {
+		throw new Error(`[win-sign] ${path.basename(file)} has no timestamp; it would stop verifying when the certificate expires`);
+	}
+	console.log(`[win-sign] verified ${path.basename(file)} (EV certificate ${signer}, timestamped)`);
 }
 
 /**
@@ -163,4 +190,12 @@ function electronBuilderSign(configuration) {
 	signFile(configuration.path);
 }
 
-module.exports = { TIMESTAMP_URL, electronBuilderSign, isPortableExecutable, probeToken, signTree, verifySigned };
+module.exports = {
+	TIMESTAMP_URL,
+	electronBuilderSign,
+	isPortableExecutable,
+	probeToken,
+	signTree,
+	signerThumbprint,
+	verifySigned,
+};

@@ -20,12 +20,11 @@
 #      - signs and notarizes the mac app for arm64 and x64
 #        (.gitlab-ci.desktop-macos-signing.yml) and wraps each stapled app into
 #        a dmg + zip,
-#      - with DESKTOP_RELEASE_WINDOWS=true (off for now: the Windows packager
-#        is down), builds the Windows NSIS installer on the Windows packager
-#        and signs it with the GlobalSign EV token (stepcode-desktop-release-windows);
-#        until then the manual, allowed-to-fail stepcode-desktop-windows-signing-test
-#        does the same build as a test and publishes nothing,
-#      - uploads the installers to the test bucket automatically
+#      - builds the Windows NSIS installer on the Windows packager and signs it
+#        with the GlobalSign EV token (stepcode-desktop-release-windows); add
+#        DESKTOP_RELEASE_WINDOWS=false only when that packager is down, for a
+#        macOS-only release,
+#      - once all of them are signed, uploads the installers to the test bucket automatically
 #        (desktop_upload_test), and to the production bucket on a manual click
 #        (desktop_upload_prod). desktop/latest.json is uploaded last in each
 #        bucket, so the channel never names a file that is not there yet.
@@ -37,7 +36,9 @@
 #
 # 2. Ad-hoc packaging through falcon (catalyst/falcon-mobile-pipeline).
 #    Run pipeline with DESKTOP_BUMP=none builds an unsigned macOS arm64 dmg as
-#    a job artifact; nothing is tagged or uploaded. The defaults below pick
+#    a job artifact; nothing is tagged or uploaded. It also offers the manual,
+#    allowed-to-fail stepcode-desktop-windows-signing-test, the release's
+#    EV-signed Windows build as an artifact. The defaults below pick
 #    that build; to get another one, add the variable by hand in the Run
 #    pipeline form (or pass it through the API):
 #      BUILD_PLATFORM=windows           the unsigned Windows x64 installer

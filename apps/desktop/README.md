@@ -252,7 +252,10 @@ Windows signing uses the company's GlobalSign EV certificate on a USB token, the
 token, with SafeNet Authentication Client and Single Logon, so no password or certificate variable is involved:
 `node scripts/pack-win.cjs --sign` (sets `WIN_SIGN=1`) probes the token, has electron-builder sign `StepCode.exe`,
 its DLLs, the installer and uninstaller through `scripts/win-signer.cjs`, signs the PE files of the server tree in
-`afterPack`, and checks the app and installer with `signtool verify /pa`. It uses
+`afterPack`, and checks that the app and installer verify with `signtool verify /pa`, carry a timestamp and were
+signed by that EV certificate (its thumbprint, not just any trusted chain). The packaging step is retried once from a
+clean release directory: on the packager the Electron unpack has failed with `EPERM` while a scanner held the
+freshly extracted files. It uses
 `build/tools/win/signing/signtool.exe` (CI branch only), SHA-256 with an RFC 3161 timestamp from GlobalSign, and the
 certificate thumbprint `WIN_EV_THUMBPRINT` (default: the company EV certificate). After the packager reboots, the
 token has to be unlocked once on that machine before CI can sign again. Cross-builds on macOS stay unsigned.
@@ -267,12 +270,13 @@ pipeline does all of it:
    `desktop-vX.Y.Z` tag on that commit (the first is `desktop-v0.1.0`) without a pipeline of its own, and passes the
    version to the following jobs.
 2. The same pipeline builds that version (`STEPCODE_BUILD_VERSION=X.Y.Z`): signed and notarized mac arm64 / x64 dmgs
-   and, with `DESKTOP_RELEASE_WINDOWS=true`, the EV-signed Windows x64 NSIS installer (the uploads refuse one without a
-   signature). Windows is off for now (the Windows packager runner is down), so releases are macOS only and their
-   `latest.json` lists only mac assets. Meanwhile every release pipeline and every Run pipeline offers the manual job
-   `stepcode-desktop-windows-signing-test`: it builds and EV-signs the installer the same way, may fail, is needed by
-   no upload and publishes nothing; its installer is a job artifact. Nothing in the tree is bumped. Running a pipeline on an existing tag repeats
-   its release.
+   and zips, and the EV-signed Windows x64 NSIS installer (`stepcode-desktop-release-windows`; the uploads refuse one
+   without a signature). The uploads wait for all of them, so a bucket always gets mac and Windows together. When the
+   Windows packager is down, add `DESKTOP_RELEASE_WINDOWS=false` in Run pipeline for a macOS-only release; its
+   `latest.json` then lists only the mac assets. A `DESKTOP_BUMP=none` pipeline (or a macOS-only release) offers the
+   manual job `stepcode-desktop-windows-signing-test` instead: the same signed build, allowed to fail, needed by no
+   upload, kept as a job artifact. Nothing in the tree is bumped. Running a pipeline on an existing tag repeats its
+   release.
 3. `desktop_upload_test` (automatic) and then `desktop_upload_prod` (manual) run
    `infra/release/desktop-release.mjs --upload`: the same installers go to `desktop/<v>/` in the test and the
    production TOS bucket, with `SHA256SUMS`, `manifest.json` and finally the channel pointer `desktop/latest.json`.

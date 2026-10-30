@@ -111,9 +111,19 @@ function buildChannelManifest({ channelId: id, exeName, latestYmlName }) {
 
 // No `--ignore-scripts` anywhere in CI: node-pty and esbuild ship postinstall
 // artifacts, and electron-builder needs the electron binary.
+// `retries`: electron-builder renames the Electron zip it just extracted
+// (win-unpacked.tmp -> win-unpacked). On the Windows packager that rename has
+// failed with EPERM while an on-access scanner still held the fresh files; a
+// second run from a clean release directory has passed. The step restages
+// everything, so a retry cannot reuse a half-written tree.
 const steps = [
-	{ label: "build the monorepo", command: "pnpm", args: ["run", "build"] },
-	{ label: "package the NSIS installer", command: process.execPath, args: [path.join(desktopRoot, "scripts", "package.mjs"), "--win"] },
+	{ label: "build the monorepo", command: "pnpm", args: ["run", "build"], retries: 0 },
+	{
+		label: "package the NSIS installer",
+		command: process.execPath,
+		args: [path.join(desktopRoot, "scripts", "package.mjs"), "--win"],
+		retries: 1,
+	},
 ];
 
 const version = productVersion();
@@ -169,15 +179,21 @@ function main() {
 	if (options.sign) winSigner.probeToken();
 
 	for (const step of steps) {
-		console.log(`[pack:win] ${step.label}`);
-		const result = spawnSync(step.command, step.args, {
-			cwd: repoRoot,
-			env,
-			stdio: "inherit",
-			shell: process.platform === "win32",
-		});
-		if (result.error) throw result.error;
-		if (result.status !== 0) throw new Error(`${step.label} failed with exit code ${result.status}`);
+		for (let attempt = 0; ; attempt += 1) {
+			console.log(`[pack:win] ${step.label}${attempt > 0 ? ` (retry ${attempt}/${step.retries})` : ""}`);
+			const result = spawnSync(step.command, step.args, {
+				cwd: repoRoot,
+				env,
+				stdio: "inherit",
+				shell: process.platform === "win32",
+			});
+			if (result.error) throw result.error;
+			if (result.status === 0) break;
+			if (attempt >= step.retries) throw new Error(`${step.label} failed with exit code ${result.status}`);
+			console.warn(`[pack:win] ${step.label} failed with exit code ${result.status}; retrying from a clean release directory`);
+			rmSync(releaseDir, { recursive: true, force: true });
+			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10_000);
+		}
 	}
 
 	// apps/desktop/scripts/package.mjs writes apps/desktop/release/<version>/; falcon

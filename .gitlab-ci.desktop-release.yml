@@ -13,8 +13,8 @@
 #   desktop/<v>/StepCode-<v>-mac-arm64.dmg   immutable, Developer ID signed + notarized
 #   desktop/<v>/StepCode-<v>-mac-x64.dmg     immutable, Developer ID signed + notarized
 #   desktop/<v>/StepCode-<v>-mac-<arch>.zip  immutable, the same stapled apps: in-app update payloads
-#   desktop/<v>/StepCode-<v>-win-x64.exe     immutable, Authenticode signed (GlobalSign EV);
-#                                            only with DESKTOP_RELEASE_WINDOWS=true
+#   desktop/<v>/StepCode-<v>-win-x64.exe     immutable, Authenticode signed (GlobalSign EV):
+#                                            first install and in-app update payload
 #   desktop/<v>/SHA256SUMS, manifest.json    immutable
 #   desktop/latest.json                      channel pointer, uploaded last; also the in-app
 #                                            update channel the packaged app reads (electron-updater)
@@ -23,13 +23,14 @@
 # the STEP_TOS_PROD_* targets are declared in .gitlab-ci.yml (the CLI release
 # jobs use them too).
 variables:
-  # Windows in releases: off while the Windows packager (runner tags windows +
-  # bare-metal) cannot run jobs, so a release is macOS only and never waits on
-  # it. Set to 'true' (here, or as an added variable in Run pipeline) to build, EV-sign and
-  # publish the Windows installer again. The uploads follow it: without Windows
-  # the release's latest.json lists only the mac assets, and Windows clients
-  # (none yet) see no update.
-  DESKTOP_RELEASE_WINDOWS: 'false'
+  # Windows in releases: on. A release builds and EV-signs the Windows installer
+  # next to the mac ones, and both uploads wait for it, so every bucket gets the
+  # dmgs, zips and the exe together and latest.json names all of them.
+  # Emergency switch: when the Windows packager (runner tags windows +
+  # bare-metal) is down, add DESKTOP_RELEASE_WINDOWS=false in Run pipeline. That
+  # release is macOS only: its latest.json lists only the mac assets, so Windows
+  # clients stay on their version until the next release with Windows.
+  DESKTOP_RELEASE_WINDOWS: 'true'
 
 # Docker jobs: no falcon toolchain, so the global falcon before_script is off.
 .desktop-docker-job:
@@ -172,17 +173,17 @@ stepcode-desktop-release-windows:
       - dist-electron/latest.yml
     expire_in: 2 weeks
 
-# Windows packaging and EV signing as a test only, while Windows is held back
-# from releases (DESKTOP_RELEASE_WINDOWS is not true). It never blocks macOS:
-# it is a manual job (the play button) that may fail, and no upload needs it,
-# so nothing it builds is published. It shows up in release pipelines and in
-# any Run pipeline, and keeps the installer as a job artifact to download and
-# try. It builds the same way the release job does, at the release's version
-# when there is a tag, else at the root package.json version.
+# Windows packaging and EV signing as a test: nothing it builds is published.
+# Offered (the play button, may fail, no upload needs it) in every Run pipeline
+# that is not a Windows release: a DESKTOP_BUMP=none test pipeline, or a
+# release with DESKTOP_RELEASE_WINDOWS=false. A release with Windows has no use
+# for it; stepcode-desktop-release-windows builds the same installer there. It
+# keeps the installer as a job artifact, at the release's version when there
+# is a tag, else at the root package.json version.
 stepcode-desktop-windows-signing-test:
   extends: .desktop-windows-signed-build
   rules:
-    - if: '$DESKTOP_RELEASE_WINDOWS == "true"'
+    - if: '$DESKTOP_RELEASE_WINDOWS == "true" && ($CI_COMMIT_TAG =~ /^desktop-v\d+\.\d+\.\d+$/ || $DESKTOP_BUMP != "none")'
       when: never
     - if: '$CI_COMMIT_TAG =~ /^desktop-v\d+\.\d+\.\d+$/ || $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger"'
       when: manual
@@ -246,12 +247,13 @@ desktop_upload_test:
       artifacts: true
     - job: stepcode-desktop-notary-finalize-x64
       artifacts: true
-    # Optional: absent when DESKTOP_RELEASE_WINDOWS is off.
+    # Required whenever it runs (the default); optional only so that a release
+    # with DESKTOP_RELEASE_WINDOWS=false, which has no such job, still uploads.
     - job: stepcode-desktop-release-windows
       artifacts: true
       optional: true
-  # Automatic: once every installer is built (and the mac ones notarized), the
-  # test bucket gets the release.
+  # Automatic: once every installer is built and signed (and the mac ones
+  # notarized), the test bucket gets the release.
   rules: !reference [.desktop-release-rules, rules]
   variables:
     DESKTOP_BASE_URL: '$STEP_RELEASE_BASE_URL'
@@ -266,7 +268,7 @@ desktop_upload_prod:
       artifacts: true
     - job: stepcode-desktop-notary-finalize-x64
       artifacts: true
-    # Optional: absent when DESKTOP_RELEASE_WINDOWS is off.
+    # See desktop_upload_test.
     - job: stepcode-desktop-release-windows
       artifacts: true
       optional: true
