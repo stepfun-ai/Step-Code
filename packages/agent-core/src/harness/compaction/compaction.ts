@@ -143,49 +143,19 @@ function combineUsage(first: Usage, second: Usage): Usage {
 export interface CompactionSettings {
 	/** Enable automatic compaction decisions. */
 	enabled: boolean;
-	/** Tokens reserved for summary prompt and output. */
+	/** Response headroom used to choose the automatic compaction trigger. */
 	reserveTokens: number;
 	/** Approximate recent-context tokens to keep after compaction. */
 	keepRecentTokens: number;
 }
 
-/**
- * Hard upper bound on summary output tokens, regardless of `reserveTokens`.
- * Chosen to sit under Anthropic's 32k-per-response cap while giving rich
- * long-horizon sessions enough room to emit a full 8-section handoff without
- * hitting the `stopReason:"length"` guard.
- */
-export const SUMMARY_OUTPUT_TOKENS_CEILING = 32000;
-
 /** Default compaction settings used by the harness. */
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	enabled: true,
-	// Bumped from 16384: content-rich sessions were flirting with the
-	// 0.8 * 16384 = 13107 maxTokens cap and getting rejected on length-stop.
-	// 24576 gives ~19660-token headroom for the summary (or up to the ceiling
-	// on models that expose a larger native output cap), while still leaving
-	// ~keepRecentTokens for the retained tail.
+	// Reserve room for the next response when choosing the automatic trigger.
 	reserveTokens: 24576,
 	keepRecentTokens: 20000,
 };
-
-/**
- * Pick the summary output cap without letting the trigger reserve bypass output limits.
- * Valid existing budgets are preserved. A positive model limit and the summary
- * ceiling bound the final budget; an unknown model limit uses the reserve fraction
- * bounded by {@link SUMMARY_OUTPUT_TOKENS_CEILING}.
- */
-export function pickSummaryMaxTokens(
-	model: { readonly maxTokens: number },
-	reserveTokens: number,
-	reserveFraction: number,
-): number {
-	const reserveBudget = Math.floor(reserveFraction * reserveTokens);
-	const modelBudget = model.maxTokens > 0 ? Math.min(model.maxTokens, SUMMARY_OUTPUT_TOKENS_CEILING) : 0;
-	// reserveTokens also controls the trigger threshold; an early trigger must not expand the output cap.
-	const requestedBudget = Math.max(reserveBudget, modelBudget) || reserveBudget;
-	return Math.min(requestedBudget, modelBudget || SUMMARY_OUTPUT_TOKENS_CEILING);
-}
 
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
@@ -520,7 +490,8 @@ export async function generateSummary(
 	currentMessages: AgentMessage[],
 	models: Models,
 	model: Model<Api>,
-	reserveTokens: number,
+	// Retained for caller compatibility; the provider sizes summary output.
+	_reserveTokens: number | undefined,
 	signal?: AbortSignal,
 	customInstructions?: string,
 	previousSummary?: string,
@@ -532,7 +503,7 @@ export async function generateSummary(
 		currentMessages,
 		models,
 		model,
-		reserveTokens,
+		_reserveTokens,
 		signal,
 		customInstructions,
 		previousSummary,
@@ -548,7 +519,8 @@ export async function generateSummaryWithUsage(
 	currentMessages: AgentMessage[],
 	models: Models,
 	model: Model<Api>,
-	reserveTokens: number,
+	// Retained for caller compatibility; the provider sizes summary output.
+	_reserveTokens: number | undefined,
 	signal?: AbortSignal,
 	customInstructions?: string,
 	previousSummary?: string,
@@ -556,7 +528,6 @@ export async function generateSummaryWithUsage(
 	retry?: RetryPolicy,
 	callbacks?: RetryCallbacks,
 ): Promise<Result<{ text: string; usage: Usage }, CompactionError>> {
-	const maxTokens = pickSummaryMaxTokens(model, reserveTokens, 0.8);
 	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
 	if (customInstructions) {
 		basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
@@ -578,9 +549,7 @@ export async function generateSummaryWithUsage(
 	];
 
 	const completionOptions =
-		model.reasoning && thinkingLevel && thinkingLevel !== "off"
-			? { maxTokens, signal, reasoning: thinkingLevel }
-			: { maxTokens, signal };
+		model.reasoning && thinkingLevel && thinkingLevel !== "off" ? { signal, reasoning: thinkingLevel } : { signal };
 
 	const response = await completeSimpleWithRetries(
 		models,
@@ -605,7 +574,7 @@ export async function generateSummaryWithUsage(
 		return err(
 			new CompactionError(
 				"summarization_failed",
-				`Summarization failed: generation hit the ${maxTokens}-token output cap and the summary is incomplete; raise reserveTokens if this recurs`,
+				"Summarization failed: generation hit the token cap and the summary is incomplete; check model output limits and request context headroom",
 			),
 		);
 	}
@@ -742,7 +711,6 @@ export async function compact(
 		tokensBefore,
 		previousSummary,
 		fileOps,
-		settings,
 	} = preparation;
 
 	let summary: string;
@@ -757,7 +725,7 @@ export async function compact(
 				messagesToSummarize,
 				models,
 				model,
-				settings.reserveTokens,
+				undefined,
 				signal,
 				customInstructions,
 				previousSummary,
@@ -773,7 +741,6 @@ export async function compact(
 			turnPrefixMessages,
 			models,
 			model,
-			settings.reserveTokens,
 			signal,
 			thinkingLevel,
 			retry,
@@ -789,7 +756,7 @@ export async function compact(
 			messagesToSummarize,
 			models,
 			model,
-			settings.reserveTokens,
+			undefined,
 			signal,
 			customInstructions,
 			previousSummary,
@@ -817,15 +784,13 @@ async function generateTurnPrefixSummary(
 	messages: AgentMessage[],
 	models: Models,
 	model: Model<Api>,
-	reserveTokens: number,
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
 	retry?: RetryPolicy,
 	callbacks?: RetryCallbacks,
 ): Promise<Result<{ text: string; usage: Usage }, CompactionError>> {
-	// Smaller output budget for turn-prefix summaries: the suffix of the turn
-	// is retained verbatim, so the summary only needs to describe the prefix.
-	const maxTokens = pickSummaryMaxTokens(model, reserveTokens, 0.5);
+	// The suffix of the turn is retained verbatim, so the summary only needs
+	// to describe the prefix.
 	const llmMessages = convertToLlm(messages);
 	const conversationText = serializeConversation(llmMessages);
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
@@ -838,9 +803,7 @@ async function generateTurnPrefixSummary(
 	];
 
 	const completionOptions =
-		model.reasoning && thinkingLevel && thinkingLevel !== "off"
-			? { maxTokens, signal, reasoning: thinkingLevel }
-			: { maxTokens, signal };
+		model.reasoning && thinkingLevel && thinkingLevel !== "off" ? { signal, reasoning: thinkingLevel } : { signal };
 	const response = await completeSimpleWithRetries(
 		models,
 		model,
@@ -864,7 +827,7 @@ async function generateTurnPrefixSummary(
 		return err(
 			new CompactionError(
 				"summarization_failed",
-				`Turn prefix summarization failed: generation hit the ${maxTokens}-token output cap and the summary is incomplete; raise reserveTokens if this recurs`,
+				"Turn prefix summarization failed: generation hit the token cap and the summary is incomplete; check model output limits and request context headroom",
 			),
 		);
 	}

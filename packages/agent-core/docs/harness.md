@@ -1332,6 +1332,13 @@ Calls are tracked internally by `sourceIndex`. Hooks, events, and tool context s
 
 ## 3.9 Summary generation — compaction and navigation summaries
 
+The built-in summary helpers use the provider's normal model output limit and
+remaining-context sizing, without a separate fixed summary cap. Their summary
+view omits provider thinking blocks while retaining visible text and tool facts;
+it does not rewrite the stored messages. Compaction trigger and source-selection
+reserve settings remain independent of response sizing. See the
+[compaction integrity contract](../../../docs/compaction-integrity.md).
+
 Both operations generate a summary through the same `deciding → generating → result` machinery, which is why they are specified together. The axes:
 
 | | compaction | navigation |
@@ -2677,6 +2684,8 @@ External output that violates durable JSON/schema contracts is converted before 
 For each live tool batch, the harness resolves `toolContext` exactly once, caches bound `AgentHarnessTool<TContext>` adapters in `DriveState.toolBatches`, and passes that same context as the fifth execute argument for every call. Safe replay after restart creates one new batch snapshot; context is environmental and never persisted.
 
 `executeToolBatch` (the exported successor of the source's private `executeToolCalls`) preserves the existing sequential/parallel behavior: source-ordered preparation and dispatch, concurrent effects in parallel mode, source-ordered finalization/results, no effect for blocked/invalid/genuine-length calls, and `terminate: true` only when every finalized outcome terminates. Compatibility wrappers keep existing public loop signatures and events.
+
+The loop's optional `beforeModelRequest` hook runs before every provider request (the first request of a prompt or continuation, and every follow-up), after injected steering, and may replace the request context, model, or thinking level; see the [package README](../README.md). It must not throw. Products use it for request-time maintenance such as compaction, so any phase refactor must keep calling it once per provider request and keep the post-hook steering poll for follow-up requests.
 
 ## 5.8 Telemetry
 

@@ -51,12 +51,21 @@ A `length` response remains an incomplete summary and is never saved as a succes
 Auto-compaction triggers when:
 
 ```
-contextTokens > contextWindow - reserveTokens
+contextTokens > min(
+  floor(contextWindow * triggerRatio),
+  max(contextWindow - 4096 - min(model.maxTokens, 8192), floor(contextWindow * 0.5))
+)
 ```
 
-By default, `reserveTokens` is 16384 tokens (configurable in `~/.stepcode/config.toml` or trusted `<project-dir>/.stepcode/config.toml`). This leaves room for the LLM's response.
+`triggerRatio` defaults to `0.9` for every model (configurable globally or per model in `~/.stepcode/config.toml` or trusted `<project-dir>/.stepcode/config.toml`). Providers clamp each request's `max_tokens` to the remaining context minus a 4096-token safety margin, so the second term keeps room for the next response: on a small window 10% of the context is less than that margin. The trigger never drops below half the window. With an 8K-or-larger output limit, a 32K window compacts at 20,480 tokens (62.5%), 64K at 53,248 (81.25%), and 128K or larger at 90%. A response truncated by the clamp still goes through the overflow/length recovery below. `tokenLimit` can only make compaction trigger earlier. An explicitly configured `reserveTokens` keeps its old effect as an additional ceiling, `contextWindow - reserveTokens`.
 
-During a multi-turn agent run, Step checks this threshold after tools finish and their results are appended, before starting the next assistant response. If the threshold is crossed, Step compacts inside the same agent run and resumes with the summary and retained messages. It skips this between-turn check when the completed tool batch terminates the run and no queued message requires another response. Step also checks the threshold before a new user prompt and after a low-level agent run ends.
+Step checks the threshold once immediately before every model request: before the first request of a prompt (counting the incoming prompt), before every follow-up request inside a tool loop (counting the new tool results and injected steering), and before the first request of a continuation. If the threshold is crossed, Step compacts inside the same agent run and resumes with the summary and retained messages. Steering queued while a follow-up request compacts is delivered to that same request. Input queued while the pre-run check compacts (or added by an `agent_start` listener) joins the first request and is measured again before it is sent; input typed while that first request's own check compacts is delivered with the next request. A final answer that crosses the threshold does not compact on its own; the next request compacts first. Context-overflow and truncated-length recovery still run after the failed response. If measuring or preparing maintenance throws unexpectedly, the request is sent unchanged and overflow recovery remains the fallback.
+
+Token counts use the last valid assistant usage plus estimates of messages added after it. Usage reported before the latest compaction is ignored, because it measured the previous, larger context; without trustworthy usage, the estimate also includes the system prompt and tool schemas.
+
+If automatic threshold compaction fails three times in a row, it pauses for the session and the third failure's message says so; while paused, Step does not measure or attempt automatic compaction. An unexpected error while measuring or preparing maintenance also counts, is recorded as a `step-compaction-failure` entry, and the request is sent unchanged. Cancelled compactions, extension cancellations, and errors raised after a compaction was saved do not count. A successful compaction (including `/compact`), an accepted CLM edit, a model switch, or a registry update that changes the model's context window resumes it. Overflow recovery is unaffected.
+
+Set `triggerPolicy = "legacy"` to restore the previous `contextWindow - reserveTokens` threshold, checkpoints (including compaction right after a final answer), and token measurement.
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
@@ -288,11 +297,12 @@ Before summarization, messages are serialized to text via [`serializeConversatio
 
 ```
 [User]: What they said
-[Assistant thinking]: Internal reasoning
 [Assistant]: Response text
 [Assistant tool calls]: read(path="foo.ts"); edit(path="bar.ts", ...)
 [Tool result]: Output from tool
 ```
+
+Provider thinking blocks are omitted from this view; the stored messages keep them.
 
 This prevents the model from treating it as a conversation to continue.
 
@@ -355,7 +365,6 @@ pi.on("session_before_compact", async (event, ctx) => {
   );
   // Returns:
   // [User]: message text
-  // [Assistant thinking]: thinking content
   // [Assistant]: response text
   // [Assistant tool calls]: read(path="..."); bash(command="...")
   // [Tool result]: output text
@@ -430,24 +439,40 @@ Configure compaction in `~/.stepcode/config.toml` or trusted `<project-dir>/.ste
 ```toml
 [compaction]
 enabled = true
-reserveTokens = 16384
+triggerRatio = 0.9
 keepRecentTokens = 20000
+
+[compaction.modelTriggerRatios]
+"my-provider/small-window-model" = 0.8
 ```
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
-| `reserveTokens` | `16384` | Tokens to reserve for LLM response |
+| `triggerRatio` | `0.9` | Fraction of the context window that triggers auto-compaction (0.5-0.95); small windows trigger earlier to keep response room |
+| `modelTriggerRatios` | none | Per-model `triggerRatio`, keyed by `provider/model-id` |
+| `tokenLimit` | none | Absolute token ceiling; can only trigger earlier |
+| `triggerPolicy` | `"v2"` | `"legacy"` restores the previous threshold and checkpoints |
+| `reserveTokens` | `16384` | Legacy trigger headroom; when set explicitly, also caps the v2 trigger at `contextWindow - reserveTokens` |
 | `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
+
+Invalid trigger values fall back to their defaults and are reported as settings warnings at startup.
 
 Disable auto-compaction with `enabled = false`. You can still compact manually with `/compact`.
 
-The reserve also influences generated summary budgets, but each history/update
-or split-turn prefix request is capped at 32000 tokens and at the model's positive
-`maxTokens` limit. Unknown/nonpositive model limits retain the reserve-fraction
-fallback up to 32000. For example, with a 1048576-token window, setting
-`reserveTokens = 851968` triggers compaction above 196608 tokens without inflating
-summary output beyond the limit. `keepRecentTokens` remains approximate; the
-ordinary model context/output declarations are unchanged. See the
-[compaction integrity contract](../../../docs/compaction-integrity.md) for exact
-request recognition and no-effort wire behavior.
+`reserveTokens` never sets the summary output limit.
+History, update, split-turn prefix, and branch summaries omit a separate
+`maxTokens` override. The provider sizes output from the model's declared limit
+and the remaining context space for the actual request. This leaves reasoning
+models their normal response budget instead of imposing an extra summary cap.
+The existing `generateSummary` and `generateSummaryWithUsage` reserve argument is
+retained for call compatibility but no longer selects the output budget.
+
+Summary input includes visible replies, tool calls, and tool results. Provider
+thinking blocks are omitted because replayed reasoning may not belong to the
+live context and can make the summary request larger than that context. This
+only changes the summary view; original session history and successful skill-read
+retention remain intact. `keepRecentTokens` stays approximate, and configured
+trigger thresholds are unchanged. See the
+[compaction integrity contract](../../../docs/compaction-integrity.md) for request
+recognition and wire-budget validation.

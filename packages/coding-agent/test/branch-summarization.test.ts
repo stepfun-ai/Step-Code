@@ -44,7 +44,7 @@ function response(content: AssistantMessage["content"]): AssistantMessage {
 }
 
 describe("branch summarization", () => {
-	it("does not override tool choice for branch summaries", async () => {
+	it("leaves the output budget and tool choice to the provider", async () => {
 		let requestOptions: SimpleStreamOptions | undefined;
 		const streamFn: StreamFn = (_model, _context, options) => {
 			requestOptions = options;
@@ -62,6 +62,7 @@ describe("branch summarization", () => {
 		});
 
 		expect(requestOptions?.toolChoice).toBeUndefined();
+		expect(requestOptions).not.toHaveProperty("maxTokens");
 	});
 
 	it("rejects tool calls from branch summaries", async () => {
