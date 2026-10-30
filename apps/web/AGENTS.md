@@ -223,7 +223,7 @@ When to add or change one:
   The coding-agent migration module owns format translation, readiness, fingerprints, consent and publication;
   the Host only validates protocol input, explicit paths and authentication. Scan/preview can read supported resource
   configuration and instruction text, but must not write resources, execute extensions, connect MCP or grant trust.
-  Ordinary MCP migration writes global configuration only and starts disabled. All AI rule writes, including new files,
+  Ordinary MCP migration writes enabled declarations, including their headers/env credentials, and re-syncs Host MCP connections. All AI rule writes, including new files,
   require content/scope/loading-impact consent bound to the preview. Expired or changed targets require a new preview.
   Close hides the UI; cancellation stops remaining work after the current unit settles. Keep legacy import records
   separately readable and never dispatch their IDs through the unified job API. See `docs/desktop-migration.md`.

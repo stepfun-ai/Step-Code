@@ -332,7 +332,13 @@ const store = new WebSessionStore({ index: sessionSearch });
 let migrations: MigrationService | undefined;
 let onboarding: DesktopOnboardingStore | undefined;
 try {
-	migrations = new MigrationService({ agentDir: resolveStepAgentDir(), sessions: sessionImports, env: process.env });
+	migrations = new MigrationService({
+		agentDir: resolveStepAgentDir(),
+		sessions: sessionImports,
+		env: process.env,
+		// Migrated MCP servers are enabled: connect them now so the next message can use their tools.
+		onMcpChanged: () => resyncMcp(),
+	});
 } catch {
 	// Optional migration data must not prevent the host from serving existing chats.
 }

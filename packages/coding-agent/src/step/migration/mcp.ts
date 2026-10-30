@@ -51,9 +51,14 @@ export function targetServers(
 }
 const reference = /^\$\{[A-Za-z_][A-Za-z0-9_]*(?::-)?\}$/u;
 const secretName = /token|secret|password|passwd|api[-_]?key|authorization|credential|cookie/iu;
+/**
+ * Prepare a source declaration for StepCode. Headers, environment values, arguments and URL credentials are
+ * carried over by default so the server works right after migration; `includeSensitive: false` strips literals
+ * (environment references stay). The imported declaration is enabled.
+ */
 export function sanitizedMcp(
 	input: StepMcpServerConfig,
-	includeSensitive: boolean,
+	includeSensitive = true,
 ): { config: StepMcpServerConfig; stripped: boolean } {
 	const config = structuredClone(input);
 	let stripped = false;
@@ -108,7 +113,7 @@ export function sanitizedMcp(
 			stripped = true;
 		}
 	}
-	config.enabled = false;
+	config.enabled = true;
 	return { config, stripped };
 }
 /** No command, argument, URL or literal header/environment value crosses the DTO boundary. */

@@ -545,7 +545,7 @@ export class ResourceInspector {
 					dto.diagnostics.push({ code: "plugin-provided", path: plugins[0]!.path });
 				}
 			}
-			if (sanitizedMcp(config, false).stripped) dto.diagnostics.push({ code: "sensitive-values-omitted" });
+			if (sanitizedMcp(config).stripped) dto.diagnostics.push({ code: "sensitive-values-omitted" });
 			return;
 		}
 		const content = text(dto.sourcePath)!;

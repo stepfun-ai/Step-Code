@@ -2847,8 +2847,8 @@ components:
             source title.
         includeSensitiveValues:
           type: boolean
-          default: false
-          description: MCP literal-value opt-in requires sensitive-values acknowledgement; OAuth is never migrated and DTO text stays redacted.
+          default: true
+          description: MCP headers, environment values and API keys migrate by default; false strips literals. OAuth is never migrated and DTO text stays redacted.
     MigrationError:
       type: object
       required: [error, code]

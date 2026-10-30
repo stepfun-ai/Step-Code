@@ -620,7 +620,7 @@ describe("offline migration resources", () => {
 		expect(existsSync(agent)).toBe(false);
 	});
 
-	it("writes global MCP disabled, strips literal secrets, preserves references and unrelated settings", async () => {
+	it("writes global MCP enabled, strips literal secrets when excluded, preserves references and unrelated settings", async () => {
 		put(
 			join(home, ".codex", "config.toml"),
 			'[mcp_servers.lookup]\nurl="https://fixture.invalid/mcp?token=PRIVATE_QUERY"\nbearer_token_env_var="FIXTURE_TOKEN"\n[mcp_servers.lookup.http_headers]\nAuthorization="PRIVATE_HEADER"\n',
@@ -631,12 +631,12 @@ describe("offline migration resources", () => {
 		);
 		const c = await candidate("mcp");
 		expect(c.needsMigration).toBe(true);
-		const p = await service.preview({ candidateId: c.id });
+		const p = await service.preview({ candidateId: c.id, includeSensitiveValues: false });
 		expect(JSON.stringify(p)).not.toMatch(/PRIVATE_QUERY|PRIVATE_HEADER|fixture.invalid/u);
 		const job = await complete(p);
 		expect(job.items[0]?.status).toBe("imported");
 		const target = readFileSync(join(dirname(agent), "config.toml"), "utf8");
-		expect(target).toContain("enabled = false");
+		expect(target).toContain("enabled = true");
 		expect(target).toContain("FIXTURE_TOKEN");
 		expect(target).toContain("fixture-model");
 		expect(target).not.toMatch(/PRIVATE_QUERY|PRIVATE_HEADER/u);
@@ -644,7 +644,7 @@ describe("offline migration resources", () => {
 		expect(journal).not.toMatch(/PRIVATE_QUERY|PRIVATE_HEADER|fixture.invalid|FIXTURE_TOKEN/u);
 	});
 
-	it("requires explicit sensitive inclusion and writes a project MCP target", async () => {
+	it("migrates sensitive values by default without extra consent and offers a project MCP target", async () => {
 		put(
 			join(home, ".claude.json"),
 			JSON.stringify({ mcpServers: { local: { command: "server", env: { API_KEY: "PRIVATE_LITERAL" } } } }),
@@ -654,14 +654,28 @@ describe("offline migration resources", () => {
 		const projectPreview = await service.preview({ candidateId: c.id, target: { kind: "project", cwd: project } });
 		expect(projectPreview.blockers).toEqual([]);
 		expect(projectPreview.target.path).toBe(join(project, ".profile", "config.toml"));
-		const p = await service.preview({ candidateId: c.id, includeSensitiveValues: true });
+		const p = await service.preview({ candidateId: c.id });
 		expect(JSON.stringify(p)).not.toContain("PRIVATE_LITERAL");
-		await expect(service.plan([{ previewId: p.id, acknowledged: [] }])).rejects.toMatchObject({
-			code: "acknowledgement-required",
-		});
-		const job = await complete(p, ["sensitive-values"]);
+		expect(p.requiredAcknowledgements).toEqual([]);
+		expect(p.activation).toBe("next-resource-load");
+		const job = await complete(p);
 		expect(job.items[0]?.status).toBe("imported");
-		expect(readFileSync(join(dirname(agent), "config.toml"), "utf8")).toContain("PRIVATE_LITERAL");
+		const written = readFileSync(join(dirname(agent), "config.toml"), "utf8");
+		expect(written).toContain("PRIVATE_LITERAL");
+		expect(written).toContain("enabled = true");
+	});
+
+	it("notifies the host after a job writes MCP declarations", async () => {
+		put(join(home, ".claude.json"), JSON.stringify({ mcpServers: { local: { command: "server" } } }));
+		const onMcpChanged = vi.fn();
+		const notifying = new MigrationService({ agentDir: agent, env, sessions, onMcpChanged });
+		services.push(notifying);
+		const c = (await notifying.scan({ kinds: ["mcp"] })).candidates[0]!;
+		const p = await notifying.preview({ candidateId: c.id });
+		const plan = await notifying.plan([{ previewId: p.id, acknowledged: [] }]);
+		const job = await notifying.start({ planId: plan.id, digest: plan.digest, idempotencyKey: `notify-${p.id}` });
+		await expect.poll(() => notifying.getJob(job.id).status).toBe("completed");
+		await expect.poll(() => onMcpChanged.mock.calls.length).toBe(1);
 	});
 
 	it("writes an MCP server into a trusted project config and leaves the global one alone", async () => {
@@ -675,7 +689,7 @@ describe("offline migration resources", () => {
 		const written = readFileSync(join(project, ".profile", "config.toml"), "utf8");
 		expect(written).toContain("[mcp_servers.local]");
 		expect(written).toContain('command = "server"');
-		expect(written).toContain("enabled = false");
+		expect(written).toContain("enabled = true");
 		// The global config must not gain the server; an empty file may exist from reads.
 		const global = existsSync(join(dirname(agent), "config.toml"))
 			? readFileSync(join(dirname(agent), "config.toml"), "utf8")

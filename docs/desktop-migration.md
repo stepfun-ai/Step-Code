@@ -51,7 +51,7 @@ state does not disable existing chats; use the explicit API to inspect its error
 | --- | --- | --- |
 | Sessions | Claude Code, Codex, WorkBuddy and Qoder local supported JSONL history | Import a reviewed history snapshot into an explicitly selected project; preserve source provenance. Archives and child sessions are excluded by default in unified scan. No source process, credentials, approvals, file checkpoints or hidden reasoning are restored. |
 | Skills | Claude Code and Codex skills; shared `.agents/skills`; StepCode-owned skills; installed plugin skill declarations; selected-project equivalents | Copy a complete `SKILL.md` package including supporting files when needed. Plain standalone Markdown is not a copyable skill package. Direct references and plugin-owned resources do not need automatic physical migration. |
-| Ordinary MCP | Global Claude Code `mcpServers` and Codex `mcp_servers` declarations | Translate supported stdio/HTTP declarations into global StepCode config only, initially disabled. Project `.mcp.json` and project entries embedded in Claude config are reported unsupported, not imported globally. Equivalent configured/plugin-provided declarations are not duplicated. |
+| Ordinary MCP | Global Claude Code `mcpServers` and Codex `mcp_servers` declarations | Translate supported stdio/HTTP declarations into global StepCode config only, enabled. Project `.mcp.json` and project entries embedded in Claude config are reported unsupported, not imported globally. Equivalent configured/plugin-provided declarations are not duplicated. |
 | Rules | Global Claude Code/Codex rule files and direct selected-project rule files | Recognize `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`; write only the destination `AGENTS.md` after rule-impact review and confirmation. Already effective project rules are references, not automatic copies. |
 
 The session adapters support Codex response-item/rollout records, Claude message
@@ -139,7 +139,7 @@ enter the ordinary select-all set.
 The footer offers Previous/Continue and an explicit final-plan action. The supported
 import mode is shown, not guessed from the source: history creates new copies,
 skill packages are independent copies, and ordinary MCP configuration is merged
-in global scope and remains disabled. Link-based migration is not offered.
+in global scope and enabled. Link-based migration is not offered.
 A category-wide destination change invalidates existing previews and confirmations
 and re-previews selected items. Hiding the dialog does not leave some items ready
 at their earlier destinations. The category default also applies to new selections;
@@ -158,7 +158,7 @@ All controls inherit the active client theme and shared UI primitives.
 2. **Preview** a candidate with target, optional new name and explicit action.
    Review the source/target/result text, skill package file list, blockers,
    activation and, for rules, effective paths before/after and shadowed paths.
-   MCP text remains redacted even when literal-value import is selected.
+   MCP text remains redacted even though literal values are imported.
 3. **Confirm** previews by submitting `selections` to `/migrations/plans`, with
    every `requiredAcknowledgements` value in each selection's `acknowledged`.
    Required codes are `rules-impact`, `scope-expansion`, `independent-copy` and
@@ -249,18 +249,20 @@ Recovery is narrower than migration:
 
 ## MCP settings edits
 
-Migration writes ordinary MCP declarations **disabled** and never connects to
-the source server during scan, preview or apply. Enabling a server later is an
-explicit settings action and may launch its command or contact its URL. Migration
-is not a promise that the server will connect or expose tools successfully.
+Migration writes ordinary MCP declarations **enabled** and never connects to
+the source server during scan or preview. After a job writes MCP declarations the
+Host re-syncs its pooled connections (`MigrationService` `onMcpChanged`), and
+running sessions reconcile the new declarations before their next request, so
+the tools are usable in conversations right away. Migration is not a promise
+that the server will connect or expose tools successfully.
 
-By default migration omits literal environment/header values, secret-bearing
-arguments and sensitive URL components. Supported `${VARIABLE}`/`${VARIABLE:-}`
-references can remain, but their resolution/availability is the target runtime's
-responsibility. Copying literals requires `includeSensitiveValues: true` in the
-preview and `sensitive-values` confirmation. This can include ordinary literal
-environment values too; it is not limited to keys named like secrets. OAuth/login
-state is **never migrated**, even with literal-value consent. Preview and job
+By default migration copies literal environment/header values (API keys,
+`Authorization` headers), arguments and URL components so the server works
+without manual re-entry; no separate confirmation is required. Supported
+`${VARIABLE}`/`${VARIABLE:-}` references remain, and their resolution is the
+target runtime's responsibility. `includeSensitiveValues: false` in the preview
+strips those literals instead (reported as `sensitive-values-omitted`). OAuth/login
+state is **never migrated**. Preview and job
 DTOs never expose stored commands, arguments, URLs or literal configuration
 values; warnings record omitted or untranslated fields.
 
