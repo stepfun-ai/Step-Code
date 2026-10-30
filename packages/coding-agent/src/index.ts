@@ -260,6 +260,7 @@ export {
 	type ModelRequestCompleted,
 	type ModelRequestObserver,
 	type ModelRequestOutcome,
+	type ModelRequestResponse,
 	type ModelRequestStarted,
 	type ModelRequestTrace,
 	type ModelRequestTraceCapture,

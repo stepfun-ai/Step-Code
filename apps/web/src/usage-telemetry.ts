@@ -9,7 +9,6 @@
 import {
 	createModelRequestTraceCapture,
 	createStepUsageObservabilityProvider,
-	type InlineExtension,
 	type ModelRequestObserver,
 	type ModelRequestTraceCapture,
 	readGlobalStepDefaults,
@@ -19,7 +18,6 @@ import {
 export interface WebUsageTelemetry {
 	readonly reporter: StepTelemetryReporter;
 	readonly modelRequestObserver: ModelRequestObserver | undefined;
-	readonly activityExtension: InlineExtension;
 	/** Trace callbacks for a one-off model call made outside the session's agent loop. */
 	traceCapture(sessionId: string): ModelRequestTraceCapture | undefined;
 	/** Re-read the account uid after a sign-in. */
@@ -38,7 +36,6 @@ export function webUsageTelemetry(): WebUsageTelemetry {
 	instance = {
 		reporter,
 		modelRequestObserver,
-		activityExtension: provider.createActivityExtension(reporter),
 		traceCapture: (sessionId) => createModelRequestTraceCapture(modelRequestObserver, sessionId),
 		refreshIdentity: () => provider.refreshIdentity(reporter),
 		shutdown: () => reporter.shutdown?.() ?? Promise.resolve(),

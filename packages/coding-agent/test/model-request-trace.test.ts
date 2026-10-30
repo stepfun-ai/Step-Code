@@ -2,6 +2,7 @@ import type { Api, Model } from "@step-harness/providers";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createModelRequestTraceCapture,
+	type ModelRequestResponse,
 	type ModelRequestTrace,
 	readResponseTraceId,
 } from "../src/core/model-request-observer.ts";
@@ -27,14 +28,22 @@ describe("model request trace capture", () => {
 		expect(readResponseTraceId({ "x-trace-id": "a".repeat(129) })).toBeUndefined();
 	});
 
-	it("is absent when the observer does not listen for traces", () => {
+	it("is absent when the observer listens for neither responses nor traces", () => {
 		expect(createModelRequestTraceCapture(undefined, "session-1")).toBeUndefined();
 		expect(createModelRequestTraceCapture({ onRequestCompleted: () => undefined }, "session-1")).toBeUndefined();
+		expect(createModelRequestTraceCapture({ onModelResponse: () => undefined }, "session-1")).toBeDefined();
 	});
 
-	it("reports every response that carries a trace id, numbering attempts within one request", () => {
+	it("reports every response, and the ones that carry a trace id as traces, numbering attempts", () => {
 		const traces: ModelRequestTrace[] = [];
-		const capture = createModelRequestTraceCapture({ onTraceId: (trace) => void traces.push(trace) }, "session-1");
+		const responses: ModelRequestResponse[] = [];
+		const capture = createModelRequestTraceCapture(
+			{
+				onTraceId: (trace) => void traces.push(trace),
+				onModelResponse: (response) => void responses.push(response),
+			},
+			"session-1",
+		);
 
 		capture?.onErrorResponse({ status: 500, headers: { "x-trace-id": "first" } }, model);
 		capture?.onErrorResponse({ status: 401, headers: {} }, model);
@@ -52,11 +61,26 @@ describe("model request trace capture", () => {
 			},
 			expect.objectContaining({ traceId: "final", statusCode: 200, attempt: 3 }),
 		]);
+		// A provider without trace ids (any third-party API) is still observed.
+		expect(responses).toEqual([
+			expect.objectContaining({ statusCode: 500, attempt: 1 }),
+			{
+				sessionId: "session-1",
+				provider: "internal-gateway",
+				model: "deepseek-v4.1-flash-api",
+				baseUrl: "https://gateway.example.test/v1",
+				statusCode: 401,
+				attempt: 2,
+			},
+			expect.objectContaining({ statusCode: 200, attempt: 3 }),
+		]);
+		expect(responses.some((response) => "traceId" in response)).toBe(false);
 	});
 
 	it("ignores malformed responses from extension providers instead of failing the request", () => {
 		const onTraceId = vi.fn();
-		const capture = createModelRequestTraceCapture({ onTraceId }, "session-1");
+		const onModelResponse = vi.fn();
+		const capture = createModelRequestTraceCapture({ onTraceId, onModelResponse }, "session-1");
 		const malformed = [
 			{ status: 200 },
 			{ status: 200, headers: null },
@@ -69,6 +93,8 @@ describe("model request trace capture", () => {
 			expect(() => capture?.onErrorResponse(response, model)).not.toThrow();
 		}
 		expect(onTraceId).not.toHaveBeenCalled();
+		expect(onModelResponse).toHaveBeenCalledTimes(malformed.length * 2);
+		expect(onModelResponse).toHaveBeenLastCalledWith(expect.objectContaining({ statusCode: 0 }));
 		expect(readResponseTraceId(undefined)).toBeUndefined();
 		capture?.onResponse({ status: "200", headers: { "x-trace-id": "t9" } } as never, model);
 		expect(onTraceId).toHaveBeenCalledWith(expect.objectContaining({ traceId: "t9", statusCode: 0 }));
@@ -83,19 +109,19 @@ describe("model request trace capture", () => {
 		});
 
 		expect(() =>
-			createModelRequestTraceCapture({ onTraceId: rejected }, "")?.onResponse(
+			createModelRequestTraceCapture({ onTraceId: rejected, onModelResponse: thrown }, "")?.onResponse(
 				{ status: 200, headers: { "x-trace-id": "t1" } },
 				model,
 			),
 		).not.toThrow();
 		expect(() =>
-			createModelRequestTraceCapture({ onTraceId: thrown }, "")?.onResponse(
+			createModelRequestTraceCapture({ onTraceId: thrown, onModelResponse: rejected }, "")?.onResponse(
 				{ status: 200, headers: { "x-trace-id": "t2" } },
 				model,
 			),
 		).not.toThrow();
 		await Promise.resolve();
-		expect(rejected).toHaveBeenCalledOnce();
-		expect(thrown).toHaveBeenCalledOnce();
+		expect(rejected).toHaveBeenCalledTimes(2);
+		expect(thrown).toHaveBeenCalledTimes(2);
 	});
 });

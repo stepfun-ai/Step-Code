@@ -907,9 +907,11 @@ export const STEP_TELEMETRY_EVENT_DEFINITIONS: {
 	},
 	device_daily_active: {
 		owner: "runtime",
-		comment: "Daily active device per user type (internal, external); first report of a UTC+8 day wins server-side.",
+		comment:
+			"Daily active device per user type (internal, external, third_party), on a model response; first report of a UTC+8 day wins server-side.",
 		properties: {
-			user_type: "internal for configured internal gateways, external for Step endpoints.",
+			user_type:
+				"internal for configured internal gateways, external for Step endpoints, third_party for any other provider.",
 			provider_kind: "internal, a Step login profile id, or the configured provider id.",
 			provider: "Configured provider id of the model in use.",
 			model: "Model identifier in use.",

@@ -56,13 +56,11 @@ export interface ModelRequestUsage {
 }
 
 /**
- * One upstream HTTP response that carried a gateway trace id (`x-trace-id`).
+ * One upstream HTTP response to a model request, successful or not.
  *
- * Reported per attempt: a request the provider retries yields one trace per
- * response, successful or not.
+ * Reported per attempt: a request the provider retries yields one per response.
  */
-export interface ModelRequestTrace {
-	readonly traceId: string;
+export interface ModelRequestResponse {
 	/** Step session that owns the request; empty when the call has no session. */
 	readonly sessionId: string;
 	readonly provider: string;
@@ -74,6 +72,11 @@ export interface ModelRequestTrace {
 	readonly attempt: number;
 }
 
+/** A {@link ModelRequestResponse} that carried a gateway trace id (`x-trace-id`). */
+export interface ModelRequestTrace extends ModelRequestResponse {
+	readonly traceId: string;
+}
+
 /**
  * Minimal observer seam for product integrations.
  *
@@ -83,6 +86,8 @@ export interface ModelRequestTrace {
 export interface ModelRequestObserver {
 	onRequestStarted?(request: ModelRequestStarted): void | Promise<void>;
 	onRequestCompleted?(request: ModelRequestCompleted): void | Promise<void>;
+	/** Every HTTP response, whether or not the upstream sent a trace id. */
+	onModelResponse?(response: ModelRequestResponse): void | Promise<void>;
 	onTraceId?(trace: ModelRequestTrace): void | Promise<void>;
 }
 
@@ -114,14 +119,17 @@ export function readResponseTraceId(headers: Readonly<Record<string, string>> | 
 	return value && value.length <= MAX_TRACE_ID_LENGTH && PRINTABLE_TOKEN.test(value) ? value : undefined;
 }
 
-/** Response callbacks that turn provider responses into {@link ModelRequestTrace} reports. */
+/**
+ * Response callbacks that turn provider responses into {@link ModelRequestResponse}
+ * and {@link ModelRequestTrace} reports.
+ */
 export interface ModelRequestTraceCapture {
 	onResponse(response: ProviderResponse, model: Model<Api>): void;
 	onErrorResponse(response: ProviderResponse, model: Model<Api>): void;
 }
 
 /**
- * Create the per-request trace capture, or undefined when nobody listens.
+ * Create the per-request response capture, or undefined when nobody listens.
  *
  * One capture belongs to one logical request so its attempt counter covers
  * every response that request receives, including provider retries.
@@ -130,27 +138,27 @@ export function createModelRequestTraceCapture(
 	observer: ModelRequestObserver | undefined,
 	sessionId: string,
 ): ModelRequestTraceCapture | undefined {
-	if (!observer?.onTraceId) return undefined;
+	if (!observer?.onTraceId && !observer?.onModelResponse) return undefined;
 	let attempt = 0;
 	const report = (response: ProviderResponse, model: Model<Api>): void => {
 		attempt += 1;
 		// Capturing runs inside the provider's response callback: a malformed
 		// response from an extension provider must not fail the request.
 		try {
-			const traceId = readResponseTraceId(response?.headers);
-			if (!traceId) return;
-			notifyTraceId(observer, {
-				traceId,
+			const observed: ModelRequestResponse = {
 				sessionId,
 				provider: model.provider,
 				model: model.id,
 				baseUrl: model.baseUrl,
 				// The collector stores an integer; an extension provider may hand over anything.
-				statusCode: Number.isInteger(response.status) ? response.status : 0,
+				statusCode: Number.isInteger(response?.status) ? response.status : 0,
 				attempt,
-			});
+			};
+			const traceId = readResponseTraceId(response?.headers);
+			if (traceId) notify(() => observer.onTraceId?.({ ...observed, traceId }));
+			notify(() => observer.onModelResponse?.(observed));
 		} catch {
-			// Trace capture is diagnostic only.
+			// Response capture is diagnostic only.
 		}
 	};
 	return { onResponse: report, onErrorResponse: report };
@@ -384,10 +392,9 @@ function notifyCompleted(observer: ModelRequestObserver, request: ModelRequestCo
 	}
 }
 
-function notifyTraceId(observer: ModelRequestObserver, trace: ModelRequestTrace): void {
+function notify(callback: () => void | Promise<void>): void {
 	try {
-		const result = observer.onTraceId?.(trace);
-		void Promise.resolve(result).catch(() => undefined);
+		void Promise.resolve(callback()).catch(() => undefined);
 	} catch {
 		// Observability must never affect the provider response path.
 	}

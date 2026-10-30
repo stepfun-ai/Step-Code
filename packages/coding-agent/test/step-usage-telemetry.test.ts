@@ -3,8 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Model } from "@step-harness/providers";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ExtensionAPI, ExtensionContext } from "../src/core/extensions/types.ts";
-import type { ModelRequestTrace } from "../src/core/model-request-observer.ts";
+import {
+	createModelRequestTraceCapture,
+	type ModelRequestObserver,
+	type ModelRequestTrace,
+} from "../src/core/model-request-observer.ts";
 import { trackStepTelemetry } from "../src/step/telemetry-contract.ts";
 import { readTelemetryEndpoint } from "../src/step/telemetry-runtime.ts";
 import {
@@ -254,6 +257,20 @@ describe("usage observability provider", () => {
 		};
 	}
 
+	/** One request through the SDK's real response capture; `traceId: ""` sends no header. */
+	function request(
+		observer: ModelRequestObserver | undefined,
+		overrides: Partial<ModelRequestTrace> = {},
+		statuses: readonly number[] = [overrides.statusCode ?? 200],
+	): void {
+		const value = trace(overrides);
+		const capture = createModelRequestTraceCapture(observer, value.sessionId);
+		const model = { provider: value.provider, id: value.model, baseUrl: value.baseUrl } as Model<Api>;
+		for (const status of statuses) {
+			capture?.onResponse({ status, headers: value.traceId ? { "x-trace-id": value.traceId } : {} }, model);
+		}
+	}
+
 	it("is a no-op without a collector, so nothing is sent or spooled", async () => {
 		const provider = createStepUsageObservabilityProvider({ client: "cli", env: {} });
 		const reporter = provider.createReporter();
@@ -264,17 +281,14 @@ describe("usage observability provider", () => {
 	it("forwards only the two usage events and records every trace with its session", async () => {
 		const { reporter, observer, posted } = await setup();
 		trackStepTelemetry(reporter, "cli_started", { entrypoint: "root", os: "darwin", node_version: "22.19" });
-		observer?.onTraceId?.(trace());
-		observer?.onTraceId?.(trace({ traceId: "1aa27d35c9ae9769b01aa31054fc1dea", statusCode: 404, attempt: 2 }));
-		observer?.onTraceId?.(
-			trace({
-				traceId: "fc8e0193e63f9088cf594b55bbb4d21f",
-				sessionId: "",
-				provider: "stepcode-anthropic",
-				model: "deepseek-v4.1-flash-api",
-				baseUrl: `https://${INTERNAL_HOST}/v1`,
-			}),
-		);
+		request(observer, {}, [200, 404]);
+		request(observer, {
+			traceId: "fc8e0193e63f9088cf594b55bbb4d21f",
+			sessionId: "",
+			provider: "stepcode-anthropic",
+			model: "deepseek-v4.1-flash-api",
+			baseUrl: `https://${INTERNAL_HOST}/v1`,
+		});
 		await reporter.flush?.();
 
 		expect(posted.map((record) => record.event)).toEqual([
@@ -308,55 +322,59 @@ describe("usage observability provider", () => {
 		});
 	});
 
-	it("reports each user type once per UTC+8 day and skips third-party providers", async () => {
+	it("counts every user type once per UTC+8 day, third-party providers without a trace id included", async () => {
 		const { reporter, observer, posted, setNow } = await setup();
-		observer?.onTraceId?.(trace({ provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1" }));
-		observer?.onTraceId?.(trace());
-		observer?.onTraceId?.(trace({ traceId: "second" }));
+		// Third-party APIs send no x-trace-id: the request still counts, and no trace is recorded.
+		request(observer, {
+			traceId: "",
+			provider: "openrouter",
+			model: "gpt-x",
+			baseUrl: "https://openrouter.ai/api/v1",
+		});
+		request(observer);
+		request(observer, { traceId: "second" });
+		// An error status is still a request that reached the endpoint.
+		request(observer, {
+			traceId: "",
+			provider: "stepcode-chat",
+			baseUrl: `https://${INTERNAL_HOST}/v1`,
+			statusCode: 402,
+		});
 		setNow(new Date("2026-10-26T16:30:00.000Z"));
-		observer?.onTraceId?.(trace({ traceId: "next-day" }));
+		request(observer, { traceId: "next-day" });
 		await reporter.flush?.();
 
 		const days = posted.filter((record) => record.event === "device_daily_active").map((record) => record.properties);
 		expect(days).toEqual([
+			expect.objectContaining({
+				user_type: "third_party",
+				provider_kind: "openrouter",
+				provider: "openrouter",
+				model: "gpt-x",
+				local_day: "2026-10-26",
+			}),
 			expect.objectContaining({ user_type: "external", local_day: "2026-10-26" }),
+			expect.objectContaining({ user_type: "internal", provider: "stepcode-chat", local_day: "2026-10-26" }),
 			expect.objectContaining({ user_type: "external", local_day: "2026-10-27" }),
 		]);
-		const thirdParty = posted.find((record) => record.properties.provider === "openrouter");
-		expect(thirdParty?.properties).toMatchObject({ user_type: "third_party", provider_kind: "openrouter" });
+		const traces = posted.filter((record) => record.event === "session_trace_recorded");
+		expect(traces.map((record) => record.properties.trace_id)).toEqual([
+			"a5f244fa5819b09ea2636d37611b7596",
+			"second",
+			"next-day",
+		]);
 	});
 
-	it("records a session start for internal gateways without sign-in and for Step only with a credential", async () => {
-		const { provider, reporter, posted } = await setup();
-		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
-		const api = {
-			on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => void) => handlers.set(name, handler),
-		};
-		const extension = provider.createActivityExtension(reporter);
-		if (typeof extension === "function") throw new Error("expected a named inline extension");
-		await extension.factory(api as unknown as ExtensionAPI);
-
-		const step = {
-			provider: "step",
-			id: "step-5-preview",
-			baseUrl: "https://api.stepfun.com/step_plan",
-		} as Model<Api>;
-		const internal = {
-			provider: "stepcode-anthropic",
-			id: "deepseek-v4.1-flash-api",
-			baseUrl: `https://${INTERNAL_HOST}/v1`,
-		} as Model<Api>;
-		const ctx = (model: Model<Api>, signedIn: boolean) =>
-			({ model, modelRegistry: { hasConfiguredAuth: () => signedIn } }) as unknown as ExtensionContext;
-
-		handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx(step, false));
-		handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx(internal, false));
-		handlers.get("model_select")?.({ type: "model_select", model: step, source: "set" }, ctx(step, true));
+	it("treats both internal gateways from the shipped config as internal", async () => {
+		const { reporter, observer, posted } = await setup({
+			STEPCODE_INTERNAL_PROVIDER_HOSTS: "mp.z01.normandyfunc.com,i-ai-gw.stepx.com",
+		});
+		request(observer, { traceId: "", provider: "stepcode-anthropic", baseUrl: "https://mp.z01.normandyfunc.com" });
+		request(observer, { traceId: "", provider: "gw", baseUrl: "https://i-ai-gw.stepx.com/v1" });
 		await reporter.flush?.();
-
+		// One internal record for the day, whichever gateway was used first.
 		expect(posted.map((record) => record.properties)).toEqual([
 			expect.objectContaining({ user_type: "internal", provider_kind: "internal", provider: "stepcode-anthropic" }),
-			expect.objectContaining({ user_type: "external", provider_kind: "step_plan", model: "step-5-preview" }),
 		]);
 	});
 
@@ -381,14 +399,14 @@ describe("usage observability provider", () => {
 			},
 		});
 		const reporter = provider.createReporter();
-		provider.createModelRequestObserver(reporter)?.onTraceId?.(trace({ sessionId: "s1", traceId: "t1" }));
+		request(provider.createModelRequestObserver(reporter), { sessionId: "s1", traceId: "t1" });
 		await reporter.flush?.();
 		const daily = posted.find((record) => record.event === "device_daily_active");
 		expect(daily?.properties).toMatchObject({ opened_at: "2026-10-26T01:00:00.000Z", local_day: "2026-10-26" });
 
 		// A process left running past midnight reports today's record without yesterday's start.
 		now = new Date("2026-10-26T16:30:00.000Z");
-		provider.createModelRequestObserver(reporter)?.onTraceId?.(trace({ sessionId: "s2", traceId: "t2" }));
+		request(provider.createModelRequestObserver(reporter), { sessionId: "s2", traceId: "t2" });
 		await reporter.flush?.();
 		const nextDay = posted.filter((record) => record.event === "device_daily_active").at(-1);
 		expect(nextDay?.properties).toMatchObject({ local_day: "2026-10-27" });

@@ -401,8 +401,6 @@ export function webExtensions(
 		}),
 		createStepCronExtension({ telemetry }),
 		createStepGoalExtension({ telemetry }),
-		// Daily-activity record on session start / model switch (usage telemetry).
-		usage.activityExtension,
 	];
 }
 

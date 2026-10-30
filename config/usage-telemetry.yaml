@@ -26,3 +26,4 @@ endpoint: https://api.stepfun.com/stepcliobserserver/api/v1/events
 # is third_party under its configured provider id.
 internalProviderHosts:
   - mp.z01.normandyfunc.com
+  - i-ai-gw.stepx.com

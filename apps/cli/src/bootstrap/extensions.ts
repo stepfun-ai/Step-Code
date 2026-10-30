@@ -32,8 +32,6 @@ export interface StepExtensionFactoryDeps {
 	usageHost?: StepExtensionOptions["usageHost"];
 	/** Optional StepCode provider extension, present only when configured. */
 	stepCodeProviderExtension: InlineExtension | undefined;
-	/** Usage-telemetry activity hook (session start / model switch). */
-	usageActivityExtension?: InlineExtension;
 }
 
 /**
@@ -69,7 +67,6 @@ export function createStepExtensionFactories(deps: StepExtensionFactoryDeps): In
 		createStepCronExtension({ telemetry: deps.telemetry }),
 		createStepGoalExtension({ telemetry: deps.telemetry }),
 		{ name: "connect-lark", factory: createLarkConnectionExtension(), hidden: true },
-		...(deps.usageActivityExtension ? [deps.usageActivityExtension] : []),
 		...(deps.stepCodeProviderExtension ? [deps.stepCodeProviderExtension] : []),
 	];
 }

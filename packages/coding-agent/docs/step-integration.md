@@ -164,19 +164,20 @@ every host that ships the CLI, web, or desktop front end reuses that provider.
 
 | Event | When | Main fields |
 | --- | --- | --- |
-| `device_daily_active` | A session starts on, or switches to, a usable model, and on the first response from an endpoint in a UTC+8 day; at most once per process, day, and user type | `user_type` (`internal` / `external`), `provider_kind`, `provider`, `model`, `local_day`, `client`, `opened_at` |
+| `device_daily_active` | Every model HTTP response (error statuses included, with or without `x-trace-id`), at most once per process, UTC+8 day, and user type. Selecting a model without sending a request does not count | `user_type` (`internal` / `external` / `third_party`), `provider_kind`, `provider`, `model`, `local_day`, `client`, `opened_at` |
 | `session_trace_recorded` | Every model HTTP response carrying an `x-trace-id` header, including error responses and attempts the provider retries | `session_id`, `trace_id`, `user_type`, `provider_kind`, `provider`, `model`, `status_code`, `attempt` (response count within one provider call; session-level auto-retries each start at 1), `local_day`, `client` |
 
 `provider_kind` is `internal` for a configured internal gateway, the Step login
 profile id (`step_plan`, `step_plan_oversea`, `platform_cn`, `platform_oversea`)
 for a Step endpoint matching a login profile, or the configured provider id
 otherwise (including a Step host on a path no profile uses); endpoint
-addresses are never sent. A Step endpoint counts toward `device_daily_active`
-only once a credential is configured; an internal gateway counts without one.
+addresses are never sent. A device that uses several kinds of endpoint in one
+day reports one `device_daily_active` record per user type, so a daily-active
+count de-duplicates by device id.
 Envelopes carry the device id, the `auth.json` Step `uid` when present (not when
 the process runs on `--api-key` or `STEP_API_KEY`, which is a different
 credential), and the session id for trace records. `opened_at` is the process start time, so a launch
-that signs in later still reports the time the app was opened; the field is
+whose first request comes later still reports the time the app was opened; the field is
 omitted when the process started on an earlier UTC+8 day, and the collector then
 uses the record time. Prompts, responses, tool arguments, and API keys
 are never reported.

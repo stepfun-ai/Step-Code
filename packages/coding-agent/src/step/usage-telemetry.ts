@@ -2,7 +2,8 @@
  * Step usage telemetry: the two product signals this build reports.
  *
  * - `device_daily_active`: one record per device, UTC+8 day, and user type
- *   (internal gateway vs Step endpoint). Re-sent at most once per process per
+ *   (internal gateway, Step endpoint, or third-party provider), written when a
+ *   model request gets an HTTP response. Re-sent at most once per process per
  *   day and type; the collector keeps the first record.
  * - `session_trace_recorded`: every upstream gateway trace id (`x-trace-id`),
  *   linked to the session that issued the request.
@@ -17,9 +18,7 @@
  * a build without them reports nothing.
  */
 
-import type { Api, Model } from "@step-harness/providers";
 import { readStoredCredential } from "../core/auth-storage.ts";
-import type { ExtensionContext, InlineExtension } from "../core/extensions/types.ts";
 import { getStepAuthPath } from "./auth.ts";
 import { normalizeStepUid } from "./build-identity.ts";
 import { readOrCreateStepDeviceId, resolveStepStorageRoot } from "./device-id.ts";
@@ -166,14 +165,6 @@ export function filterStepUsageReporter(reporter: StepTelemetryReporter): StepTe
 	};
 }
 
-/** Classify a model's configured endpoint (used before any request is made). */
-export function classifyStepUsageModel(
-	model: Pick<Model<Api>, "baseUrl" | "provider">,
-	options: StepUsageClassifierOptions,
-): StepUsageEndpointClassification {
-	return classifyStepUsageEndpoint(model.baseUrl, model.provider, options);
-}
-
 function normalizeUrlPrefix(value: string): string {
 	return value.trim().replace(/\/+$/u, "").toLowerCase();
 }
@@ -209,8 +200,6 @@ export interface StepUsageObservabilityOptions {
 }
 
 export interface StepUsageObservabilityProvider extends StepObservabilityProvider {
-	/** Records the day's activity when a session starts or switches to a usable model. */
-	createActivityExtension(reporter: StepTelemetryReporter): InlineExtension;
 	/** Re-read the account uid after a sign-in, so later records carry it. */
 	refreshIdentity(reporter: StepTelemetryReporter): void;
 }
@@ -232,8 +221,8 @@ export function createStepUsageObservabilityProvider(
 ): StepUsageObservabilityProvider {
 	const env = options.env ?? process.env;
 	const now = options.now ?? (() => new Date());
-	// The day's "first open" is the process start, not whenever the first usable
-	// model appears: the CLI may start signed out and open a session minutes later.
+	// The day's "first open" is the process start, not the first request: the
+	// CLI may start signed out and send its first request minutes later.
 	const openedAt = options.processStartedAt ?? processStartAt(now);
 	const client = resolveStepUsageClient(options.client, env);
 	const classifier: StepUsageClassifierOptions = {
@@ -292,6 +281,12 @@ export function createStepUsageObservabilityProvider(
 		createModelRequestObserver(reporter) {
 			if (reporter.enabled === false) return undefined;
 			return {
+				onModelResponse(response) {
+					// Any HTTP response, error statuses included, is use of the endpoint.
+					// Third-party providers send no trace id, so this cannot wait for one.
+					const classification = classifyStepUsageEndpoint(response.baseUrl, response.provider, classifier);
+					activityFor(reporter).record(classification, { provider: response.provider, id: response.model });
+				},
 				onTraceId(trace) {
 					const classification = classifyStepUsageEndpoint(trace.baseUrl, trace.provider, classifier);
 					trackStepTelemetry(
@@ -311,32 +306,10 @@ export function createStepUsageObservabilityProvider(
 						},
 						trace.sessionId ? { sessionId: trace.sessionId } : undefined,
 					);
-					// A response from an endpoint is use of it: this also covers a switch
-					// of provider mid-session and a process that runs past midnight.
-					activityFor(reporter).record(classification, { provider: trace.provider, id: trace.model });
 				},
 			};
 		},
 		traceHeaderPolicy: () => NOOP_OBSERVABILITY_PROVIDER.traceHeaderPolicy(),
-		createActivityExtension(reporter) {
-			const recordModel = (model: Model<Api> | undefined, ctx: ExtensionContext): void => {
-				if (!model) return;
-				const classification = classifyStepUsageModel(model, classifier);
-				// Internal gateways count without a sign-in check; a Step endpoint counts
-				// once a credential for it is configured.
-				if (classification.userType === "external" && !hasConfiguredAuth(ctx, model)) return;
-				activityFor(reporter).record(classification, model);
-			};
-			return {
-				name: "Step usage telemetry",
-				hidden: true,
-				factory: (pi) => {
-					if (reporter.enabled === false) return;
-					pi.on("session_start", (_event, ctx) => recordModel(ctx.model, ctx));
-					pi.on("model_select", (event, ctx) => recordModel(event.model, ctx));
-				},
-			};
-		},
 		refreshIdentity: syncUid,
 	};
 }
@@ -353,7 +326,6 @@ function createDailyActivity(
 	const reported = new Set<string>();
 	return {
 		record(classification, model) {
-			if (classification.userType === "third_party") return;
 			const day = stepUsageLocalDay(now());
 			const key = `${day}:${classification.userType}`;
 			if (reported.has(key)) return;
@@ -382,15 +354,6 @@ function createDailyActivity(
 export function processStartAt(now: () => Date = () => new Date()): Date {
 	const startedAt = new Date(now().getTime() - Math.max(0, process.uptime()) * 1000);
 	return startedAt;
-}
-
-function hasConfiguredAuth(ctx: ExtensionContext, model: Model<Api>): boolean {
-	try {
-		return ctx.modelRegistry.hasConfiguredAuth(model);
-	} catch {
-		// Without an answer the start is not counted; the first request still is.
-		return false;
-	}
 }
 
 /**
