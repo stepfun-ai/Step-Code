@@ -282,18 +282,23 @@ export function ChildAgentView({ embedded = false }: { readonly embedded?: boole
 	);
 	/**
 	 * The reply the child is still streaming, shown where it will land: after
-	 * the recorded execution, as an ordinary assistant message. Once the child
-	 * transcript has recorded it, `activeText` repeats the final reply, so it is
-	 * dropped when the last recorded reply already ends with it.
+	 * the recorded execution, as an ordinary assistant message. `activeText`
+	 * keeps a finished reply until the next message starts, so it is dropped once
+	 * the latest recorded reply ends with it, even when that message's tool row
+	 * or thinking was recorded after it. The id marks it live for MessageItem, so
+	 * it streams (an open code fence renders) and shows no entry metadata.
 	 */
 	const liveReply = useMemo((): MessageTimelineItem | undefined => {
 		const text = task?.status === "running" ? task.activeText?.trim() : undefined;
 		if (!text) return undefined;
-		const last = executionItems.at(-1);
+		let lastReply: string | undefined;
+		for (let index = executionItems.length - 1; index >= 0 && lastReply === undefined; index--) {
+			const item = executionItems[index];
+			if (item?.kind === "message" && item.role === "assistant") lastReply = item.content;
+		}
 		const recorded = text.replace(/^\u2026/u, "");
-		if (last?.kind === "message" && last.role === "assistant" && last.content.trim().endsWith(recorded))
-			return undefined;
-		return { itemId: "subagent-live-reply", kind: "message", role: "assistant", content: text };
+		if (lastReply?.trim().endsWith(recorded)) return undefined;
+		return { itemId: "message-live-subagent-reply", kind: "message", role: "assistant", content: text };
 	}, [task?.status, task?.activeText, executionItems]);
 	// A terminal child can be inspected while its parent continues with other work.
 	const childBusy =
@@ -513,7 +518,7 @@ export function ChildAgentView({ embedded = false }: { readonly embedded?: boole
 									<RetryRow key={item.itemId} item={item} />
 								) : null,
 							)
-						) : transcript.missing && (liveThinking || liveReply || liveTool) ? null : (
+						) : liveThinking || liveReply || liveTool ? null : (
 							<p
 								className={cx("child-agent-empty", dispatchError && "subagent-error")}
 								role={dispatchError ? "alert" : undefined}
