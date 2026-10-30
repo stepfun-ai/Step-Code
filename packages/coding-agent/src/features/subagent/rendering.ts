@@ -73,6 +73,7 @@ function chainHeading(records: readonly StepSubagentResultRecord[]): string {
 function renderRecordSummary(record: StepSubagentResultRecord, theme: Theme): string {
 	const output =
 		record.activeText ||
+		record.activeThinking ||
 		finalOutput(record.messages) ||
 		(record.status === "running"
 			? "(running...)"

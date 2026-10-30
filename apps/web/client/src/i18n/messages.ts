@@ -426,6 +426,7 @@ const zhCN = {
 	subagentInput: "输入",
 	subagentExecution: "执行过程",
 	subagentLiveProgress: "实时进度",
+	subagentLiveTool: "正在调用 {tool}",
 	subagentOmitted: "实时快照省略了 {count} 项；未包含的状态不作完成或中止判断，请查看完整记录。",
 	subagentTranscriptPending: "子会话轨迹尚未写入，实时进度会继续更新",
 	subagentControlHistory: "操作历史",
@@ -1423,6 +1424,7 @@ const enUS: Record<MessageKey, string> = {
 	subagentInput: "Input",
 	subagentExecution: "Execution",
 	subagentLiveProgress: "Live progress",
+	subagentLiveTool: "Running {tool}",
 	subagentOmitted:
 		"The live snapshot omits {count} tasks; missing states are not treated as completed or stopped. See the full records.",
 	subagentTranscriptPending: "The child transcript is not written yet; live progress continues",

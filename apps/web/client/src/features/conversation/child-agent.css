@@ -381,6 +381,41 @@
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
+/* What the child is doing right now, after its recorded execution: the reply
+   still streaming (an ordinary message) and the tool call in flight. */
+.subagent-live-progress {
+	display: grid;
+	gap: 8px;
+	min-width: 0;
+}
+.subagent-live-tool {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+	color: var(--ink-3);
+	font-size: 12px;
+}
+.subagent-live-tool span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.subagent-live-output {
+	max-height: 160px;
+	margin: 0;
+	padding: 8px 10px;
+	overflow: auto;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-tiny);
+	background: var(--surface-soft);
+	color: var(--ink-2);
+	font-family: var(--mono);
+	font-size: 11.5px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
 .subagent-execution .message,
 .subagent-execution .tool-call,
 .subagent-execution .thinking {

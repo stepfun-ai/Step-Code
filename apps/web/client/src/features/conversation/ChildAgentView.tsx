@@ -13,8 +13,15 @@ import {
 	usageFromEntries,
 	usageFromTask,
 } from "../../state/subagent-usage";
-import type { ChildAgentSummary, ChildSessionSnapshot, SubagentTask, SubagentUsage } from "../../state/types";
-import { Icon, IconButton, Tooltip } from "../../ui";
+import type {
+	ChildAgentSummary,
+	ChildSessionSnapshot,
+	MessageTimelineItem,
+	SubagentTask,
+	SubagentUsage,
+	ThinkingTimelineItem,
+} from "../../state/types";
+import { Icon, IconButton, Spinner, Tooltip } from "../../ui";
 import { closeChildAgent, openSubagentTask } from "./actions";
 import { MessageItem } from "./MessageItem";
 import { clockTime } from "./message-meta";
@@ -262,6 +269,32 @@ export function ChildAgentView({ embedded = false }: { readonly embedded?: boole
 		() => items.filter((item) => !(item.kind === "message" && item.role === "user")),
 		[items],
 	);
+	const liveTool = task?.status === "running" ? task.activeTool : undefined;
+	// Reasoning streams separately from the reply; it renders as the same
+	// thinking disclosure the main conversation uses, folded to its preview line.
+	const liveThinkingText = task?.status === "running" ? task.activeThinking?.trim() : undefined;
+	const liveThinking = useMemo(
+		(): ThinkingTimelineItem | undefined =>
+			liveThinkingText
+				? { itemId: "subagent-live-thinking", kind: "thinking", content: liveThinkingText, running: true }
+				: undefined,
+		[liveThinkingText],
+	);
+	/**
+	 * The reply the child is still streaming, shown where it will land: after
+	 * the recorded execution, as an ordinary assistant message. Once the child
+	 * transcript has recorded it, `activeText` repeats the final reply, so it is
+	 * dropped when the last recorded reply already ends with it.
+	 */
+	const liveReply = useMemo((): MessageTimelineItem | undefined => {
+		const text = task?.status === "running" ? task.activeText?.trim() : undefined;
+		if (!text) return undefined;
+		const last = executionItems.at(-1);
+		const recorded = text.replace(/^\u2026/u, "");
+		if (last?.kind === "message" && last.role === "assistant" && last.content.trim().endsWith(recorded))
+			return undefined;
+		return { itemId: "subagent-live-reply", kind: "message", role: "assistant", content: text };
+	}, [task?.status, task?.activeText, executionItems]);
 	// A terminal child can be inspected while its parent continues with other work.
 	const childBusy =
 		task?.status === "running" || task?.status === "queued" || ((!task || task.status === "unknown") && parentBusy);
@@ -452,16 +485,17 @@ export function ChildAgentView({ embedded = false }: { readonly embedded?: boole
 								<h3 className="subagent-section-title">
 									{t("subagentCompletedResponse", { index: index + 1 })}
 								</h3>
-								<pre className="subagent-task">{output.output}</pre>
+								<MessageItem
+									item={{
+										itemId: `subagent-output-${output.id}`,
+										kind: "message",
+										role: "assistant",
+										content: output.output,
+									}}
+									fileCwd={transcript.value?.cwd}
+								/>
 							</section>
 						))}
-						{task?.status === "running" && (task.activeText || task.activeTool || task.activeToolOutput) ? (
-							<section className="subagent-live-progress" aria-label={t("subagentLiveProgress")}>
-								<h3 className="subagent-section-title">{t("subagentLiveProgress")}</h3>
-								{task.activeTool ? <p className="subagent-meta">{task.activeTool}</p> : null}
-								<pre className="subagent-task">{task.activeText || task.activeToolOutput}</pre>
-							</section>
-						) : null}
 						{executionItems.length ? (
 							executionItems.map((item) =>
 								item.kind === "message" ? (
@@ -479,9 +513,7 @@ export function ChildAgentView({ embedded = false }: { readonly embedded?: boole
 									<RetryRow key={item.itemId} item={item} />
 								) : null,
 							)
-						) : task?.status === "running" &&
-							transcript.missing &&
-							(task.activeText || task.activeTool || task.activeToolOutput) ? null : (
+						) : transcript.missing && (liveThinking || liveReply || liveTool) ? null : (
 							<p
 								className={cx("child-agent-empty", dispatchError && "subagent-error")}
 								role={dispatchError ? "alert" : undefined}
@@ -489,6 +521,21 @@ export function ChildAgentView({ embedded = false }: { readonly embedded?: boole
 								{emptyText}
 							</p>
 						)}
+						{liveThinking || liveReply || liveTool ? (
+							<section className="subagent-live-progress" aria-label={t("subagentLiveProgress")}>
+								{liveThinking ? <ThinkingDisclosure item={liveThinking} active /> : null}
+								{liveReply ? <MessageItem item={liveReply} fileCwd={transcript.value?.cwd} /> : null}
+								{liveTool ? (
+									<p className="subagent-live-tool">
+										<Spinner />
+										<span>{t("subagentLiveTool", { tool: liveTool })}</span>
+									</p>
+								) : null}
+								{liveTool && task?.activeToolOutput ? (
+									<pre className="subagent-live-output">{task.activeToolOutput}</pre>
+								) : null}
+							</section>
+						) : null}
 					</section>
 				</div>
 			</div>
