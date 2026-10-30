@@ -5,7 +5,9 @@
     <!-- Hardened runtime entitlements for the Developer ID build. Electron needs
          the JIT and writable-executable memory exceptions; the server tree that
          ships outside the asar loads native modules (node-pty, pi-tui) and spawns
-         child processes, which needs library validation off. -->
+         child processes, which needs library validation off. Under hardened runtime
+         macOS denies the microphone without a prompt unless audio-input is set
+         (composer voice input records through getUserMedia). -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
@@ -15,6 +17,8 @@
     <key>com.apple.security.network.client</key>
     <true/>
     <key>com.apple.security.network.server</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
     <true/>
   </dict>
 </plist>
