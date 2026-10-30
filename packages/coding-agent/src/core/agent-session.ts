@@ -745,7 +745,7 @@ export class AgentSession {
 	/**
 	 * Compaction settings whose `reserveTokens` encodes the active automatic trigger, so
 	 * `shouldCompact()` and CLM decisions fire above `resolveCompactionThreshold()` under v2.
-	 * The summary budget keeps using the configured reserve through `getCompactionSettings()`.
+	 * Only trigger decisions read this value; summary requests do not set an output cap.
 	 */
 	private _triggerCompactionSettings(model: Model<any>): CompactionSettings {
 		const settings = this.settingsManager.getCompactionSettings();

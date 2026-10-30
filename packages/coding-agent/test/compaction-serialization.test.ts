@@ -1,8 +1,38 @@
-import type { Message } from "@step-harness/providers";
+import { fauxAssistantMessage, type Message } from "@step-harness/providers";
 import { describe, expect, it } from "vitest";
 import { serializeConversation } from "../src/core/compaction/utils.ts";
 
 describe("serializeConversation", () => {
+	it("omits replayed thinking while preserving visible history and original messages", () => {
+		const messages: Message[] = [
+			{ role: "user", content: "Keep the public parser API.", timestamp: 1 },
+			fauxAssistantMessage([
+				{ type: "thinking", thinking: "replayed reasoning ".repeat(2000), thinkingSignature: "signature" },
+				{ type: "text", text: "Inspect the parser implementation." },
+				{ type: "toolCall", id: "read-parser", name: "read_file", arguments: { path: "parser.ts" } },
+			]),
+			{
+				role: "toolResult",
+				toolCallId: "read-parser",
+				toolName: "read_file",
+				content: [{ type: "text", text: "Visible parser observation." }],
+				isError: false,
+				timestamp: 2,
+			},
+		];
+		const original = structuredClone(messages);
+
+		const result = serializeConversation(messages);
+
+		expect(result).not.toContain("replayed reasoning");
+		expect(result).not.toContain("[Assistant thinking]");
+		expect(result).toContain("Keep the public parser API.");
+		expect(result).toContain("Inspect the parser implementation.");
+		expect(result).toContain('read_file(path="parser.ts")');
+		expect(result).toContain("Visible parser observation.");
+		expect(messages).toEqual(original);
+	});
+
 	it("should truncate long tool results keeping head and tail", () => {
 		const longContent = "x".repeat(5000);
 		const messages: Message[] = [

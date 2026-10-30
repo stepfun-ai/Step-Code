@@ -21,12 +21,13 @@ import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dis
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	/**
-	 * Summary output budget. When set explicitly it also caps the automatic trigger at
-	 * `contextWindow - reserveTokens` (legacy behavior); the default does not affect the trigger.
+	 * Trigger headroom for the legacy policy (`contextWindow - reserveTokens`). Under v2 an
+	 * explicit value only caps the trigger earlier; the default does not affect it. It never
+	 * sets the summary output limit, which the provider sizes from the model and context.
 	 */
 	reserveTokens?: number; // default: 16384
 	keepRecentTokens?: number; // default: 20000
-	/** `v2` (default): one pre-request check at `contextWindow * triggerRatio`. `legacy`: previous checkpoints and threshold. */
+	/** `v2` (default): one pre-request check at `resolveCompactionThreshold()`. `legacy`: previous checkpoints and threshold. */
 	triggerPolicy?: CompactionTriggerPolicy;
 	/** Fraction of the context window that triggers automatic compaction (0.5-0.95, default 0.9). */
 	triggerRatio?: number;
