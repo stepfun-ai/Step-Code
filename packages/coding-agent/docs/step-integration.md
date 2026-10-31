@@ -35,9 +35,10 @@ extension; it does not create a second event loop or a second TUI.
   message instead of being silently ignored.
 
   The stdio handshake advertises `streaming-input`, `sdk-tools`,
-  `permission-callback`, `hooks`, and `sessions`. Partial text events are
-  emitted only when `includePartialMessages` is enabled; final assistant and
-  tool-result events always come from the runtime session event stream.
+  `permission-callback`, `hooks`, `sessions`, and `plan-review`. Partial text
+  events are emitted only when `includePartialMessages` is enabled; final
+  assistant and tool-result events always come from the runtime session event
+  stream.
 
 ## Product defaults
 
@@ -307,6 +308,62 @@ active in the session. A denied combined call does not apply the edit. SDK
 themselves. In plan mode a `then_run` on the plan file behaves like
 `run_command`, which keeps normal permissions there.
 
+## Reverse UI requests (`user_dialog.request`)
+
+While a query runs, the host can block on the peer with a `user_dialog.request`
+reverse request, correlated by frame `id`. The peer answers with a `response`
+frame carrying the same `replyTo`. Four kinds existed from the start:
+
+| `kind` | Request payload | Response payload |
+| --- | --- | --- |
+| `select` | `title`, `options` | `{ value: string }` or `{ cancelled: true }` |
+| `confirm` | `title`, `message` | `{ confirmed: boolean }` or `{ cancelled: true }` |
+| `input` | `title`, `placeholder`, `examples` | `{ value: string }` or `{ cancelled: true }` |
+| `editor` | `title`, `prefill` | `{ value: string }` or `{ cancelled: true }` |
+
+An unanswered or malformed request resolves to the kind's default value
+(`undefined`, or `false` for `confirm`); aborting the run settles it immediately.
+
+### `kind: "plan_review"`
+
+The plan review is the one dialog that carries a proposal, so it has its own
+kind. The host sends it when `exit_plan_mode` runs in an RPC session whose UI
+bridge reaches a real user (the desktop app); the handshake advertises the
+`plan-review` capability so the peer knows the host can send it.
+
+Request payload:
+
+```json
+{
+  "kind": "plan_review",
+  "title": "Step has written up a plan and is ready to execute. Would you like to proceed?",
+  "planFilePath": "/workspace/.stepcode/plans/session-example.md",
+  "planContents": "# Plan\n\n1. Update the parser.\n2. Run focused tests.\n",
+  "planHash": "64a6a6c86ef0197c43f9bfc081792cca8d33807fbe33390d2439308a790f7520",
+  "timeoutMs": 600000
+}
+```
+
+`planHash` is the SHA-256 digest of `planContents` encoded as UTF-8; the peer
+renders `planContents` and binds its decision to the hash, so a plan edited while
+the review is open cannot be approved by a stale click. `timeoutMs` is the
+decision budget; the host waits a further 10 seconds of grace before declaring
+the request unanswered.
+
+Response payload — one of:
+
+```json
+{ "action": "execute" }
+{ "action": "feedback", "text": "split the parser change into its own commit" }
+{ "action": "dismissed" }
+```
+
+Only `execute` and a non-empty `feedback` count as decisions. `dismissed`,
+`{ "cancelled": true }`, an empty or malformed payload, and an unanswered request
+all resolve to "no decision": the session stays in plan mode, the tool batch
+terminates, and execution does not start. A peer that cannot show the review
+should let it time out; the host logs the outcome to its diagnostics stream.
+
 ## Plans and tasks
 
 Plans and tasks serve different purposes. A **plan** is the Markdown proposal:
@@ -348,9 +405,14 @@ for path rules and retention responsibilities.
 - `exit_plan_mode` submits the written proposal for review, requiring a readable,
   nonempty regular plan file. In the TUI, the user can approve execution, stay in
   plan mode, or provide refinement notes. Cancel
-  leaves planning active. Headless and RPC runs retain their existing automatic
-  exit behavior after validation; the caller must gate approval externally
-  before allowing execution. `/plan` can still explicitly toggle planning off.
+  leaves planning active. The same review runs over the sdk-stdio bridge: an RPC
+  host that exposes the plan-review capability (`plan-review` in the handshake)
+  blocks until the reviewer answers, and only a host that cannot bridge a review
+  — headless runs, or RPC hosts such as subagent lanes — retains the automatic
+  exit behavior after validation, with the caller gating approval externally
+  before allowing execution. A bridged review that goes unanswered keeps planning
+  active and ends the turn. `/plan` can still explicitly toggle planning off.
+  See [plan approval](../../../docs/plan-approval.md) for the handoff contract.
 - `task_create`, `task_update`, `task_get`, and `task_list` are the only task
   tools and work with or without plan mode. Each execution checklist is a
   separate task plan, distinct from the Markdown proposal. Tasks retain their

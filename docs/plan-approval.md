@@ -1,10 +1,17 @@
 # Plan approval handoff
 
 `exit_plan_mode` submits a written proposal for review. Leaving plan mode and
-approving the proposal are separate events. In headless and RPC sessions, a valid
-proposal exits plan mode, while the caller remains responsible for obtaining
-approval before execution. This also applies to RPC contexts with `hasUI: true`;
-their UI bridge does not provide interactive approval.
+approving the proposal are separate events.
+
+Where a real user can decide, the tool blocks on that decision: the TUI renders
+the review dialog, and an RPC host whose UI bridge reaches a real user (Step's
+sdk-stdio host, which forwards the review to the desktop app through the optional
+`ctx.ui.reviewPlan` capability) waits for the reviewer's answer. Only when nobody
+can decide — a headless session, or an RPC host without a bridged review such as
+a subagent lane — does a valid proposal exit plan mode while the caller remains
+responsible for obtaining approval before execution. A bridged review that times
+out, is aborted, errors, or answers with something unparseable is **not** an
+approval: plan mode stays on and the turn ends (`terminate: true`).
 
 Plan mode does not hide tools: it denies mutating calls outside the plan file
 through the `tool_call` policy, so the request's tool block stays byte-identical
@@ -60,12 +67,20 @@ mean approval was granted. The result still has `terminate: false`, so the host
 must gate execution through its own approval flow. These details do not add an
 approval command or enforce an execution barrier.
 
-`approvalSource` identifies who owns the decision: `"user"` for native interactive
-review, including feedback and dismissal, and `"external"` for the headless/RPC
-caller's approval flow. It does not indicate that approval has occurred. Source
-and outcome are independent: a future caller-owned `"approved"` outcome can keep
+`approvalSource` identifies who owns the decision: `"user"` for interactive
+review — in the TUI or over a bridged RPC review — including feedback and
+dismissal, and `"external"` for the headless / unbridged-RPC caller's approval
+flow. A bridged review that never reached a decision (`bridgeFailed`) also
+records `"external"`: nobody decided, so the host must resolve it. It does not indicate that approval has occurred. Source and outcome are
+independent: a future caller-owned `"approved"` outcome can keep
 `approvalSource: "external"` without claiming the user clicked the TUI. Native
-headless/RPC exits currently emit `"external_approval_required"` only.
+headless/unbridged-RPC exits currently emit `"external_approval_required"` only.
+
+`bridgeFailed` marks a bridged review that never reached a decision: the bridge
+timed out, was aborted, errored, or answered with an unparseable or empty payload.
+It is set on a `dismissed` result whose `planModeExited` is `false`; a user who
+actively dismissed the review does not set it, because someone decided — they
+simply did not approve. In-process dialogs never set it.
 
 `planHash` is the lowercase hexadecimal SHA-256 digest of `planContents` encoded
 as UTF-8. It covers the complete snapshot read from the file, including any BOM,
@@ -114,7 +129,13 @@ Native outcomes keep their existing behavior:
 | `approved` | `user` | `true` | The user selected execution; restore tools and continue. |
 | `feedback` | `user` | `false` | Keep planning and steer the user's notes into the next response. |
 | `dismissed` | `user` | `false` | Keep planning and terminate the turn to wait for the user. |
-| `external_approval_required` | `external` | `true` | Headless/RPC handoff; the caller must gate execution. |
+| `external_approval_required` | `external` | `true` | Headless / unbridged-RPC handoff; the caller must gate execution. |
+
+A bridged RPC review (sdk-stdio to the desktop app) produces the same three
+interactive outcomes as the TUI. When the bridge produces no decision, the result
+is `dismissed` with `bridgeFailed: true`: plan mode stays on, the turn ends, and
+no `plan_mode_exited` telemetry is recorded, because the session never left plan
+mode.
 
 The TUI still selects execution by default, and Enter confirms that selection.
 Interactive result details also include the hash of the reviewed snapshot.
