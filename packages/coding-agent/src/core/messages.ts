@@ -5,7 +5,10 @@
  * and provides a transformer to convert them to LLM-compatible messages.
  */
 
-import type { AgentMessage } from "@step-harness/agent-core";
+import { type AgentMessage, bashExecutionToText } from "@step-harness/agent-core";
+
+export { type BashExecutionMessage, bashExecutionToText } from "@step-harness/agent-core";
+
 import type { ImageContent, Message, TextContent } from "@step-harness/providers";
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
@@ -22,22 +25,6 @@ export const BRANCH_SUMMARY_PREFIX = `The following is a summary of a branch tha
 `;
 
 export const BRANCH_SUMMARY_SUFFIX = `</summary>`;
-
-/**
- * Message type for bash executions via the ! command.
- */
-export interface BashExecutionMessage {
-	role: "bashExecution";
-	command: string;
-	output: string;
-	exitCode: number | undefined;
-	cancelled: boolean;
-	truncated: boolean;
-	fullOutputPath?: string;
-	timestamp: number;
-	/** If true, this message is excluded from LLM context (!! prefix) */
-	excludeFromContext?: boolean;
-}
 
 /**
  * Message type for extension-injected messages via sendMessage().
@@ -69,32 +56,10 @@ export interface CompactionSummaryMessage {
 // Extend CustomAgentMessages via declaration merging
 declare module "@step-harness/agent-core" {
 	interface CustomAgentMessages {
-		bashExecution: BashExecutionMessage;
 		custom: CustomMessage;
 		branchSummary: BranchSummaryMessage;
 		compactionSummary: CompactionSummaryMessage;
 	}
-}
-
-/**
- * Convert a BashExecutionMessage to user message text for LLM context.
- */
-export function bashExecutionToText(msg: BashExecutionMessage): string {
-	let text = `Ran \`${msg.command}\`\n`;
-	if (msg.output) {
-		text += `\`\`\`\n${msg.output}\n\`\`\``;
-	} else {
-		text += "(no output)";
-	}
-	if (msg.cancelled) {
-		text += "\n\n(command cancelled)";
-	} else if (msg.exitCode !== null && msg.exitCode !== undefined && msg.exitCode !== 0) {
-		text += `\n\nCommand exited with code ${msg.exitCode}`;
-	}
-	if (msg.truncated && msg.fullOutputPath) {
-		text += `\n\n[Output truncated. Full output: ${msg.fullOutputPath}]`;
-	}
-	return text;
 }
 
 export function createBranchSummaryMessage(summary: string, fromId: string, timestamp: string): BranchSummaryMessage {

@@ -3986,6 +3986,7 @@ export class AgentSession {
 			cancelled: result.cancelled,
 			truncated: result.truncated,
 			fullOutputPath: result.fullOutputPath,
+			execution: result.execution,
 			timestamp: Date.now(),
 			excludeFromContext: options?.excludeFromContext,
 		};

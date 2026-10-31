@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { stripAnsi } from "../utils/ansi.ts";
 import { sanitizeBinaryOutput } from "../utils/shell.ts";
 import type { BashOperations } from "./tools/bash.ts";
+import { type BashExecutionOutcome, commandOutcome } from "./tools/command-outcome.ts";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.ts";
 
 // ============================================================================
@@ -37,6 +38,8 @@ export interface BashResult {
 	truncated: boolean;
 	/** Path to temp file containing full output (if output exceeded truncation threshold) */
 	fullOutputPath?: string;
+	/** Execution facts are independent from shell invocation errors. */
+	execution?: BashExecutionOutcome;
 }
 
 // ============================================================================
@@ -118,7 +121,7 @@ export async function executeBashWithOperations(
 		if (tempFileStream) {
 			tempFileStream.end();
 		}
-		const cancelled = options?.signal?.aborted ?? false;
+		const cancelled = options?.signal?.aborted === true || result.aborted === true;
 
 		return {
 			output: truncationResult.truncated ? truncationResult.content : fullOutput,
@@ -126,6 +129,7 @@ export async function executeBashWithOperations(
 			cancelled,
 			truncated: truncationResult.truncated,
 			fullOutputPath: tempFilePath,
+			execution: commandOutcome(result, undefined, cancelled),
 		};
 	} catch (err) {
 		// Check if it was an abort
@@ -142,6 +146,7 @@ export async function executeBashWithOperations(
 				output: truncationResult.truncated ? truncationResult.content : fullOutput,
 				exitCode: undefined,
 				cancelled: true,
+				execution: commandOutcome({ exitCode: null }, undefined, true),
 				truncated: truncationResult.truncated,
 				fullOutputPath: tempFilePath,
 			};
