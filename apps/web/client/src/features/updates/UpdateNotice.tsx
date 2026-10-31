@@ -4,8 +4,10 @@
  * `window.stepcodeDesktop.updates`.
  *
  * Hidden in a browser and while there is nothing to do (up to date, checking,
- * updates disabled), so the row keeps its usual layout. Otherwise one bare
- * icon button, like the gear beside it, whose hover hint names the next step:
+ * updates disabled), so the row keeps its usual layout. Otherwise one button
+ * whose hover hint names the next step. While the next step is the user's
+ * (available, ready) it is a blue pill with a short label ("更新" / "Update",
+ * "重启" / "Restart"); otherwise a bare icon like the gear beside it:
  *
  *   available    "New version 0.1.1" -> download, verify and install
  *   downloading  spinner, a progress line under it, percentage and bytes in the hint (not clickable)
@@ -130,6 +132,13 @@ export function UpdateNotice() {
 	};
 	const progress = state?.phase === "downloading" ? percent(state.received, state.size) : undefined;
 	const icon = state?.phase === "error" ? "triangleAlert" : state?.phase === "ready" ? "refresh" : "download";
+	// Phases that wait on the user get a labelled blue pill, so they stand out from the gear beside them.
+	const label =
+		state?.phase === "available"
+			? t("updateAvailableLabel")
+			: state?.phase === "ready"
+				? t("updateReadyLabel")
+				: undefined;
 
 	const hint =
 		text === undefined ? null : (
@@ -155,8 +164,13 @@ export function UpdateNotice() {
 						onClick={busy ? undefined : onClick}
 					>
 						<span className="update-notice-icon" aria-hidden="true">
-							{busy ? <Spinner /> : <Icon name={icon} size="md" />}
+							{busy ? <Spinner /> : <Icon name={icon} size={label === undefined ? "md" : "sm"} />}
 						</span>
+						{label !== undefined ? (
+							<span className="update-notice-label" aria-hidden="true">
+								{label}
+							</span>
+						) : null}
 						{progress !== undefined ? (
 							<span
 								className="update-notice-progress"

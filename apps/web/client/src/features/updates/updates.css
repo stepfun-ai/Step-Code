@@ -35,6 +35,30 @@
 	display: inline-grid;
 	place-items: center;
 }
+/*
+ * Waiting on the user (new version, or installed and ready to restart): a soft
+ * blue pill with a short label instead of the bare icon. `--link` is blue in
+ * every theme (`--accent` turns violet in dark).
+ */
+.update-notice-button:is([data-phase="available"], [data-phase="ready"]) {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	width: auto;
+	height: 28px;
+	margin: 4px 0 4px 4px;
+	padding: 0 10px 0 8px;
+	border-radius: 14px;
+	background: color-mix(in srgb, var(--link) 12%, transparent);
+	color: var(--link);
+	font-size: 12px;
+	font-weight: 600;
+	white-space: nowrap;
+}
+.update-notice-button:is([data-phase="available"], [data-phase="ready"]):hover,
+.update-notice-button:is([data-phase="available"], [data-phase="ready"]):focus-visible {
+	background: color-mix(in srgb, var(--link) 20%, transparent);
+}
 /* Download progress: a short line under the icon. */
 .update-notice-progress {
 	position: absolute;
