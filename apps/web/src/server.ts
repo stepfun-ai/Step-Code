@@ -57,6 +57,7 @@ import {
 	hasUsableCustomModel,
 	importLocalStepgoModels,
 	listModelProviders,
+	openModelsJson,
 	saveModelProvider,
 	testProviderModel,
 } from "./model-providers.ts";
@@ -673,6 +674,14 @@ async function settingsRoute(
 			// protocol and key from the body rather than from a saved provider.
 			if (name === "discover" && !action && method === "POST") {
 				return json(response, 200, { models: await discoverProviderModels(await body(request)) });
+			}
+			// Open models.json in the system editor, for fields the form does not show.
+			if (name === "open-config" && !action && method === "POST") {
+				try {
+					return json(response, 200, { path: await openModelsJson() });
+				} catch (caught) {
+					return error(response, 500, caught instanceof Error ? caught.message : String(caught));
+				}
 			}
 			// A connection test answers for the same draft in the form.
 			if (name === "test" && !action && method === "POST") {

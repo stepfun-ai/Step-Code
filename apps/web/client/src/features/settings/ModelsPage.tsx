@@ -12,14 +12,14 @@
  * providers to pick from and only the custom form exists.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { type TranslateFn, useT } from "../../i18n";
 import { apiSend, errorMessage } from "../../lib/api";
 import { cx } from "../../lib/format";
 import { showError } from "../../state/session";
 import { useAppStore } from "../../state/store";
 import type { SettingsModelProvider } from "../../state/types";
-import { Icon, IconButton, Tooltip } from "../../ui";
+import { Button, Icon, IconButton, Tooltip } from "../../ui";
 import { closeSettingsEditor, openSettingsEditor, useSettingsResource } from "./actions";
 import { ModelEditor } from "./ModelEditor";
 import { Badge, EmptyBox, PageHeader, ResourceState, SectionHeader, SettingsCard, StatusDot } from "./parts";
@@ -94,7 +94,22 @@ export function ModelsPage() {
 	const editor = useAppStore((state) => state.ui.settingsEditor);
 	const resource = useSettingsResource<{ providers: SettingsModelProvider[] }>(MODELS_PATH, true);
 	const [removing, setRemoving] = useState(false);
+	const [openingConfig, setOpeningConfig] = useState(false);
+	// Set once models.json was handed to an editor: the list reloads when the
+	// window regains focus, so hand edits show up without a refresh control.
+	const [editingConfig, setEditingConfig] = useState(false);
 	const providers = resource.data?.providers ?? [];
+	const { reload } = resource;
+
+	useEffect(() => {
+		if (!editingConfig) return;
+		const onFocus = () => {
+			setEditingConfig(false);
+			reload();
+		};
+		window.addEventListener("focus", onFocus);
+		return () => window.removeEventListener("focus", onFocus);
+	}, [editingConfig, reload]);
 
 	if (editor?.kind === "model") {
 		return (
@@ -123,6 +138,18 @@ export function ModelsPage() {
 		resource.reload();
 	};
 
+	const openConfig = async () => {
+		setOpeningConfig(true);
+		try {
+			await apiSend(`${MODELS_PATH}/open-config`, "POST");
+			setEditingConfig(true);
+		} catch (error) {
+			showError(errorMessage(error));
+		} finally {
+			setOpeningConfig(false);
+		}
+	};
+
 	const addCard = (
 		<button
 			type="button"
@@ -142,14 +169,17 @@ export function ModelsPage() {
 				title={t("settingsModels")}
 				description={t("settingsModelsDesc")}
 				actions={
-					<Tooltip content={t("settingsRefresh")}>
-						<IconButton
-							icon="refresh"
-							iconSize="xs"
-							className="settings-icon-action bordered"
-							aria-label={t("settingsRefresh")}
-							onClick={resource.reload}
-						/>
+					<Tooltip content={t("settingsModelsOpenConfigHint")}>
+						<Button
+							type="button"
+							className="settings-btn"
+							id="settingsModelsOpenConfig"
+							disabled={openingConfig}
+							onClick={() => void openConfig()}
+						>
+							<Icon name="file" size="xs" />
+							{t("settingsModelsOpenConfig")}
+						</Button>
 					</Tooltip>
 				}
 			/>

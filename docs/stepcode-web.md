@@ -873,6 +873,13 @@ per-model `api`, `baseUrl`, `cost`, `samplingParams`, `cacheRetention`, `headers
 model row the form no longer sends is removed, because deleting a model is an
 edit too.
 
+For those fields the page header has an "打开配置文件" (Open config file) button:
+`POST /api/v1/settings/models/open-config` opens the `models.json` the kernel
+reads in the application the system associates with it (on macOS, the default
+text editor when none is), creating an empty `{ "providers": {} }` file first if
+there is none. The provider list reloads when the window regains focus, and
+like form edits, hand edits apply to sessions started afterwards.
+
 That rule is not cosmetic: `compat.forceAdaptiveThinking`
 ([models](../packages/coding-agent/docs/models.md#anthropic-messages-compatibility))
 turns an Anthropic request from the legacy budget payload into adaptive thinking,
