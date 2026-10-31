@@ -63,6 +63,9 @@ test("actual main/window invoke chain keeps Host through failed quit, drains res
 		"menu.ts": data("export const installApplicationMenu = (options) => { globalThis.restartServer = options.restartServer; };"),
 	};
 	const hook = `import { registerHooks } from 'node:module';
+// The scenario is macOS's lifecycle (closing the last window keeps the Host; Dock activation reopens it),
+// so pin the platform before main.ts loads instead of following the machine running the test.
+Object.defineProperty(process, 'platform', { value: 'darwin' });
 const replacements = ${JSON.stringify(replacements)};
 registerHooks({ resolve(specifier, context, next) {
  const key = specifier === 'electron' ? specifier : specifier.split('/').at(-1);
