@@ -2615,6 +2615,19 @@ Replay across retry and resume:
 
 ## 5.7 Agent-loop building blocks
 
+The current Agent Loop supports `AgentToolResult.stopTurn` for control-tool
+barriers. Unlike the existing all-results `terminate` hint, one `stopTurn: true`
+ends the turn regardless of sibling results. A sequential tool makes its entire
+batch sequential; after a stop result, later calls receive synthetic skipped
+results without lookup, permission prompts, or execution. Every requested call
+still receives its paired result and terminal event. Already-running parallel
+calls settle normally, but no automatic tool-driven model continuation starts
+in that Agent Loop invocation. Queued inputs remain available for a caller-owned
+subsequent turn. Result-processing
+failures preserve a stop already requested by the tool. Products must mark
+approval barriers sequential; this control result is not a rollback of earlier
+calls and does not change the persistent harness state specification below.
+
 The existing `agent-loop.ts` remains behavior-compatible and is refactored into these exported phases. Existing fields on `AgentTool`, `AgentToolResult`, and provider messages are retained. Add recovery declaration `replay?: "never" | "safe"` to `AgentTool`; omission means `"never"`. `AgentHarnessTool` inherits it. The `AgentEventSink` below is the existing agent-loop sink, not the harness event listener; the harness adapts agent events into §5.5 events.
 
 ```ts

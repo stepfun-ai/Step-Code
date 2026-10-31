@@ -286,6 +286,7 @@ async function runLoop(
 			const toolCalls = message.content.filter((c) => c.type === "toolCall");
 
 			const toolResults: ToolResultMessage[] = [];
+			let stopTurn = false;
 			hasMoreToolCalls = false;
 			if (toolCalls.length > 0) {
 				// A "length" stop means the output was cut off by the token limit, so
@@ -297,6 +298,7 @@ async function runLoop(
 						: await executeToolCalls(currentContext, message, config, signal, emit);
 				toolResults.push(...executedToolBatch.messages);
 				hasMoreToolCalls = !executedToolBatch.terminate;
+				stopTurn = executedToolBatch.stopTurn === true;
 
 				for (const result of toolResults) {
 					currentContext.messages.push(result);
@@ -313,7 +315,7 @@ async function runLoop(
 				newMessages,
 			};
 
-			if (await config.shouldStopAfterTurn?.(lastCompletedTurn)) {
+			if (stopTurn || (await config.shouldStopAfterTurn?.(lastCompletedTurn))) {
 				await emit({ type: "agent_end", messages: newMessages });
 				return;
 			}
@@ -570,6 +572,7 @@ async function executeToolCalls(
 type ExecutedToolCallBatch = {
 	messages: ToolResultMessage[];
 	terminate: boolean;
+	stopTurn?: boolean;
 };
 
 async function executeToolCallsSequential(
@@ -582,6 +585,7 @@ async function executeToolCallsSequential(
 ): Promise<ExecutedToolCallBatch> {
 	const finalizedCalls: FinalizedToolCallOutcome[] = [];
 	const messages: ToolResultMessage[] = [];
+	let stopTurn = false;
 
 	for (const toolCall of toolCalls) {
 		await emit({
@@ -591,7 +595,18 @@ async function executeToolCallsSequential(
 			args: toolCall.arguments,
 		});
 
-		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
+		const preparation: PreparedToolCall | ImmediateToolCallOutcome = stopTurn
+			? {
+					kind: "immediate",
+					result: {
+						...createErrorToolResult(
+							"This tool call was skipped because an earlier control tool ended the turn.",
+						),
+						terminate: true,
+					},
+					isError: true,
+				}
+			: await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		let finalized: FinalizedToolCallOutcome;
 		if (preparation.kind === "immediate") {
 			finalized = {
@@ -616,6 +631,7 @@ async function executeToolCallsSequential(
 		await emitToolResultMessage(toolResultMessage, emit);
 		finalizedCalls.push(finalized);
 		messages.push(toolResultMessage);
+		stopTurn ||= finalized.result.stopTurn === true;
 
 		if (signal?.aborted) {
 			break;
@@ -625,6 +641,7 @@ async function executeToolCallsSequential(
 	return {
 		messages,
 		terminate: shouldTerminateToolBatch(finalizedCalls),
+		stopTurn,
 	};
 }
 
@@ -692,6 +709,7 @@ async function executeToolCallsParallel(
 	return {
 		messages,
 		terminate: shouldTerminateToolBatch(orderedFinalizedCalls),
+		stopTurn: orderedFinalizedCalls.some((call) => call.result.stopTurn === true),
 	};
 }
 
@@ -722,7 +740,10 @@ type FinalizedToolCallOutcome = {
 type FinalizedToolCallEntry = FinalizedToolCallOutcome | (() => Promise<FinalizedToolCallOutcome>);
 
 function shouldTerminateToolBatch(finalizedCalls: FinalizedToolCallOutcome[]): boolean {
-	return finalizedCalls.length > 0 && finalizedCalls.every((finalized) => finalized.result.terminate === true);
+	return (
+		finalizedCalls.some((finalized) => finalized.result.stopTurn === true) ||
+		(finalizedCalls.length > 0 && finalizedCalls.every((finalized) => finalized.result.terminate === true))
+	);
 }
 
 function prepareToolCallArguments(tool: AgentTool<any>, toolCall: AgentToolCall): AgentToolCall {
@@ -934,7 +955,10 @@ async function finalizeExecutedToolCall(
 				isError = afterResult.isError ?? isError;
 			}
 		} catch (error) {
-			result = createErrorToolResult(error instanceof Error ? error.message : String(error));
+			result = {
+				...createErrorToolResult(error instanceof Error ? error.message : String(error)),
+				...(result.stopTurn ? { stopTurn: true } : {}),
+			};
 			isError = true;
 		}
 	}
