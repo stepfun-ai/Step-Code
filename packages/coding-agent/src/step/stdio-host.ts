@@ -21,6 +21,7 @@ import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
+	PlanReviewResult,
 	WorkingIndicatorOptions,
 } from "../core/extensions/types.ts";
 import type { Theme } from "../theme/theme.ts";
@@ -41,6 +42,8 @@ type FrameWriter = (chunk: Buffer) => boolean | undefined;
 
 const PERMISSION_REQUEST_TIMEOUT_MS = 60_000;
 const PERMISSION_RESPONSE_GRACE_MS = 10_000;
+/** Slack after a plan-review budget before the request is declared unanswered. */
+const PLAN_REVIEW_RESPONSE_GRACE_MS = 10_000;
 const SDK_TOOL_TIMEOUT_MS = 120_000;
 const SDK_TOOL_RESPONSE_GRACE_MS = 10_000;
 const SDK_HOOK_TIMEOUT_MS = 30_000;
@@ -92,6 +95,12 @@ export interface StepStdioHostOptions {
 	/** Supply this before main() takes over stdout when frames must remain binary. */
 	writeFrame?: FrameWriter;
 	diagnostics?: (line: string) => void;
+	/**
+	 * Backstop added on top of a plan review budget before the request is dropped
+	 * as unanswered. Tests shrink it so a timeout case does not wait out the
+	 * production grace window.
+	 */
+	planReviewGraceMs?: number;
 	/** Optional process termination hook. Omit it when embedding or unit testing. */
 	onExitRequested?: (code: number) => void;
 }
@@ -123,6 +132,7 @@ export class StepStdioHost {
 	readonly #options: StepStdioHostOptions;
 	readonly #decoder = new StepStdioFrameDecoder();
 	readonly #diagnostics: (line: string) => void;
+	readonly #planReviewGraceMs: number;
 	readonly #pendingRequests = new Map<string, PendingRequest>();
 	readonly #signalCleanups: Array<() => void> = [];
 	#session: AgentSession;
@@ -150,6 +160,7 @@ export class StepStdioHost {
 		this.#options = options;
 		this.#session = options.runtimeHost.session;
 		this.#diagnostics = options.diagnostics ?? ((line) => process.stderr.write(`${line}\n`));
+		this.#planReviewGraceMs = options.planReviewGraceMs ?? PLAN_REVIEW_RESPONSE_GRACE_MS;
 	}
 
 	/** Attach stdin and keep the process alive until the peer or runtime closes. */
@@ -411,7 +422,17 @@ export class StepStdioHost {
 			// Reverse requests are initiated by this host and answered by the SDK
 			// peer. Advertise them so callers can decide whether to send the
 			// corresponding query options.
-			capabilities: ["streaming-input", "sdk-tools", "permission-callback", "hooks", "sessions"],
+			capabilities: [
+				"streaming-input",
+				"sdk-tools",
+				"permission-callback",
+				"hooks",
+				"sessions",
+				// The host can bridge a blocking plan review to the peer; peers that
+				// do not implement it leave the request unanswered, and the session
+				// stays in plan mode rather than executing unapproved.
+				"plan-review",
+			],
 			limits: { maxFrameBytes: STEP_MAX_FRAME_BYTES, maxConcurrentQueries: 1 },
 		});
 	}
@@ -1167,16 +1188,18 @@ export class StepStdioHost {
 			opts?: ExtensionUIDialogOptions,
 		): Promise<T> => {
 			if (opts?.signal?.aborted) return Promise.resolve(fallback);
-			return this.#reverseRequest(method, payload, opts?.timeout ?? 60_000, sessionId).then((frame) => {
-				const value = asRecord(frame?.payload);
-				return (
-					typeof value.value === "string"
-						? value.value
-						: typeof value.confirmed === "boolean"
-							? value.confirmed
-							: fallback
-				) as T;
-			});
+			return this.#reverseRequest(method, payload, opts?.timeout ?? 60_000, sessionId, opts?.signal).then(
+				(frame) => {
+					const value = asRecord(frame?.payload);
+					return (
+						typeof value.value === "string"
+							? value.value
+							: typeof value.confirmed === "boolean"
+								? value.confirmed
+								: fallback
+					) as T;
+				},
+			);
 		};
 		return {
 			select: (title, options, opts) =>
@@ -1207,6 +1230,47 @@ export class StepStdioHost {
 			setHeader: () => {},
 			setTitle: (title) => this.#emitEvent("ui.title", { title }),
 			custom: async () => undefined as never,
+			// A plan review is the one dialog that carries a proposal: the peer must
+			// render the complete plan and bind its decision to the hash, so it needs
+			// its own request shape rather than the select/confirm/input kinds. The
+			// desktop app answers it; a peer that cannot decide must let it time out,
+			// which the tools treat as "stay in plan mode", never as approval.
+			reviewPlan: async (request, opts) => {
+				const budget = opts?.timeout ?? 60_000;
+				// A plan that cannot fit a frame cannot be reviewed: fail now instead of
+				// holding the turn until the budget expires. The margin covers the
+				// frame envelope around the payload.
+				if (Buffer.byteLength(JSON.stringify(request), "utf8") > STEP_MAX_FRAME_BYTES - 4096) {
+					this.#diagnostics(
+						`[sdk-stdio] plan review for ${request.planFilePath} exceeds the ${STEP_MAX_FRAME_BYTES}-byte frame limit`,
+					);
+					this.#emitEvent("user_notification", {
+						message: "The plan is too large to send for review; shorten it and call exit_plan_mode again.",
+						type: "warning",
+					});
+					return undefined;
+				}
+				const frame = await this.#reverseRequest(
+					"user_dialog.request",
+					{
+						kind: "plan_review",
+						title: request.title,
+						planFilePath: request.planFilePath,
+						planContents: request.planContents,
+						planHash: request.planHash,
+						timeoutMs: budget,
+					},
+					budget + this.#planReviewGraceMs,
+					sessionId,
+					opts?.signal,
+				);
+				if (frame === undefined) {
+					this.#diagnostics(
+						`[sdk-stdio] plan review for ${request.planFilePath} was not answered (cancelled or timed out after ${budget}ms); staying in plan mode`,
+					);
+				}
+				return parsePlanReviewResponse(frame);
+			},
 			pasteToEditor: (text) => this.#emitEvent("ui.editor_text", { text }),
 			setEditorText: (text) => this.#emitEvent("ui.editor_text", { text }),
 			getEditorText: () => "",
@@ -1230,17 +1294,31 @@ export class StepStdioHost {
 		payload: unknown,
 		timeoutMs: number,
 		sessionId = this.#session.sessionId,
+		signal?: AbortSignal,
 	): Promise<StepFrame | undefined> {
 		const id = `req_${++this.#nextId}`;
 		return new Promise((resolve) => {
-			const timer = setTimeout(
-				() => {
-					this.#pendingRequests.delete(id);
-					resolve(undefined);
-				},
-				Math.max(1, timeoutMs),
-			);
-			this.#pendingRequests.set(id, { resolve, timer });
+			// An already-aborted signal never fires "abort" again, so a listener
+			// alone would leave the request waiting for its timeout.
+			if (signal?.aborted) {
+				resolve(undefined);
+				return;
+			}
+			let settled = false;
+			const settle = (frame: StepFrame | undefined): void => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				// Drop the pending entry so a late response is ignored, and so no
+				// timer keeps a handle on a host that is tearing the run down.
+				this.#pendingRequests.delete(id);
+				signal?.removeEventListener("abort", onAbort);
+				resolve(frame);
+			};
+			const onAbort = () => settle(undefined);
+			const timer = setTimeout(() => settle(undefined), Math.max(1, timeoutMs));
+			this.#pendingRequests.set(id, { resolve: settle, timer });
+			signal?.addEventListener("abort", onAbort, { once: true });
 			this.#write({
 				protocol: STEP_PROTOCOL_NAME,
 				version: STEP_PROTOCOL_VERSION,
@@ -1518,6 +1596,29 @@ function sdkContentBlocks(value: unknown): Array<TextContent | ImageContent> {
 
 function modelReference(model: Model<any> | undefined): string {
 	return model ? `${model.provider}/${model.id}` : "unknown";
+}
+
+/**
+ * Read a plan-review answer.
+ *
+ * Only an explicit `execute` or a non-empty `feedback` counts as a decision.
+ * Everything else — `dismissed`, `cancelled`, an empty note, a malformed payload,
+ * or no response frame at all (timeout or abort) — resolves `undefined`, which the
+ * plan-mode tools treat as "no decision": plan mode stays on and the turn ends.
+ * Approval is never inferred from an ambiguous answer.
+ */
+function parsePlanReviewResponse(frame: StepFrame | undefined): PlanReviewResult | undefined {
+	if (frame?.error !== undefined) return undefined;
+	const value = asRecord(frame?.payload);
+	if (value.action === "execute") return { action: "execute" };
+	if (value.action === "feedback" && typeof value.text === "string" && value.text.trim().length > 0) {
+		return { action: "feedback", text: value.text };
+	}
+	// A peer that names the dismissal decided, unlike a cancelled, malformed, or
+	// empty answer: the tools keep the two apart so an active "no" is not recorded
+	// as a bridge that never reached anyone.
+	if (value.action === "dismissed") return { action: "dismissed" };
+	return undefined;
 }
 
 function projectContent(content: unknown): unknown[] {

@@ -21,7 +21,10 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@step-harness/pi-tui";
-import type { ToolRenderResultOptions } from "../core/extensions/types.ts";
+import type { PlanReviewResult, ToolRenderResultOptions } from "../core/extensions/types.ts";
+
+export type { PlanReviewResult } from "../core/extensions/types.ts";
+
 import { getMarkdownTheme, type Theme } from "../theme/theme.ts";
 import { formatKeyText } from "./keybinding-hints.ts";
 
@@ -48,14 +51,14 @@ export interface PlanReviewDetails {
 	planModeExited?: boolean;
 	/** The note the user typed, for the "feedback" outcome. */
 	feedback?: string;
+	/**
+	 * Set when a bridged review never reached a decision — the bridge timed out,
+	 * was aborted, errored, or answered with something unparseable. A user who
+	 * actively dismissed the review does not set it: someone decided, they just
+	 * did not approve. In-process dialogs never set it.
+	 */
+	bridgeFailed?: boolean;
 }
-
-/** What the user decided in the review dialog. */
-export type PlanReviewResult =
-	| { action: "execute" }
-	| { action: "feedback"; text: string }
-	/** Escaped out; plan mode stays on and the model gets no notes. */
-	| { action: "dismissed" };
 
 export const PLAN_REVIEW_FEEDBACK_LABEL = "Tell Step what to change";
 /** The question under the divider; the rows below it are the answers. */

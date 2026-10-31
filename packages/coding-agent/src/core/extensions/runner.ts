@@ -35,6 +35,7 @@ import type {
 	ExtensionRuntime,
 	ExtensionShortcut,
 	ExtensionUIContext,
+	ExtensionUIDialogOptions,
 	InputEvent,
 	InputEventResult,
 	InputSource,
@@ -43,6 +44,7 @@ import type {
 	MessageEndEvent,
 	MessageEndEventResult,
 	MessageRenderer,
+	PlanReviewRequest,
 	ProjectTrustContext,
 	ProjectTrustEvent,
 	ProjectTrustEventResult,
@@ -472,6 +474,18 @@ export class ExtensionRunner {
 				this.withUIPrompt("input", title, () => ui.input(title, placeholder, opts)),
 			editor: (title, prefill) => this.withUIPrompt("editor", title, () => ui.editor(title, prefill)),
 			custom: (factory, options) => this.withUIPrompt("custom", undefined, () => ui.custom(factory, options)),
+			// Wrapped explicitly rather than inherited through the spread: every
+			// blocking user-facing prompt fires the same lifecycle events, and a
+			// future field-by-field rebuild must not silently drop this one. The
+			// conditional spread keeps the wrapper a true capability signal: tools
+			// probe `ui.reviewPlan` to tell a bridged host from an in-process one, so
+			// a host without a bridge must not gain a stub that resolves undefined.
+			...(ui.reviewPlan
+				? {
+						reviewPlan: (request: PlanReviewRequest, opts?: ExtensionUIDialogOptions) =>
+							this.withUIPrompt("plan_review", request.title, () => ui.reviewPlan!(request, opts)),
+					}
+				: {}),
 		};
 	}
 

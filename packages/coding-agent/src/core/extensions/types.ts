@@ -91,6 +91,29 @@ export type { BuildSystemPromptOptions } from "../system-prompt.ts";
 export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
 export type { AppKeybinding, KeybindingsManager } from "../keybindings.ts";
 
+/**
+ * A plan proposal handed to a host-rendered review dialog.
+ *
+ * Carries the exact snapshot the reviewer must see: the host binds its decision
+ * to `planHash`, so a plan edited while the review is open cannot be approved by
+ * a stale click.
+ */
+export interface PlanReviewRequest {
+	planFilePath: string;
+	planContents: string;
+	/** SHA-256 (hex) of `planContents` encoded as UTF-8, without normalization. */
+	planHash: string;
+	/** The question shown above the proposal; product copy stays in the product layer. */
+	title: string;
+}
+
+/** What the reviewer decided. `undefined` means no decision was reached. */
+export type PlanReviewResult =
+	| { action: "execute" }
+	| { action: "feedback"; text: string }
+	/** Escaped or dismissed; plan mode stays on and the model gets no notes. */
+	| { action: "dismissed" };
+
 // ============================================================================
 // UI Context
 // ============================================================================
@@ -273,6 +296,22 @@ export interface ExtensionUIContext {
 			waitingForApproval?: boolean;
 		},
 	): Promise<T>;
+
+	/**
+	 * Show a blocking plan review and return the reviewer's decision.
+	 *
+	 * The dedicated surface exists because the generic selector cannot carry a
+	 * proposal: a review must render the complete plan and bind the decision to
+	 * its hash. Hosts with a real user behind their UI bridge (Step's sdk-stdio
+	 * host, which forwards the review to the desktop app) implement this so the
+	 * tool waits for an actual decision; hosts that cannot obtain one leave it
+	 * undefined and the plan-mode tools keep their external handoff.
+	 *
+	 * Resolve `undefined` when no decision was reached — a cancelled or timed-out
+	 * bridge must never read as approval. The host owns its timeout; the caller
+	 * passes the budget through `opts.timeout` and may cancel via `opts.signal`.
+	 */
+	reviewPlan?(request: PlanReviewRequest, opts?: ExtensionUIDialogOptions): Promise<PlanReviewResult | undefined>;
 
 	/** Paste text into the editor, triggering paste handling (collapse for large content). */
 	pasteToEditor(text: string): void;
@@ -811,7 +850,7 @@ export interface AgentSettledEvent {
 	type: "agent_settled";
 }
 
-export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom";
+export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom" | "plan_review";
 
 /** Fired when Pi starts waiting on a blocking user-facing extension UI prompt. */
 export interface UIPromptStartEvent {
