@@ -394,12 +394,20 @@ function parseCompactionThresholds(input: unknown): Map<string, number> {
  * They are not decoration: a model's `compat` decides the request shape (for an
  * Anthropic-compatible endpoint, `compat.forceAdaptiveThinking` is the
  * difference between adaptive thinking and the legacy budget payload a newer
- * model rejects), while `cost`, `samplingParams` and `headers` are values the
+ * model rejects), while `cost`, `samplingParams`, `cacheRetention` and `headers` are values the
  * user wrote by hand. Rebuilding the declaration from the form alone would
  * silently change how requests are made — the reason these lists exist.
  */
-const MODEL_FIELDS_KEPT_ON_SAVE = ["api", "baseUrl", "cost", "samplingParams", "headers", "compat"] as const;
-const PROVIDER_FIELDS_KEPT_ON_SAVE = ["headers", "compat", "authHeader", "modelOverrides"] as const;
+const MODEL_FIELDS_KEPT_ON_SAVE = [
+	"api",
+	"baseUrl",
+	"cost",
+	"samplingParams",
+	"cacheRetention",
+	"headers",
+	"compat",
+] as const;
+const PROVIDER_FIELDS_KEPT_ON_SAVE = ["headers", "compat", "cacheRetention", "authHeader", "modelOverrides"] as const;
 
 function fieldsKept(
 	declaration: Record<string, unknown> | undefined,

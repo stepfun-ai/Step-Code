@@ -868,8 +868,8 @@ The model settings page declares providers and keys through
 shows the address, protocol, name and, per model, the id, context window, max
 output, input kinds, reasoning flag and thinking-level map; a save rebuilds
 exactly those. Everything it cannot show is kept from the stored declaration:
-provider-level `headers`, `compat`, `authHeader` and `modelOverrides`, and
-per-model `api`, `baseUrl`, `cost`, `samplingParams`, `headers` and `compat`. A
+provider-level `headers`, `compat`, `cacheRetention`, `authHeader` and `modelOverrides`, and
+per-model `api`, `baseUrl`, `cost`, `samplingParams`, `cacheRetention`, `headers` and `compat`. A
 model row the form no longer sends is removed, because deleting a model is an
 edit too.
 

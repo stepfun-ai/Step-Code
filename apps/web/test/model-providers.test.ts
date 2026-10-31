@@ -265,6 +265,7 @@ test("an edit keeps the model and provider fields the form does not show", async
 					api: "anthropic-messages",
 					headers: { "x-gw": "1" },
 					compat: { supportsStrictTools: true },
+					cacheRetention: "long",
 					authHeader: true,
 					modelOverrides: { "m-keep": { contextWindow: 4096 } },
 					models: [
@@ -273,6 +274,7 @@ test("an edit keeps the model and provider fields the form does not show", async
 							reasoning: true,
 							thinkingLevelMap: { low: "low" },
 							maxTokens: 64000,
+							cacheRetention: "short",
 							compat: { forceAdaptiveThinking: true },
 							cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0.5 },
 							headers: { "x-model": "1" },
@@ -303,12 +305,14 @@ test("an edit keeps the model and provider fields the form does not show", async
 	assert.deepEqual((document.providers as Record<string, Record<string, unknown>>)["gw-hidden"], {
 		headers: { "x-gw": "1" },
 		compat: { supportsStrictTools: true },
+		cacheRetention: "long",
 		authHeader: true,
 		modelOverrides: { "m-keep": { contextWindow: 4096 } },
 		baseUrl: "https://gw.example",
 		api: "anthropic-messages",
 		models: [
 			{
+				cacheRetention: "short",
 				compat: { forceAdaptiveThinking: true },
 				cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0.5 },
 				headers: { "x-model": "1" },

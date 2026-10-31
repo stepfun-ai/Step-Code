@@ -759,6 +759,12 @@ export interface Model<TApi extends Api> {
 	maxTokens: number;
 	/** Default sampling parameters for this model. See {@link StreamOptions.samplingParams}; per-request keys override these. */
 	samplingParams?: Record<string, unknown>;
+	/**
+	 * Default prompt-cache retention for requests to this model. A request's
+	 * {@link StreamOptions.cacheRetention} takes precedence; when both are unset
+	 * adapters use `"short"`.
+	 */
+	cacheRetention?: CacheRetention;
 	headers?: Record<string, string>;
 	/** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
 	compat?: TApi extends "openai-completions"
