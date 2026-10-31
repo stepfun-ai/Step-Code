@@ -2,7 +2,9 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test, vi } from "vitest";
 import type { AgentSession, AgentSessionEvent, AgentSessionEventListener } from "../src/core/agent-session.ts";
 import type { AgentSessionRuntimeHost } from "../src/core/agent-session-runtime.ts";
-import { encodeStepStdioFrame, StepStdioFrameDecoder } from "../src/step/stdio.ts";
+import type { ExtensionUIContext } from "../src/core/extensions/types.ts";
+import type { StepFrame } from "../src/step/stdio.ts";
+import { encodeStepStdioFrame, STEP_MAX_FRAME_BYTES, StepStdioFrameDecoder } from "../src/step/stdio.ts";
 import { StepStdioHost } from "../src/step/stdio-host.ts";
 
 function createFakeRuntime(withAgent = false): {
@@ -110,7 +112,7 @@ describe("StepStdioHost", () => {
 		await waitFor(1);
 		expect(frames[0]).toMatchObject({ kind: "response", replyTo: "init", payload: { selectedProtocol: 1 } });
 		expect(frames[0].payload).toMatchObject({
-			capabilities: ["streaming-input", "sdk-tools", "permission-callback", "hooks", "sessions"],
+			capabilities: ["streaming-input", "sdk-tools", "permission-callback", "hooks", "sessions", "plan-review"],
 		});
 
 		input.write(
@@ -515,6 +517,354 @@ describe("StepStdioHost", () => {
 		await replacement;
 		expect(replacementSettled).toBe(true);
 		expect(second.session.bindExtensions).toHaveBeenCalledTimes(1);
+		await host.close();
+		await running;
+	});
+});
+
+describe("StepStdioHost plan review bridge", () => {
+	const envelope = (id: string, method: string, payload: unknown): Buffer =>
+		encodeStepStdioFrame({
+			protocol: "step-agent-sdk",
+			version: 1,
+			kind: "request",
+			id,
+			method,
+			payload,
+		});
+
+	async function setup(
+		options: {
+			planReviewGraceMs?: number;
+			diagnostics?: (line: string) => void;
+			planReview?: boolean;
+			failDialogWrite?: boolean;
+		} = {},
+	): Promise<{
+		input: PassThrough;
+		output: PassThrough;
+		frames: StepFrame[];
+		host: StepStdioHost;
+		running: Promise<void>;
+		uiContext: ExtensionUIContext;
+		waitFor: (count: number) => Promise<void>;
+	}> {
+		const input = new PassThrough();
+		const output = new PassThrough();
+		const decoder = new StepStdioFrameDecoder();
+		const frames: StepFrame[] = [];
+		output.on("data", (chunk: Buffer) => frames.push(...decoder.push(chunk)));
+		const waitFor = async (count: number): Promise<void> => {
+			while (frames.length < count) await new Promise((resolve) => setTimeout(resolve, 5));
+		};
+		const { runtime, session } = createFakeRuntime();
+		const host = new StepStdioHost({
+			runtimeHost: runtime,
+			input,
+			output,
+			...(options.planReviewGraceMs === undefined ? {} : { planReviewGraceMs: options.planReviewGraceMs }),
+			...(options.diagnostics ? { diagnostics: options.diagnostics } : {}),
+			...(options.failDialogWrite
+				? {
+						writeFrame: (chunk: Buffer) => {
+							if (new StepStdioFrameDecoder().push(chunk)[0]?.method === "user_dialog.request")
+								throw new Error("write failed");
+							return output.write(chunk);
+						},
+					}
+				: {}),
+		});
+		const running = host.run();
+		input.write(
+			envelope("init", "initialize", {
+				protocolRange: { min: 1, max: 1 },
+				capabilities: { planReview: options.planReview ?? true },
+			}),
+		);
+		// The UI context is bound with the session, on the host's bind queue.
+		await vi.waitFor(() => expect(session.bindExtensions).toHaveBeenCalledTimes(1));
+		const uiContext = vi.mocked(session.bindExtensions).mock.calls[0]![0].uiContext!;
+		return { input, output, frames, host, running, uiContext, waitFor };
+	}
+
+	const reviewRequest = {
+		planFilePath: "/workspace/.stepcode/plans/session-1.md",
+		planContents: "# The plan\n1. Do the thing\n",
+		planHash: "a".repeat(64),
+		title: "Step has written up a plan and is ready to execute. Would you like to proceed?",
+	};
+
+	test("an unsupported peer never gains a blocking plan-review capability", async () => {
+		const { uiContext, host, running, waitFor } = await setup({ planReview: false });
+		await waitFor(1);
+		expect(uiContext.reviewPlan).toBeUndefined();
+		await host.close();
+		await running;
+	});
+
+	test("a failed request write settles the review immediately", async () => {
+		const diagnostics: string[] = [];
+		const { uiContext, host, running, waitFor } = await setup({
+			failDialogWrite: true,
+			diagnostics: (line) => diagnostics.push(line),
+		});
+		await waitFor(1);
+		expect(await uiContext.reviewPlan!(reviewRequest, { timeout: 600_000 })).toBeUndefined();
+		expect(diagnostics.some((line) => line.includes("write failed"))).toBe(true);
+		await host.close();
+		await running;
+	});
+
+	test("a closed host rejects a new review without creating a pending timeout", async () => {
+		const { uiContext, host, running, waitFor, frames } = await setup();
+		await waitFor(1);
+		await host.close();
+		await running;
+		expect(await uiContext.reviewPlan!(reviewRequest, { timeout: 600_000 })).toBeUndefined();
+		expect(frames).toHaveLength(1);
+	});
+
+	test("bridges the plan review with the snapshot and hash over user_dialog.request", async () => {
+		const { input, frames, host, running, uiContext, waitFor } = await setup();
+		await waitFor(1);
+		const review = uiContext.reviewPlan!(reviewRequest, { timeout: 600_000 });
+		await waitFor(2);
+		const request = frames[1]!;
+		expect(request).toMatchObject({
+			kind: "request",
+			method: "user_dialog.request",
+			sessionId: "session-1",
+			payload: {
+				kind: "plan_review",
+				planFilePath: reviewRequest.planFilePath,
+				planContents: reviewRequest.planContents,
+				planHash: reviewRequest.planHash,
+				title: reviewRequest.title,
+				timeoutMs: 600_000,
+			},
+		});
+		input.write(
+			encodeStepStdioFrame({
+				protocol: "step-agent-sdk",
+				version: 1,
+				kind: "response",
+				id: "res-1",
+				replyTo: request.id,
+				sessionId: "session-1",
+				payload: { action: "execute" },
+			}),
+		);
+		expect(await review).toEqual({ action: "execute" });
+		await host.close();
+		await running;
+	});
+
+	test.each([
+		{
+			name: "feedback",
+			payload: { action: "feedback", text: "use canvas" },
+			expected: { action: "feedback", text: "use canvas" },
+		},
+		{ name: "dismissed", payload: { action: "dismissed" }, expected: { action: "dismissed" } },
+		{ name: "cancelled", payload: { cancelled: true }, expected: undefined },
+		{ name: "an empty note", payload: { action: "feedback", text: "  " }, expected: undefined },
+		{ name: "a malformed payload", payload: { action: "launch" }, expected: undefined },
+	])("maps a $name answer to its decision", async ({ payload, expected }) => {
+		const { input, frames, host, running, uiContext, waitFor } = await setup();
+		await waitFor(1);
+		const review = uiContext.reviewPlan!(reviewRequest, { timeout: 600_000 });
+		await waitFor(2);
+		input.write(
+			encodeStepStdioFrame({
+				protocol: "step-agent-sdk",
+				version: 1,
+				kind: "response",
+				id: "res-1",
+				replyTo: frames[1]!.id,
+				sessionId: "session-1",
+				payload,
+			}),
+		);
+		expect(await review).toEqual(expected);
+		await host.close();
+		await running;
+	});
+
+	test("an error response frame counts as no decision", async () => {
+		const { input, frames, host, running, uiContext, waitFor } = await setup();
+		await waitFor(1);
+		const review = uiContext.reviewPlan!(reviewRequest, { timeout: 600_000 });
+		await waitFor(2);
+		input.write(
+			encodeStepStdioFrame({
+				protocol: "step-agent-sdk",
+				version: 1,
+				kind: "response",
+				id: "res-1",
+				replyTo: frames[1]!.id,
+				sessionId: "session-1",
+				error: { code: "DIALOG_FAILED", message: "the peer could not show the review" },
+			}),
+		);
+		expect(await review).toBeUndefined();
+		await host.close();
+		await running;
+	});
+
+	test("an unanswered review times out as no decision, and a late answer is dropped", async () => {
+		const { input, frames, host, running, uiContext, waitFor } = await setup({ planReviewGraceMs: 50 });
+		await waitFor(1);
+		vi.useFakeTimers();
+		try {
+			const review = uiContext.reviewPlan!(reviewRequest, { timeout: 30 });
+			await Promise.resolve();
+			expect(frames).toHaveLength(2);
+			await vi.advanceTimersByTimeAsync(81);
+			expect(await review).toBeUndefined();
+			expect(frames[2]).toMatchObject({
+				method: "user_dialog.cancelled",
+				payload: { requestId: frames[1]!.id, reason: "timeout" },
+			});
+			input.write(
+				encodeStepStdioFrame({
+					protocol: "step-agent-sdk",
+					version: 1,
+					kind: "response",
+					id: "late",
+					replyTo: frames[1]!.id,
+					payload: { action: "execute" },
+				}),
+			);
+			await Promise.resolve();
+			expect(await review).toBeUndefined();
+		} finally {
+			await host.close();
+			await running;
+			vi.useRealTimers();
+		}
+	});
+
+	test("the host accepts an answer inside its response grace window", async () => {
+		const { input, frames, host, running, uiContext, waitFor } = await setup({ planReviewGraceMs: 50 });
+		await waitFor(1);
+		vi.useFakeTimers();
+		try {
+			let settled = false;
+			const review = uiContext.reviewPlan!(reviewRequest, { timeout: 30 }).then((result) => {
+				settled = true;
+				return result;
+			});
+			await Promise.resolve();
+			await vi.advanceTimersByTimeAsync(40);
+			expect(settled).toBe(false);
+			input.write(
+				encodeStepStdioFrame({
+					protocol: "step-agent-sdk",
+					version: 1,
+					kind: "response",
+					id: "answer",
+					replyTo: frames[1]!.id,
+					payload: { action: "execute" },
+				}),
+			);
+			expect(await review).toEqual({ action: "execute" });
+		} finally {
+			await host.close();
+			await running;
+			vi.useRealTimers();
+		}
+	});
+
+	test("an aborted run cancels the review immediately", async () => {
+		const { host, running, uiContext, waitFor } = await setup();
+		await waitFor(1);
+		const controller = new AbortController();
+		const review = uiContext.reviewPlan!(reviewRequest, { timeout: 600_000, signal: controller.signal });
+		controller.abort();
+		expect(await review).toBeUndefined();
+		await host.close();
+		await running;
+	});
+
+	test("shutdown settles a pending review as no decision", async () => {
+		const { host, running, uiContext, waitFor } = await setup();
+		await waitFor(1);
+		const review = uiContext.reviewPlan!(reviewRequest, { timeout: 600_000 });
+		await host.close();
+		expect(await review).toBeUndefined();
+		await running;
+	});
+
+	test("an answer that arrives after an abort is dropped", async () => {
+		const { input, frames, host, running, uiContext, waitFor } = await setup();
+		await waitFor(1);
+		const controller = new AbortController();
+		const review = uiContext.reviewPlan!(reviewRequest, { timeout: 600_000, signal: controller.signal });
+		await waitFor(2);
+		controller.abort();
+		expect(await review).toBeUndefined();
+		// The abort settled and dropped the pending entry, so a late answer cannot
+		// overturn a decision the model already received.
+		input.write(
+			encodeStepStdioFrame({
+				protocol: "step-agent-sdk",
+				version: 1,
+				kind: "response",
+				id: "res-late",
+				replyTo: frames[1]!.id,
+				sessionId: "session-1",
+				payload: { action: "execute" },
+			}),
+		);
+		await Promise.resolve();
+		expect(await review).toBeUndefined();
+		// The host is still healthy: the unknown reply was ignored, nothing was
+		// written back, and the run closes cleanly.
+		expect(frames).toHaveLength(3);
+		expect(frames[2]).toMatchObject({
+			method: "user_dialog.cancelled",
+			payload: { requestId: frames[1]!.id, reason: "aborted" },
+		});
+		await host.close();
+		await running;
+	});
+
+	test("a plan too large for a frame fails fast instead of holding the turn", async () => {
+		const diagnostics: string[] = [];
+		const { frames, host, running, uiContext, waitFor } = await setup({
+			diagnostics: (line) => diagnostics.push(line),
+		});
+		await waitFor(1);
+		const oversized = {
+			...reviewRequest,
+			planContents: "x".repeat(STEP_MAX_FRAME_BYTES),
+		};
+		// No request frame is written: the review resolves as no decision at once,
+		// and the peer is told why through a warning notification.
+		expect(await uiContext.reviewPlan!(oversized, { timeout: 600_000 })).toEqual({
+			action: "unavailable",
+			reason: "proposal_too_large",
+		});
+		await waitFor(2);
+		expect(frames[1]).toMatchObject({
+			kind: "event",
+			method: "user_notification",
+			payload: { type: "warning" },
+		});
+		expect(diagnostics.some((line) => line.includes("exceeds the"))).toBe(true);
+		await host.close();
+		await running;
+	});
+
+	test("an already-aborted dialog falls back without writing a request", async () => {
+		const { frames, host, running, uiContext, waitFor } = await setup();
+		await waitFor(1);
+		const controller = new AbortController();
+		controller.abort();
+		// The abort landed before the dialog opened: answer with the fallback now
+		// rather than holding the caller until the timeout.
+		expect(await uiContext.select!("Pick one", ["a", "b"], { signal: controller.signal })).toBeUndefined();
+		expect(frames).toHaveLength(1);
 		await host.close();
 		await running;
 	});

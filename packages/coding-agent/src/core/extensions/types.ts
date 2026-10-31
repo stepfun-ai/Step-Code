@@ -84,12 +84,38 @@ import type {
 	ReadToolInput,
 	WriteToolInput,
 } from "../tools/index.ts";
+import type { ClarificationQuestion, ClarificationResult } from "./clarification.ts";
 import type { UIDecisionRequest } from "./ui-decisions.ts";
 
 export type { ExecOptions, ExecResult } from "../exec.ts";
 export type { BuildSystemPromptOptions } from "../system-prompt.ts";
 export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
 export type { AppKeybinding, KeybindingsManager } from "../keybindings.ts";
+
+/**
+ * A plan proposal handed to a host-rendered review dialog.
+ *
+ * Carries the exact snapshot the reviewer must see: the host binds its decision
+ * to `planHash`, so a plan edited while the review is open cannot be approved by
+ * a stale click.
+ */
+export interface PlanReviewRequest {
+	planFilePath: string;
+	planContents: string;
+	/** SHA-256 (hex) of `planContents` encoded as UTF-8, without normalization. */
+	planHash: string;
+	/** The question shown above the proposal; product copy stays in the product layer. */
+	title: string;
+}
+
+/** What the reviewer decided. `undefined` means no decision was reached. */
+export type PlanReviewResult =
+	| { action: "execute" }
+	| { action: "feedback"; text: string }
+	/** Escaped or dismissed; plan mode stays on and the model gets no notes. */
+	| { action: "dismissed" }
+	/** The host rejected the proposal before displaying a review. */
+	| { action: "unavailable"; reason: "proposal_too_large" };
 
 // ============================================================================
 // UI Context
@@ -176,6 +202,8 @@ export type EditorFactory = (tui: TUI, theme: EditorTheme, keybindings: Keybindi
  * Each mode (interactive, RPC, print) provides its own implementation.
  */
 export interface ExtensionUIContext {
+	/** Collect a complete question set using a host-native UI, with cancellation support. */
+	clarify?(questions: ClarificationQuestion[], signal?: AbortSignal): Promise<ClarificationResult>;
 	/** Observe explicitly mirrorable decisions; unsubscribe does not dismiss the local dialog. */
 	onDecision?(listener: (request: UIDecisionRequest) => void): () => void;
 	/** Show a selector and return the user's choice. */
@@ -273,6 +301,20 @@ export interface ExtensionUIContext {
 			waitingForApproval?: boolean;
 		},
 	): Promise<T>;
+
+	/**
+	 * Show a blocking plan review and return the reviewer's decision.
+	 *
+	 * A native reviewer renders the complete snapshot. Hosts may instead provide
+	 * `clarify`, which receives the full plan as a structured question's reason
+	 * and plan-review presentation intent. A host with neither capability keeps
+	 * the external handoff; SDK peers explicitly opt in at initialization.
+	 *
+	 * Resolve `undefined` when no decision was reached. Honor `opts.signal` to
+	 * tear down the UI. The plan tool enforces its deadline independently of the
+	 * host's timeout, and an unavailable proposal is never an approval.
+	 */
+	reviewPlan?(request: PlanReviewRequest, opts?: ExtensionUIDialogOptions): Promise<PlanReviewResult | undefined>;
 
 	/** Paste text into the editor, triggering paste handling (collapse for large content). */
 	pasteToEditor(text: string): void;
@@ -811,7 +853,7 @@ export interface AgentSettledEvent {
 	type: "agent_settled";
 }
 
-export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom";
+export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom" | "plan_review";
 
 /** Fired when Pi starts waiting on a blocking user-facing extension UI prompt. */
 export interface UIPromptStartEvent {

@@ -35,9 +35,10 @@ extension; it does not create a second event loop or a second TUI.
   message instead of being silently ignored.
 
   The stdio handshake advertises `streaming-input`, `sdk-tools`,
-  `permission-callback`, `hooks`, and `sessions`. Partial text events are
-  emitted only when `includePartialMessages` is enabled; final assistant and
-  tool-result events always come from the runtime session event stream.
+  `permission-callback`, `hooks`, `sessions`, and `plan-review`. Partial text
+  events are emitted only when `includePartialMessages` is enabled; final
+  assistant and tool-result events always come from the runtime session event
+  stream.
 
 ## Product defaults
 
@@ -307,6 +308,78 @@ active in the session. A denied combined call does not apply the edit. SDK
 themselves. In plan mode a `then_run` on the plan file behaves like
 `run_command`, which keeps normal permissions there.
 
+## Reverse UI requests (`user_dialog.request`)
+
+While a query runs, the host can block on the peer with a `user_dialog.request`
+reverse request, correlated by frame `id`. The peer answers with a `response`
+frame carrying the same `replyTo`. Four kinds existed from the start:
+
+| `kind` | Request payload | Response payload |
+| --- | --- | --- |
+| `select` | `title`, `options` | `{ value: string }` or `{ cancelled: true }` |
+| `confirm` | `title`, `message` | `{ confirmed: boolean }` or `{ cancelled: true }` |
+| `input` | `title`, `placeholder`, `examples` | `{ value: string }` or `{ cancelled: true }` |
+| `editor` | `title`, `prefill` | `{ value: string }` or `{ cancelled: true }` |
+
+An unanswered or malformed request resolves to the kind's default value
+(`undefined`, or `false` for `confirm`); aborting the run settles it immediately.
+
+### `kind: "plan_review"`
+
+The host advertises `plan-review`; a peer opts into receiving these requests in
+its **initialize request**:
+
+```json
+{ "protocolRange": { "min": 1, "max": 1 }, "capabilities": { "planReview": true } }
+```
+
+Without this opt-in, `ctx.ui.reviewPlan` remains undefined. Older peers get an
+external handoff that ends the turn immediately, not a ten-minute wait for an
+unsupported request. Embedded library hosts are separate from SDK stdio: they
+can implement `ctx.ui.reviewPlan` or reuse `ctx.ui.clarify` directly.
+
+Request payload:
+
+```json
+{
+  "kind": "plan_review",
+  "title": "Step has written up a plan and is ready to execute. Would you like to proceed?",
+  "planFilePath": "/workspace/.stepcode/plans/session-example.md",
+  "planContents": "# Plan\n\n1. Update the parser.\n2. Run focused tests.\n",
+  "planHash": "64a6a6c86ef0197c43f9bfc081792cca8d33807fbe33390d2439308a790f7520",
+  "timeoutMs": 600000
+}
+```
+
+`planHash` is the SHA-256 digest of `planContents` encoded as UTF-8; the peer
+renders the exact snapshot. The tool rereads the file before accepting execution;
+a changed or unreadable proposal cannot be approved by a stale click. `timeoutMs`
+is the decision budget enforced by the tool. The raw host API adds ten seconds
+of response grace as a backstop, but that does not extend the tool's deadline.
+
+Response payload — one of:
+
+```json
+{ "action": "execute" }
+{ "action": "feedback", "text": "split the parser change into its own commit" }
+{ "action": "dismissed" }
+```
+
+`execute`, non-empty `feedback`, and explicit `dismissed` are user decisions.
+`dismissed` keeps planning active without `bridgeFailed`. `{ "cancelled": true }`,
+empty or malformed payloads, transport errors, and unanswered requests are not
+decisions: the tool keeps planning active, records `bridgeFailed`, and stops the
+turn. The host logs failed parsing as well as timeout and abort diagnostics.
+A peer unable to display a requested review should respond with an error or
+`{ "cancelled": true }` promptly rather than waiting for the deadline.
+
+Timeout or abort emits `user_dialog.cancelled` with `{ requestId, reason }`, where
+`requestId` is the original request frame id and `reason` is `timeout` or
+`aborted`. The peer should close that dialog; late responses are ignored.
+Oversized proposals fail before a request is sent and tell the model to shorten
+the plan while staying in plan mode. SDK tool-result messages contain text;
+structured `PlanReviewDetails` are an in-process API, not a wire result field.
+
 ## Plans and tasks
 
 Plans and tasks serve different purposes. A **plan** is the Markdown proposal:
@@ -348,9 +421,13 @@ for path rules and retention responsibilities.
 - `exit_plan_mode` submits the written proposal for review, requiring a readable,
   nonempty regular plan file. In the TUI, the user can approve execution, stay in
   plan mode, or provide refinement notes. Cancel
-  leaves planning active. Headless and RPC runs retain their existing automatic
-  exit behavior after validation; the caller must gate approval externally
-  before allowing execution. `/plan` can still explicitly toggle planning off.
+  leaves planning active. Native review or structured clarification hosts wait
+  for a decision; SDK peers enable native review through their initialize
+  capability. Headless and unbridged RPC handoffs exit after validation and end
+  the turn, leaving approval to the caller. Unanswered reviews keep planning on
+  and stop the turn. Missing proposals also keep planning on: the model may
+  answer read-only questions, but only the user can turn the mode off with `/plan`.
+  See [plan approval](../../../docs/plan-approval.md) for the handoff contract.
 - `task_create`, `task_update`, `task_get`, and `task_list` are the only task
   tools and work with or without plan mode. Each execution checklist is a
   separate task plan, distinct from the Markdown proposal. Tasks retain their

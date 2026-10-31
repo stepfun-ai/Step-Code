@@ -664,7 +664,8 @@ export const STEP_TELEMETRY_EVENT_DEFINITIONS: {
 		comment: "Plan-mode exits with the approval outcome.",
 		properties: {
 			source: "Who initiated the exited plan mode: user, agent, or unknown.",
-			outcome: "approved, toggled_off, auto_headless, or auto_rpc.",
+			outcome:
+				"approved, toggled_off, auto_headless, or auto_rpc (an rpc host whose UI bridge cannot run a plan review).",
 		},
 	},
 	cron_scheduled: {

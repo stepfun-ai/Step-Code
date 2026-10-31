@@ -582,14 +582,14 @@ pi.on("agent_settled", async (_event, ctx) => {
 
 #### ui_prompt_start / ui_prompt_end
 
-Notification-only lifecycle events for blocking user-facing extension UI prompts. They fire around `ctx.ui.select()`, `ctx.ui.confirm()`, `ctx.ui.input()`, `ctx.ui.editor()`, and `ctx.ui.custom()` so host/status integrations can report "waiting for user" instead of just "running".
+Notification-only lifecycle events for blocking user-facing extension UI prompts. They fire around `ctx.ui.select()`, `ctx.ui.confirm()`, `ctx.ui.input()`, `ctx.ui.editor()`, `ctx.ui.custom()`, and `ctx.ui.reviewPlan()` so host/status integrations can report "waiting for user" instead of just "running".
 
 Nested or overlapping prompts are coalesced into one outer waiting span. Handlers are invoked best-effort and are not awaited before showing or closing the prompt.
 
 ```typescript
 pi.on("ui_prompt_start", async (event, ctx) => {
   // event.reason === "ui_prompt"
-  // event.kind: "select" | "confirm" | "input" | "editor" | "custom"
+  // event.kind: "select" | "confirm" | "input" | "editor" | "custom" | "plan_review"
   // event.title: prompt title when available
 });
 
@@ -972,6 +972,23 @@ Current run mode: `"tui"`, `"rpc"`, `"json"`, or `"print"`. Use `ctx.mode === "t
 ### ctx.hasUI
 
 `true` in TUI and RPC modes. `false` in print mode (`-p`) and JSON mode. Use this to guard dialog methods (`select`, `confirm`, `input`, `editor`) and fire-and-forget methods (`notify`, `setStatus`, `setWidget`, `setTitle`, `setEditorText`) that work in both TUI and RPC modes. In RPC mode, some TUI-specific methods are no-ops or return defaults (see [rpc.md](rpc.md#extension-ui-protocol)).
+
+`ctx.ui.reviewPlan` is an optional capability for hosts that can show a blocking
+plan review to a real user. It carries the plan snapshot (`planFilePath`,
+`planContents`, `planHash`, `title`) and resolves the reviewer's decision, or
+`undefined` when no decision was reached — a host that cannot obtain one must
+leave the method undefined rather than auto-approve. The sdk-stdio host exposes
+it only after the peer opts in at initialization; see
+[step-integration.md](step-integration.md#reverse-ui-requests-user_dialogrequest).
+
+`ctx.ui.clarify` is the optional structured-question capability for embedded
+hosts. It receives normalized questions and an abort signal, and returns
+`{ answers, cancelled }`. The `clarify_user` tool uses this capability outside
+the TUI; without it a non-TUI host cannot collect answers. Plan review can reuse
+this channel with `intent.kind: "plan_review"`, the complete proposal in `reason`,
+and an explicit execute/keep-planning choice. Free-text answers are feedback,
+never execution approval. Both capabilities participate in user-wait lifecycle
+and settle promptly when their signal is aborted.
 
 ### ctx.cwd
 
@@ -2554,6 +2571,15 @@ const name = await ctx.ui.input("Name:", "placeholder");
 
 // Multi-line editor
 const text = await ctx.ui.editor("Edit:", "prefilled text");
+
+// Blocking plan review (optional capability; see below)
+const decision = await ctx.ui.reviewPlan?.({
+  planFilePath: "/workspace/.stepcode/plans/session-1.md",
+  planContents: "# Plan\n\n1. Update the parser.",
+  planHash: "64a6a6c8…",
+  title: "Step has written up a plan and is ready to execute. Would you like to proceed?",
+});
+// decision: { action: "execute" } | { action: "feedback"; text } | { action: "dismissed" } | undefined
 
 // Notification (non-blocking)
 ctx.ui.notify("Done!", "info");  // "info" | "warning" | "error"

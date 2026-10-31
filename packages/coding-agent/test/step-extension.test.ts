@@ -18,6 +18,11 @@ function commandContext(
 	} as unknown as ExtensionCommandContext;
 }
 
+const noPlanStateSessionManager = {
+	getBranch: () => [],
+	getSessionId: () => "step-extension-test",
+};
+
 describe("Step extension", () => {
 	test.each(["ask", "approve-for-me", "full-access"] as const)(
 		"resumes model errors by default only in automatic tiers: %s",
@@ -118,7 +123,7 @@ describe("Step extension", () => {
 					toolCallId: "shell-settings",
 					input: { command: "printf safe" },
 				},
-				{ hasUI: false },
+				{ hasUI: false, sessionManager: noPlanStateSessionManager },
 			),
 		).toMatchObject({ block: true, terminate: true });
 	});
@@ -245,7 +250,10 @@ describe("Step extension", () => {
 			event: unknown,
 			ctx: unknown,
 		) => Promise<unknown>;
-		const result = await handler({ toolName: "write_file", input: { path: "x", content: "y" } }, { hasUI: false });
+		const result = await handler(
+			{ toolName: "write_file", input: { path: "x", content: "y" } },
+			{ hasUI: false, sessionManager: noPlanStateSessionManager },
+		);
 		expect(result).toMatchObject({ block: true, terminate: true });
 	});
 
@@ -274,7 +282,10 @@ describe("Step extension", () => {
 			ctx: unknown,
 		) => Promise<unknown>;
 		expect(
-			await toolHandler({ toolName: "write_file", input: { path: "x", content: "y" } }, { hasUI: false }),
+			await toolHandler(
+				{ toolName: "write_file", input: { path: "x", content: "y" } },
+				{ hasUI: false, sessionManager: noPlanStateSessionManager },
+			),
 		).toBeUndefined();
 
 		const command = registerCommand.mock.calls.find(([name]) => name === "permissions")?.[1] as {
@@ -314,7 +325,10 @@ describe("Step extension", () => {
 			const confirm = vi.fn(async () => false);
 			expect(await handler(event, { hasUI: true, ui: { confirm } })).toMatchObject({ block: true });
 			expect(confirm).toHaveBeenCalledOnce();
-			expect(await handler(event, { hasUI: false })).toMatchObject({ block: true, terminate: true });
+			expect(await handler(event, { hasUI: false, sessionManager: noPlanStateSessionManager })).toMatchObject({
+				block: true,
+				terminate: true,
+			});
 		},
 	);
 
@@ -442,7 +456,7 @@ describe("Step extension", () => {
 					toolCallId: "full-access-removal",
 					input: { command: "rm -rf ./build" },
 				},
-				{ hasUI: false },
+				{ hasUI: false, sessionManager: noPlanStateSessionManager },
 			),
 		).toBeUndefined();
 
@@ -518,7 +532,9 @@ describe("Step extension", () => {
 			toolCallId: "startup",
 			input: { command: "rm -rf ./x" },
 		};
-		expect(await toolHandler(event, { hasUI: false })).toMatchObject({ block: true });
+		expect(await toolHandler(event, { hasUI: false, sessionManager: noPlanStateSessionManager })).toMatchObject({
+			block: true,
+		});
 		answer(approved ? "Yes, continue anyway — apply full access for this session" : undefined);
 		await Promise.resolve();
 		await Promise.resolve();
@@ -666,7 +682,10 @@ describe("Step extension", () => {
 				await vi.waitFor(() => expect(status).toHaveBeenCalledWith("step-permission", "Mode: Full Access"));
 			const tool = on.mock.calls.find(([name]) => name === "tool_call")![1];
 			expect(
-				await tool({ toolName: "write_file", input: { path: "file", content: "x" } }, { hasUI: false }),
+				await tool(
+					{ toolName: "write_file", input: { path: "file", content: "x" } },
+					{ hasUI: false, sessionManager: noPlanStateSessionManager },
+				),
 			).toMatchObject({ block: true, terminate: true });
 		},
 	);
@@ -716,7 +735,10 @@ describe("Step extension", () => {
 				ctx: unknown,
 			) => Promise<unknown>;
 			expect(
-				await handler({ toolName: "write_file", input: { path: "x", content: "y" } }, { hasUI: false }),
+				await handler(
+					{ toolName: "write_file", input: { path: "x", content: "y" } },
+					{ hasUI: false, sessionManager: noPlanStateSessionManager },
+				),
 			).toMatchObject({ block: true, terminate: true });
 		} finally {
 			if (previousPreset === undefined) delete process.env.STEP_PERMISSION_PRESET;
@@ -799,7 +821,7 @@ describe("Step extension", () => {
 			toolName: "write_file",
 			input: { path: "x", content: "y" },
 		};
-		expect(await toolHandler(writeCall, { hasUI: false })).toMatchObject({
+		expect(await toolHandler(writeCall, { hasUI: false, sessionManager: noPlanStateSessionManager })).toMatchObject({
 			block: true,
 			terminate: true,
 		});
@@ -812,66 +834,73 @@ describe("Step extension", () => {
 				setAutoRetryEnabled: vi.fn(),
 			},
 		);
-		expect(await toolHandler(writeCall, { hasUI: false })).toBeUndefined();
+		expect(await toolHandler(writeCall, { hasUI: false, sessionManager: noPlanStateSessionManager })).toBeUndefined();
 	});
 
 	test("limits trace headers to configured cloud-trace model requests", async () => {
-		const on = vi.fn();
-		createStepExtension({
-			traceHeaderPolicy: {
-				allowedBaseUrls: ["https://trace.example.test/v1"],
-				highSensitivityFields: ["session-id", "workspace-id", "provider-id", "model"],
-			},
-		})({
-			registerProvider: vi.fn(),
-			on,
-			registerCommand: vi.fn(),
-			sendUserMessage: vi.fn(),
-		} as unknown as ExtensionAPI);
-
-		const handler = on.mock.calls.find(([name]) => name === "before_provider_headers")?.[1] as (
-			event: BeforeProviderHeadersEvent,
-			ctx: Pick<ExtensionContext, "model" | "cwd" | "sessionManager">,
-		) => void;
-
-		const headers = {} as Record<string, string | null>;
-		await handler({ type: "before_provider_headers", headers }, {
-			model: {
-				provider: "step",
-				id: "step-3.7-flash",
-				baseUrl: "https://api.stepfun.com/step_plan/v1",
-			},
-			cwd: "/workspace",
-			sessionManager: { getSessionId: () => "session-1" },
-		} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
-		// The native Step endpoint is a direct model API, not the cloud-trace
-		// collector. Keep session/workspace identifiers off custom or direct
-		// provider requests; only the low-sensitivity client marker is universal.
-		expect(headers).toEqual({ "x-step-client": "cli" });
-
-		const originalOrigin = process.env.STEPCODE_CLOUD_TRACE_ORIGIN;
-		process.env.STEPCODE_CLOUD_TRACE_ORIGIN = "https://trace.example.test/v1";
+		const originalClient = process.env.STEP_CLIENT;
+		process.env.STEP_CLIENT = "cli";
 		try {
-			const otherHeaders: Record<string, string | null> = {};
-			await handler({ type: "before_provider_headers", headers: otherHeaders }, {
+			const on = vi.fn();
+			createStepExtension({
+				traceHeaderPolicy: {
+					allowedBaseUrls: ["https://trace.example.test/v1"],
+					highSensitivityFields: ["session-id", "workspace-id", "provider-id", "model"],
+				},
+			})({
+				registerProvider: vi.fn(),
+				on,
+				registerCommand: vi.fn(),
+				sendUserMessage: vi.fn(),
+			} as unknown as ExtensionAPI);
+
+			const handler = on.mock.calls.find(([name]) => name === "before_provider_headers")?.[1] as (
+				event: BeforeProviderHeadersEvent,
+				ctx: Pick<ExtensionContext, "model" | "cwd" | "sessionManager">,
+			) => void;
+
+			const headers = {} as Record<string, string | null>;
+			await handler({ type: "before_provider_headers", headers }, {
 				model: {
-					provider: "stepfunModelProxy",
-					id: "step-proxy",
-					baseUrl: "https://trace.example.test/v1/chat/completions",
+					provider: "step",
+					id: "step-3.7-flash",
+					baseUrl: "https://api.stepfun.com/step_plan/v1",
 				},
 				cwd: "/workspace",
-				sessionManager: { getSessionId: () => "session-2" },
+				sessionManager: { getSessionId: () => "session-1" },
 			} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
-			expect(otherHeaders).toMatchObject({
-				"x-step-client": "cli",
-				"x-step-session-id": "session-2",
-				"x-step-workspace-id": "/workspace",
-				"x-step-provider-id": "stepfunModelProxy",
-				"x-step-model": "step-proxy",
-			});
+			// The native Step endpoint is a direct model API, not the cloud-trace
+			// collector. Keep session/workspace identifiers off custom or direct
+			// provider requests; only the low-sensitivity client marker is universal.
+			expect(headers).toEqual({ "x-step-client": "cli" });
+
+			const originalOrigin = process.env.STEPCODE_CLOUD_TRACE_ORIGIN;
+			process.env.STEPCODE_CLOUD_TRACE_ORIGIN = "https://trace.example.test/v1";
+			try {
+				const otherHeaders: Record<string, string | null> = {};
+				await handler({ type: "before_provider_headers", headers: otherHeaders }, {
+					model: {
+						provider: "stepfunModelProxy",
+						id: "step-proxy",
+						baseUrl: "https://trace.example.test/v1/chat/completions",
+					},
+					cwd: "/workspace",
+					sessionManager: { getSessionId: () => "session-2" },
+				} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
+				expect(otherHeaders).toMatchObject({
+					"x-step-client": "cli",
+					"x-step-session-id": "session-2",
+					"x-step-workspace-id": "/workspace",
+					"x-step-provider-id": "stepfunModelProxy",
+					"x-step-model": "step-proxy",
+				});
+			} finally {
+				if (originalOrigin === undefined) delete process.env.STEPCODE_CLOUD_TRACE_ORIGIN;
+				else process.env.STEPCODE_CLOUD_TRACE_ORIGIN = originalOrigin;
+			}
 		} finally {
-			if (originalOrigin === undefined) delete process.env.STEPCODE_CLOUD_TRACE_ORIGIN;
-			else process.env.STEPCODE_CLOUD_TRACE_ORIGIN = originalOrigin;
+			if (originalClient === undefined) delete process.env.STEP_CLIENT;
+			else process.env.STEP_CLIENT = originalClient;
 		}
 	});
 });

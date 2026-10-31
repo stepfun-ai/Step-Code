@@ -12,6 +12,7 @@ import {
 } from "../src/ui/view/chrome/status-indicator.ts";
 import { StepToolSpinnerClock } from "../src/ui/view/transcript/step-spinner.ts";
 import { InteractiveMode } from "../src/ui/interactive-mode.ts";
+import { PlanReviewComponent } from "../../../packages/coding-agent/src/render/plan-review.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 import { StepPermissionController } from "../../../packages/coding-agent/src/step/permissions.ts";
 
@@ -224,6 +225,22 @@ describe("interactive approval lifecycle", () => {
 		expect(ui.getFocusedComponent()).toBe(editor);
 		vi.advanceTimersByTime(1000);
 		expect(spinner.elapsedSeconds("call-1")).toBe(1);
+	});
+
+	it("aborting a native plan review closes its dialog and restores the editor", async () => {
+		const { mode, api, statusText, ui, editor } = createHarness();
+		const controller = new AbortController();
+		const result = api.custom((tui, theme, _keys, done) => new PlanReviewComponent({
+			planFilePath: "/plan.md", planContents: "# Plan\n", theme,
+			signal: controller.signal, onResult: done, onChange: () => tui.requestRender(),
+		}), { hideFooter: true, waitingForApproval: true });
+		await flushMicrotasks();
+		expect(statusText()).toContain("Waiting for approval");
+		controller.abort();
+		expect(await result).toEqual({ action: "dismissed" });
+		expect(mode.footerContainer.children).toHaveLength(1);
+		expect(statusText()).not.toContain("Waiting for approval");
+		expect(ui.getFocusedComponent()).toBe(editor);
 	});
 
 	it("leaves the footer and the animations alone for a plain custom dialog", async () => {

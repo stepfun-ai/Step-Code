@@ -10,7 +10,6 @@ import type { AgentSessionRuntimeHost } from "../../src/core/agent-session-runti
 import * as output from "../../src/core/output-guard.ts";
 import { createStepPlanExtension } from "../../src/features/step-plan.ts";
 import { runPrintMode } from "../../src/modes/print-mode.ts";
-import type { PlanReviewDetails } from "../../src/render/plan-review.ts";
 import { readStepConfig, resolveStepConfigPath } from "../../src/step/config-toml.ts";
 import { createStepToolProfile } from "../../src/step/tool-profile.ts";
 import { initTheme } from "../../src/theme/theme.ts";
@@ -42,27 +41,19 @@ async function setup(external: boolean, approvePlan: boolean) {
 				}
 			},
 			createStepPlanExtension(),
-			(pi) => {
-				if (!approvePlan) return;
-				// This fixture's caller explicitly approves the reviewed snapshot so these
-				// tests can exercise Git completion independently of external approval.
-				pi.on("tool_result", (event) => {
-					if (event.toolName !== "exit_plan_mode" || event.isError) return;
-					const details = event.details as PlanReviewDetails | undefined;
-					if (details?.outcome !== "external_approval_required" || details.planModeExited !== true) return;
-					expect(details.planHash).toBe(createHash("sha256").update(details.planContents, "utf8").digest("hex"));
-					return {
-						content: [
-							...event.content,
-							{ type: "text", text: "The external test caller approved execution of this reviewed plan." },
-						],
-						details: { ...details, outcome: "approved", approvalSource: "external" },
-					};
-				});
-			},
 		],
 	});
 	harnesses.push(harness);
+	if (approvePlan)
+		await harness.session.bindExtensions({
+			uiContext: {
+				...harness.session.extensionRunner.getUIContext(),
+				reviewPlan: async (request) => {
+					expect(request.planHash).toBe(createHash("sha256").update(request.planContents, "utf8").digest("hex"));
+					return { action: "execute" };
+				},
+			},
+		});
 	const cwd = harness.tempDir;
 	// Reuse existing history without creating commits; sparse checkout keeps the
 	// fixture small. Git still reads .gitignore from its index, so the project
@@ -152,9 +143,12 @@ test.each([false, true])(
 			(message) => message.role === "custom" && message.customType === "step-plan-mode",
 		);
 		expect(JSON.stringify(announcement)).toContain(planPath);
-		expect(getMessageText(tools[2].result)).toContain("caller must gate approval externally");
-		expect(getMessageText(tools[2].result)).toContain("Check the parser and tests.");
-		expect(tools[2].result.details).toMatchObject({ outcome: "approved", approvalSource: "external" });
+		expect(getMessageText(tools[2].result)).toContain("The user approved the plan");
+		expect(tools[2].result.details).toMatchObject({
+			outcome: "approved",
+			approvalSource: "user",
+			planContents: "# Proposal\nCheck the parser and tests.\n",
+		});
 		expect(readFileSync(planPath, "utf8")).toBe("# Proposal\nCheck the parser and tests.\n");
 		expect(existsSync(join(cwd, ".gitignore"))).toBe(false);
 		// Physical absence catches accidental project writes even if Git ignores them.
@@ -231,7 +225,7 @@ test.each([false, true])(
 		const { harness, planPath, run } = await setup(external, false);
 		expect(await run()).toBe(0);
 		expect(getUserTexts(harness)).toHaveLength(1);
-		expect(harness.getPendingResponseCount()).toBe(1);
+		expect(harness.getPendingResponseCount()).toBe(2);
 		expect(readFileSync(planPath, "utf8")).toBe("# Proposal\nCheck the parser and tests.\n");
 		const exit = harness.eventsOfType("tool_execution_end").find((event) => event.toolName === "exit_plan_mode");
 		expect(exit?.result.details).toMatchObject({

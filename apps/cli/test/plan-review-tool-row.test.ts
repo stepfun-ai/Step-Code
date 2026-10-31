@@ -45,6 +45,7 @@ function exitPlanModeDefinition(): ToolDefinition<any, any, any> {
 	} as unknown as ExtensionAPI;
 	registerPlanModeTools(api, {
 		isPlanModeActive: () => true,
+		beginReview: () => undefined,
 		exitPlanMode: () => {},
 		resolvePlanFilePath: () => "/tmp/plan.md",
 	} satisfies StepPlanModeController);
@@ -92,6 +93,11 @@ afterEach(() => {
 });
 
 describe("exit_plan_mode tool row", () => {
+	it("distinguishes a failed bridge from a user dismissal", () => {
+		const out = rows(createRow({ ...dismissed, bridgeFailed: true, approvalSource: "external", planModeExited: false }));
+		expect(out.some((row) => row.includes("Review unanswered"))).toBe(true);
+		expect(out.some((row) => row.includes("Review dismissed"))).toBe(false);
+	});
 	it("shows the whole plan while collapsed, with no expand affordance", () => {
 		const out = rows(createRow(dismissed));
 

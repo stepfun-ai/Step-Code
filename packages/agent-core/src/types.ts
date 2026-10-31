@@ -421,6 +421,12 @@ export interface AgentToolResult<T> {
 	/** Names of tools introduced by this result and available from this transcript point onward. */
 	addedToolNames?: string[];
 	/**
+	 * End this turn regardless of sibling results. In a sequential batch, later
+	 * calls receive skipped results instead of executing; parallel calls already
+	 * in flight still settle. Use sequential execution for decision barriers.
+	 */
+	stopTurn?: boolean;
+	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
 	 */
