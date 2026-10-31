@@ -17,7 +17,7 @@ const handlers = new Map();
 export const ipcMain = { handle: (name, fn) => handlers.set(name, fn) };
 export const contextBridge = { exposeInMainWorld: (name, value) => { globalThis[name] = value; } };
 export const ipcRenderer = { invoke: async (name, ...args) => handlers.get(name)(globalThis.event, ...args) };
-export const dialog = {}, shell = { openExternal: async () => {}, openPath: async () => {} };
+export const dialog = {}, shell = { openExternal: async () => {}, openPath: async () => {} }, systemPreferences = {};
 export const nativeTheme = { shouldUseDarkColors: false }, screen = { getAllDisplays: () => [] };
 export const session = { defaultSession: { setPermissionCheckHandler() {}, setPermissionRequestHandler() {} } };
 export const Menu = { buildFromTemplate: () => ({ popup() {} }) };

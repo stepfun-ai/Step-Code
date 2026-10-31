@@ -331,6 +331,13 @@ const zhCN = {
 	voiceConnecting: "正在连接语音服务…",
 	voiceListening: "正在听写，说话试试",
 	voiceMicDenied: "无法使用麦克风，请在系统设置中允许后重试",
+	voiceMicDeniedMac:
+		"StepCode 没有麦克风权限。请在「系统设置 › 隐私与安全性 › 麦克风」中打开 StepCode，然后重试（可能需要重新打开 StepCode）。",
+	voiceMicDeniedWin:
+		"StepCode 没有麦克风权限。请在「设置 › 隐私和安全性 › 麦克风」中打开「麦克风访问权限」和「允许桌面应用访问你的麦克风」，然后重试。",
+	voiceMicRestricted: "麦克风已被系统策略禁用，无法在 StepCode 中使用。请联系设备管理员。",
+	voiceOpenMicSettings: "打开系统设置",
+	voiceOpenMicSettingsFailed: "无法打开系统设置，请手动前往麦克风权限设置",
 	voiceNoCredential: "语音听写不可用：未找到可用凭证，请先登录或配置 Step API Key",
 	voiceUnreachable: "语音服务连接失败，请稍后重试",
 	voiceAsrFailed: "语音识别失败，请稍后重试",
@@ -1393,6 +1400,14 @@ const enUS: Record<MessageKey, string> = {
 	voiceConnecting: "Connecting to the voice service…",
 	voiceListening: "Listening — start speaking",
 	voiceMicDenied: "The microphone is unavailable. Allow access in system settings and try again.",
+	voiceMicDeniedMac:
+		"StepCode has no microphone access. Turn on StepCode in System Settings › Privacy & Security › Microphone, then try again (you may need to reopen StepCode).",
+	voiceMicDeniedWin:
+		"StepCode has no microphone access. In Settings › Privacy & security › Microphone, turn on Microphone access and Let desktop apps access your microphone, then try again.",
+	voiceMicRestricted:
+		"The microphone is disabled by a system policy and cannot be used in StepCode. Contact your device administrator.",
+	voiceOpenMicSettings: "Open System Settings",
+	voiceOpenMicSettingsFailed: "Could not open System Settings. Open the microphone privacy settings yourself.",
 	voiceNoCredential: "Voice dictation is unavailable: no credential found. Sign in or add a Step API key first.",
 	voiceUnreachable: "The voice service could not be reached. Try again later.",
 	voiceAsrFailed: "Voice recognition failed. Try again later.",

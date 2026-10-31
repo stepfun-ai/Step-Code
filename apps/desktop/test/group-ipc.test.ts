@@ -11,7 +11,7 @@ const handlers = new Map();
 export const ipcMain = { handle: (channel, handler) => handlers.set(channel, handler) };
 export const contextBridge = { exposeInMainWorld: (name, value) => { globalThis[name] = value; } };
 export const ipcRenderer = { invoke: async (channel, ...args) => handlers.get(channel)(globalThis.event, ...args) };
-export const app = {}, dialog = {}, shell = {};
+export const app = {}, dialog = {}, shell = {}, systemPreferences = {};
 `;
 const hook = `
 import { registerHooks } from "node:module";

@@ -17,6 +17,7 @@
  */
 
 import { api, errorMessage } from "../../lib/api";
+import { getDesktopBridge } from "../../platform/host";
 import type { VoiceStatus } from "../../state/types";
 
 const ROOT = "/api/v1/voice";
@@ -223,6 +224,7 @@ export class VoiceRecorder {
 	}
 
 	private async openMicrophone(): Promise<number> {
+		await checkDesktopMicrophone();
 		this.stream = await navigator.mediaDevices.getUserMedia({
 			audio: { channelCount: 1, echoCancellation: true, autoGainControl: true, noiseSuppression: true },
 		});
@@ -289,7 +291,32 @@ export class VoiceRecorder {
 	}
 }
 
+/** A failure the recorder names itself; `errorCode` passes its code through. */
+class VoiceFailure extends Error {
+	readonly code: string;
+	constructor(code: string) {
+		super(code);
+		this.code = code;
+	}
+}
+
+/**
+ * Ask Desktop for the OS microphone permission before `getUserMedia`. A refused
+ * microphone there can record silence instead of rejecting, which surfaced as a
+ * transcription failure. A plain browser, or a bridge call that fails, leaves
+ * the answer to `getUserMedia`.
+ */
+async function checkDesktopMicrophone(): Promise<void> {
+	const bridge = getDesktopBridge();
+	// An older Desktop build without this method also leaves it to getUserMedia.
+	if (!bridge || typeof bridge.requestMicrophoneAccess !== "function") return;
+	const access = await bridge.requestMicrophoneAccess().catch(() => "granted" as const);
+	if (access === "denied") throw new VoiceFailure("mic-denied");
+	if (access === "restricted") throw new VoiceFailure("mic-restricted");
+}
+
 function errorCode(error: unknown): string {
+	if (error instanceof VoiceFailure) return error.code;
 	if (error && typeof error === "object" && "body" in error) {
 		const code = (error as { body?: { code?: unknown } }).body?.code;
 		if (typeof code === "string") return code;

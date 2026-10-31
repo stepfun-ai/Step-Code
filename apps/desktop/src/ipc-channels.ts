@@ -12,6 +12,8 @@ export const DESKTOP_IPC = {
 	pickDirectory: "stepcode-desktop:pick-directory",
 	openExternal: "stepcode-desktop:open-external",
 	revealPath: "stepcode-desktop:reveal-path",
+	requestMicrophoneAccess: "stepcode-desktop:request-microphone-access",
+	openMicrophoneSettings: "stepcode-desktop:open-microphone-settings",
 	defaultBrowser: "stepcode-desktop:default-browser",
 	getTheme: "stepcode-desktop:get-theme",
 	setTheme: "stepcode-desktop:set-theme",

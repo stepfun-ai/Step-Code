@@ -12,14 +12,20 @@
  *
  * The recording state is local to this component; the shell's Escape chain
  * reaches it through `requestVoiceStop`, not through the global store.
+ *
+ * On Desktop a refused microphone opens `.voice-permission` above the button
+ * instead of the toast: platform-specific steps and, where the OS has one, a
+ * button to its microphone settings. A plain browser keeps the toast, because
+ * a page cannot open system settings.
  */
 
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
 import { cx } from "../../lib/format";
+import { getDesktopBridge } from "../../platform/host";
 import { showError } from "../../state/session";
 import type { VoiceStatus } from "../../state/types";
-import { Icon, IconButton, Spinner, Tooltip } from "../../ui";
+import { Button, Icon, IconButton, Spinner, Tooltip } from "../../ui";
 import { setVoiceStopHook, type VoicePhase, VoiceRecorder, voiceStatus } from "./actions";
 import "./voice.css";
 
@@ -31,6 +37,7 @@ export interface MicButtonProps {
 /** Host and client failure codes the button translates into guidance. */
 const ERROR_KEYS: Readonly<Record<string, string>> = {
 	"mic-denied": "voiceMicDenied",
+	"mic-restricted": "voiceMicRestricted",
 	"capture-failed": "voiceCaptureFailed",
 	"no-credential": "voiceNoCredential",
 	unreachable: "voiceUnreachable",
@@ -38,6 +45,9 @@ const ERROR_KEYS: Readonly<Record<string, string>> = {
 	"chunk-failed": "voiceChunkFailed",
 	"no-speech": "voiceNoSpeech",
 };
+
+/** Failures a Desktop user fixes in system settings, shown in `.voice-permission`. */
+type PermissionNotice = "mic-denied" | "mic-restricted";
 
 /**
  * Per-bar sensitivity of the recording waveform. Uneven gains keep the row
@@ -57,6 +67,7 @@ export function MicButton({ onTranscript }: MicButtonProps) {
 	const [status, setStatus] = useState<VoiceStatus | undefined>();
 	const [level, setLevel] = useState(0);
 	const [elapsed, setElapsed] = useState(0);
+	const [notice, setNotice] = useState<PermissionNotice | undefined>();
 	const recorder = useRef<VoiceRecorder | undefined>(undefined);
 
 	useEffect(() => {
@@ -71,6 +82,10 @@ export function MicButton({ onTranscript }: MicButtonProps) {
 			onLevel: setLevel,
 			onFinal: onTranscript,
 			onError: (code, reason) => {
+				if (getDesktopBridge() && (code === "mic-denied" || code === "mic-restricted")) {
+					setNotice(code);
+					return;
+				}
 				const key = ERROR_KEYS[code];
 				showError(key ? t(key) : t("voiceFailed", { reason }));
 			},
@@ -82,12 +97,17 @@ export function MicButton({ onTranscript }: MicButtonProps) {
 	// Bound for `connecting` and `transcribing` too: the documented promise is
 	// that Escape cancels the dictation, and during those waits it is the only
 	// way out — the pill shows a spinner, not a cancel button.
+	// An open permission notice takes the same hook, so Escape closes it.
 	useEffect(() => {
-		if (phase === "idle") return;
+		if (phase === "idle") {
+			if (notice === undefined) return;
+			setVoiceStopHook(async () => setNotice(undefined));
+			return () => setVoiceStopHook(undefined);
+		}
 		const voice = ensureRecorder();
 		setVoiceStopHook(() => voice.cancel());
 		return () => setVoiceStopHook(undefined);
-	}, [phase, ensureRecorder]);
+	}, [phase, notice, ensureRecorder]);
 
 	// Leaving the composer mid-recording must not keep the microphone open.
 	useEffect(
@@ -114,6 +134,17 @@ export function MicButton({ onTranscript }: MicButtonProps) {
 	const connecting = phase === "connecting";
 	const listening = phase === "listening";
 	const transcribing = phase === "transcribing";
+	const bridge = getDesktopBridge();
+	const deniedKey =
+		bridge?.platform === "darwin"
+			? "voiceMicDeniedMac"
+			: bridge?.platform === "win32"
+				? "voiceMicDeniedWin"
+				: "voiceMicDenied";
+	const canOpenSettings =
+		notice === "mic-denied" &&
+		typeof bridge?.openMicrophoneSettings === "function" &&
+		(bridge.platform === "darwin" || bridge.platform === "win32");
 	const label = connecting ? t("voiceConnecting") : listening ? t("voiceStop") : t("voiceStart");
 	const hint = listening ? t("voiceListening") : label;
 
@@ -127,6 +158,7 @@ export function MicButton({ onTranscript }: MicButtonProps) {
 			disabled={connecting || transcribing}
 			onClick={() => {
 				const voice = ensureRecorder();
+				setNotice(undefined);
 				if (listening || connecting) void voice.stop();
 				else void voice.start();
 			}}
@@ -137,6 +169,28 @@ export function MicButton({ onTranscript }: MicButtonProps) {
 
 	return (
 		<div className="voice-anchor">
+			<div className="voice-permission" role="alert" hidden={notice === undefined}>
+				<p className="voice-permission-text">
+					{notice === "mic-restricted" ? t("voiceMicRestricted") : notice ? t(deniedKey) : ""}
+				</p>
+				<div className="voice-permission-actions">
+					{canOpenSettings ? (
+						<Button
+							variant="primary"
+							className="voice-permission-open"
+							onClick={() => {
+								setNotice(undefined);
+								bridge?.openMicrophoneSettings().catch(() => showError(t("voiceOpenMicSettingsFailed")));
+							}}
+						>
+							{t("voiceOpenMicSettings")}
+						</Button>
+					) : null}
+					<Button variant="secondary" className="voice-permission-close" onClick={() => setNotice(undefined)}>
+						{t("close")}
+					</Button>
+				</div>
+			</div>
 			{listening || transcribing ? (
 				<output className="voice-pill" aria-label={t("voiceRecording")}>
 					{listening ? (

@@ -34,6 +34,14 @@ export interface StepcodeDesktopBridge {
 	/** Reveal a file or folder in Finder / Explorer / the file manager. */
 	revealPath(path: string): Promise<void>;
 	/**
+	 * The OS microphone permission for this app, asked before recording. On macOS an undecided permission shows the
+	 * system prompt and resolves with the answer; Windows reports its "let desktop apps use the microphone" switch.
+	 * Needed because a refused microphone can record silence instead of rejecting `getUserMedia`.
+	 */
+	requestMicrophoneAccess(): Promise<DesktopMicrophoneAccess>;
+	/** Open the OS microphone privacy settings (macOS, Windows). Rejects where there is no such page (Linux). */
+	openMicrophoneSettings(): Promise<void>;
+	/**
 	 * The system's default web browser, as `openExternal` would launch it: its display name and a PNG data URL of
 	 * its icon (empty when the OS has none). Resolves to null where the OS cannot tell (Linux).
 	 */
@@ -53,6 +61,11 @@ export interface StepcodeDesktopBridge {
 	onBrowserEvent(listener: (event: DesktopBrowserEvent) => void): () => void;
 }
 
+/**
+ * `denied`: the user (or a missing entitlement) refused it; the settings page can turn it on.
+ * `restricted`: a device policy forbids it; the user cannot change it.
+ */
+export type DesktopMicrophoneAccess = "granted" | "denied" | "restricted";
 /** Appearance selection, independent of the currently resolved system color scheme. */
 export type DesktopThemeChoice = "system" | "light" | "dark" | "violet";
 /** A reserved embedded-browser page: the opaque lease and the storage partition approved for it. */

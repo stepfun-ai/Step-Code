@@ -50,6 +50,7 @@ apps/desktop/
     preload.ts           contextBridge -> window.stepcodeDesktop (implements the web contract)
     ipc.ts               ipcMain handlers + sender validation
     ipc-channels.ts      channel names shared by preload and main
+    microphone-access.ts OS microphone permission before recording; fixed macOS/Windows settings URLs (pure, unit-tested)
     menu.ts              application and edit context menus (incl. File -> Restart Server / Show Server Logs)
     pages.ts             error / loading pages shown when the server is not available
     shell-environment.ts read the login-shell environment for GUI launches

@@ -57,8 +57,10 @@ Electron main (src/main.ts)
  ├─ preload.ts (dist/preload.cjs) ── contextBridge ──▶ window.stepcodeDesktop
  │     beginTagGroupClose / completeTagGroupClose ──▶ tag-group-close.ts (native intention + document gate)
  └─ ipc.ts ── pickDirectory / openExternal / revealPath / defaultBrowser / getTheme / setTheme / readTagGroups / saveTagGroups
-       / browserGuest / releaseBrowserGuest (only from the window's top frame on the server origin);
-       browserEvent is main ──▶ page only
+       / browserGuest / releaseBrowserGuest / requestMicrophoneAccess / openMicrophoneSettings
+       (only from the window's top frame on the server origin); browserEvent is main ──▶ page only
+       microphone-access.ts: OS microphone permission (macOS prompt, Windows privacy switch) asked before
+       recording, and the fixed macOS / Windows microphone settings URLs
 ```
 
 On quit, the renderer first drains accepted pending group edits. Only after the actual window closes does the server
