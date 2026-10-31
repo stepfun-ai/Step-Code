@@ -1429,8 +1429,8 @@ Parse errors:
 
 Source files:
 - [`packages/providers/src/types.ts`](../../providers/src/types.ts) - `Model`, `UserMessage`, `AssistantMessage`, `ToolResultMessage`
-- [`packages/agent/src/types.ts`](../../agent/src/types.ts) - `AgentMessage`, `AgentEvent`
-- [`src/core/messages.ts`](../src/core/messages.ts) - `BashExecutionMessage`
+- [`packages/agent-core/src/types.ts`](../../agent-core/src/types.ts) - `AgentMessage`, `AgentEvent`
+- [`packages/agent-core/src/harness/messages.ts`](../../agent-core/src/harness/messages.ts) - Canonical `BashExecutionMessage`, including optional execution facts
 - [`src/modes/json-event.ts`](../src/modes/json-event.ts) - `JsonAgentSessionEvent`
 - [`src/modes/rpc/rpc-types.ts`](../src/modes/rpc/rpc-types.ts) - RPC command/response types, extension UI request/response types
 
@@ -1532,6 +1532,14 @@ Created by the `bash` RPC command (not by LLM tool calls):
   "cancelled": false,
   "truncated": false,
   "fullOutputPath": null,
+  "execution": {
+    "status": "exited",
+    "exitCode": 0,
+    "signal": null,
+    "timedOut": false,
+    "aborted": false,
+    "timeoutSeconds": 120
+  },
   "timestamp": 1733234567890
 }
 ```

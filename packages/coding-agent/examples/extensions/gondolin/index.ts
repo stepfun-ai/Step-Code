@@ -349,10 +349,10 @@ function createGondolinBashOps(vm: VM, localCwd: string, shellPath: string): Bas
 				});
 				for await (const chunk of proc.output()) onData(chunk.data);
 				const result = await proc;
-				return { exitCode: result.exitCode };
+				return { exitCode: result.exitCode, timedOut, aborted: signal?.aborted === true, timeoutSeconds: timeout };
 			} catch (error) {
-				if (signal?.aborted) throw new Error("aborted");
-				if (timedOut) throw new Error(`timeout:${timeout}`);
+				if (signal?.aborted || timedOut)
+					return { exitCode: null, timedOut, aborted: signal?.aborted === true, timeoutSeconds: timeout };
 				throw error;
 			} finally {
 				if (timer) clearTimeout(timer);

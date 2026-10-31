@@ -13,7 +13,7 @@ import { closeSync, createWriteStream, openSync } from "node:fs";
 import { mkdir as fsMkdir, readdir as fsReaddir, stat as fsStat, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentToolResult } from "@step-harness/agent-core";
+import { type AgentToolResult, ToolExecutionError } from "@step-harness/agent-core";
 import { type Component, Text } from "@step-harness/pi-tui";
 import { type Static, Type } from "typebox";
 import type {
@@ -23,7 +23,8 @@ import type {
 	ToolRenderContext,
 	ToolRenderResultOptions,
 } from "../core/extensions/types.ts";
-import { ShellToolError } from "../core/tools/bash.ts";
+import { type BashExecutionOutcome, type BashToolDetails, ShellToolError } from "../core/tools/bash.ts";
+import { formatCommandOutcome, readCommandOutputFooter } from "../core/tools/command-outcome.ts";
 import type { EditToolOptions } from "../core/tools/edit.ts";
 import { generateDiffString, generateUnifiedPatch, normalizeToLF } from "../core/tools/edit-diff.ts";
 import { withFileMutationQueue } from "../core/tools/file-mutation-queue.ts";
@@ -84,9 +85,9 @@ const PATH_DESCRIPTION =
 const RUN_COMMAND_CWD_DESCRIPTION = `Working directory. ${PATH_DESCRIPTION}`;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const READ_FILE_DESCRIPTION =
-	"Read a text file with optional line range; image files (PNG/JPEG/GIF/WebP) are returned as attached images. Prefer this over shell cat for token efficiency.";
+	"Read a known text file with an optional 1-based line range; displayed line prefixes are not file content. Image files (PNG/JPEG/GIF/WebP) are returned as attached images.";
 const WRITE_FILE_DESCRIPTION =
-	"Write full content to a file, creating parent directories if missing. Overwrites existing content — for existing files prefer edit_file.";
+	"Write complete content to a new file or deliberately replace an entire file, creating parent directories if missing. Overwrites existing content and preserves an existing file's line-ending style; use edit_file for targeted changes.";
 const THEN_RUN_DESCRIPTION =
 	"Optional run_command command after a successful file change, including a no-op. Uses the initial working directory and run_command defaults for timeout and output. Approval covers both actions before editing; a denied call makes no change. If the command fails or times out after editing, the file change remains applied: inspect the appended command status. Use a separate run_command for custom cwd, timeout, output limits, or background execution.";
 
@@ -97,13 +98,13 @@ const listDirectorySchema = Type.Object({
 });
 
 const findFilesSchema = Type.Object({
-	pattern: Type.String({ description: "Glob pattern, e.g. 'src/**/*.ts'" }),
+	pattern: Type.String({ description: "Glob pattern, not a regular expression, e.g. 'src/**/*.ts'" }),
 	path: Type.Optional(Type.String({ description: `Directory to search from. ${PATH_DESCRIPTION} Defaults to '.'` })),
 	max_results: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000, description: "Maximum files to return" })),
 });
 
 const searchFilesSchema = Type.Object({
-	pattern: Type.String({ description: "Regular expression to search for" }),
+	pattern: Type.String({ description: "Regular expression to search for; escape metacharacters for literal code" }),
 	path: Type.Optional(
 		Type.String({ description: `Directory or file to search. ${PATH_DESCRIPTION} Defaults to '.'` }),
 	),
@@ -118,7 +119,9 @@ const readFileSchema = Type.Object({
 	path: Type.String({ description: `File path. ${PATH_DESCRIPTION}` }),
 	start_line: Type.Optional(Type.Integer({ minimum: 1, description: "1-based start line" })),
 	end_line: Type.Optional(Type.Integer({ minimum: 1, description: "1-based end line" })),
-	max_chars: Type.Optional(Type.Integer({ minimum: 200, maximum: 120000, description: "Max returned characters" })),
+	max_chars: Type.Optional(
+		Type.Integer({ minimum: 200, maximum: 120000, description: "Maximum returned text characters, not tokens" }),
+	),
 });
 
 const writeFileSchema = Type.Object({
@@ -129,14 +132,14 @@ const writeFileSchema = Type.Object({
 
 const editFileSchema = Type.Object({
 	path: Type.String({ description: `File path. ${PATH_DESCRIPTION}` }),
-	search: Type.String({ description: "Literal string to find" }),
+	search: Type.String({ description: "Exact literal current file text to find, without displayed line prefixes" }),
 	replace: Type.String({ description: "Replacement string" }),
 	replace_all: Type.Optional(Type.Boolean({ description: "Replace all matches" })),
 	then_run: Type.Optional(Type.String({ description: THEN_RUN_DESCRIPTION })),
 });
 
 const runCommandSchema = Type.Object({
-	command: Type.String({ description: "Shell command string" }),
+	command: Type.String({ description: "Shell command to execute." }),
 	cwd: Type.Optional(Type.String({ description: RUN_COMMAND_CWD_DESCRIPTION })),
 	timeout_ms: Type.Optional(
 		Type.Integer({
@@ -146,7 +149,11 @@ const runCommandSchema = Type.Object({
 		}),
 	),
 	max_output_chars: Type.Optional(
-		Type.Integer({ minimum: 200, maximum: 120000, description: "Output character cap for stdout+stderr" }),
+		Type.Integer({
+			minimum: 200,
+			maximum: 120000,
+			description: "Maximum combined stdout/stderr characters, not tokens",
+		}),
 	),
 	run_in_background: Type.Optional(
 		Type.Boolean({
@@ -276,23 +283,12 @@ function limitRunCommandText(
 	text: string,
 	maxChars: number,
 	fullOutputPath: string | undefined,
+	footer: BashToolDetails["outputFooter"],
 ): { text: string; truncated: boolean } {
 	if (!fullOutputPath || text.length <= maxChars) return { text, truncated: false };
-	let body = text;
-	let suffix = "";
-	const status =
-		/(?:^|\n\n)(Command (?:aborted|timed out after [^\n]+|exited with code [^\n]+|terminated by signal [^\n]+))$/u.exec(
-			body,
-		);
-	if (status) {
-		suffix = `\n\n${status[1]}`;
-		body = body.slice(0, status.index);
-	}
-	const notice = /\n\n\[(?:Showing [^\n]*\. )?Full output: ([^\n]+)\]$/u.exec(body);
-	// This also preserves all diagnostics when additional log persistence failed.
-	if (!notice || notice[1] !== fullOutputPath) return { text, truncated: false };
-	suffix = `\n\n[Full output: ${notice[1]}]${suffix}`;
-	body = body.slice(0, notice.index);
+	const originalSuffix = footer ? `${footer.notice}\n\n${footer.status}` : "";
+	const body = originalSuffix && text.endsWith(originalSuffix) ? text.slice(0, -originalSuffix.length) : text;
+	const suffix = `\n\n[Full output: ${fullOutputPath}]${footer ? `\n\n${footer.status}` : ""}`;
 	const prefix = maxChars < 512 ? "[Output truncated]\n" : `${STEP_TRUNCATION_HINTS.run_command.banner}\n\n`;
 	// A path/status longer than the cap must remain usable, even without inline output.
 	const remaining = Math.max(0, maxChars - prefix.length - suffix.length);
@@ -320,13 +316,13 @@ function withReadTextLimit(text: string, maxChars: number): { text: string; trun
 
 function applyStepTextLimit(result: AnyResult, toolName: StepTruncationToolName, maxChars: number): AnyResult {
 	const text = textFromResult(result);
+	const fullOutputPath =
+		typeof result.details?.fullOutputPath === "string" ? result.details.fullOutputPath : undefined;
+	// Validate the producer framing here as well: a hook could inject malformed details.
+	const outputFooter = readCommandOutputFooter((result.details as BashToolDetails | undefined)?.outputFooter);
 	const limited =
 		toolName === "run_command"
-			? limitRunCommandText(
-					text,
-					maxChars,
-					typeof result.details?.fullOutputPath === "string" ? result.details.fullOutputPath : undefined,
-				)
+			? limitRunCommandText(text, maxChars, fullOutputPath, outputFooter)
 			: withStepTextLimit(toolName, text, maxChars);
 	if (!limited.truncated) return result;
 	return {
@@ -335,6 +331,14 @@ function applyStepTextLimit(result: AnyResult, toolName: StepTruncationToolName,
 		details: {
 			...(result.details && typeof result.details === "object" ? result.details : {}),
 			stepTruncated: true,
+			...(toolName === "run_command" && outputFooter && fullOutputPath
+				? {
+						outputFooter: {
+							...outputFooter,
+							notice: `\n\n[Full output: ${fullOutputPath}]`,
+						},
+					}
+				: {}),
 		},
 	} as AnyResult;
 }
@@ -1144,10 +1148,19 @@ class StepCommandError extends ShellToolError {
 	readonly stepTruncated: boolean;
 
 	constructor(error: ShellToolError, maxChars: number) {
-		const limited = limitRunCommandText(error.message, maxChars, error.fullOutputPath);
-		super(limited.text, error.fullOutputPath);
-		this.cause = error;
+		const limited = limitRunCommandText(
+			error.message,
+			maxChars,
+			error.fullOutputPath,
+			error.result.details.outputFooter,
+		);
+		const outputFooter =
+			limited.truncated && error.result.details.outputFooter && error.fullOutputPath
+				? { ...error.result.details.outputFooter, notice: `\n\n[Full output: ${error.fullOutputPath}]` }
+				: error.result.details.outputFooter;
+		super(limited.text, error.fullOutputPath, error.result.details.execution, { cause: error }, outputFooter);
 		this.stepTruncated = limited.truncated;
+		Object.assign(this.result.details, { stepTruncated: limited.truncated });
 	}
 }
 
@@ -1159,6 +1172,9 @@ export interface StepThenRunDetails {
 	stepTruncated: boolean;
 	/** Complete command output, retained by run_command when inline output is shortened. */
 	fullOutputPath?: string;
+	/** Command facts retained independently from the enclosing file mutation. */
+	execution?: BashExecutionOutcome;
+	outputFooter?: BashToolDetails["outputFooter"];
 }
 
 /**
@@ -1175,9 +1191,12 @@ async function withThenRunResult(
 ): Promise<AnyResult> {
 	const receipt = textFromResult(result);
 	let output: string;
-	let status: string | undefined;
-	let exitCode: number | null = 0;
+	let exitCode: number | null = null;
 	let timedOut = false;
+	let execution: BashExecutionOutcome | undefined;
+	let outputFooter: BashToolDetails["outputFooter"];
+	let commandError: unknown;
+	let isError = false;
 	let stepTruncated = false;
 	let fullOutputPath: string | undefined;
 	try {
@@ -1191,26 +1210,23 @@ async function withThenRunResult(
 		);
 		output = textFromResult(commandResult);
 		const details = nativeDetails(commandResult);
+		execution = (commandResult.details as BashToolDetails | undefined)?.execution;
+		outputFooter = (commandResult.details as BashToolDetails | undefined)?.outputFooter;
+		exitCode = execution?.exitCode ?? null;
+		timedOut = execution?.timedOut === true;
+		isError = commandResult.isError === true;
 		stepTruncated = details.stepTruncated === true;
 		fullOutputPath = typeof details.fullOutputPath === "string" ? details.fullOutputPath : undefined;
-		status = "Command exited with code 0";
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		if (isCallerAborted(signal)) {
-			throw new Error(`${receipt}\n\nthen_run: $ ${command}\n${message}`, { cause: error });
-		}
+		commandError = error;
+		isError = true;
+		output = error instanceof Error ? error.message : String(error);
+		execution = error instanceof ShellToolError ? error.result.details.execution : undefined;
+		outputFooter = error instanceof ShellToolError ? error.result.details.outputFooter : undefined;
+		exitCode = execution?.exitCode ?? null;
+		timedOut = execution?.timedOut === true;
 		stepTruncated = error instanceof StepCommandError && error.stepTruncated;
 		fullOutputPath = error instanceof ShellToolError ? error.fullOutputPath : undefined;
-		const match = /(?:^|\n\n)(Command exited with code (\d+)|Command timed out after .+ seconds)$/u.exec(message);
-		if (match) {
-			output = message.slice(0, match.index);
-			status = match[1];
-			exitCode = match[2] === undefined ? null : Number(match[2]);
-			timedOut = match[2] === undefined;
-		} else {
-			output = message;
-			exitCode = null;
-		}
 	}
 	// run_command already bounded the output and preserved its log/status footer.
 	// Limiting it again here could discard the only reference to the full output.
@@ -1220,17 +1236,24 @@ async function withThenRunResult(
 		timedOut,
 		stepTruncated,
 		...(fullOutputPath ? { fullOutputPath } : {}),
+		...(execution ? { execution } : {}),
+		...(outputFooter ? { outputFooter } : {}),
 	};
-	return {
+	const combined = {
 		...result,
+		...(isError ? { isError: true } : {}),
 		content: [
 			{
 				type: "text",
-				text: `${receipt}\n\n${thenRunMarker(command)}${output || "(no output)"}${status ? `\n\n${status}` : ""}`,
+				text: `${receipt}\n\n${thenRunMarker(command)}${output || "(no output)"}`,
 			},
 		],
 		details: { ...nativeDetails(result), thenRun },
 	} as AnyResult;
+	if (isCallerAborted(signal) || execution?.aborted) {
+		throw new ToolExecutionError(textFromResult(combined), { ...combined, content: [] }, { cause: commandError });
+	}
+	return combined;
 }
 
 function thenRunMarker(command: string): string {
@@ -1280,19 +1303,24 @@ class ThenRunResultComponent implements Component {
 
 function formatThenRunSummary(result: AnyResult, thenRun: StepThenRunDetails, expanded: boolean, theme: any): string {
 	const command = thenRun.command.replace(/\s+/gu, " ").trim();
-	const status = thenRun.timedOut
-		? theme.fg("error", "timed out")
-		: thenRun.exitCode === 0
-			? theme.fg("success", "exit 0")
-			: theme.fg("error", thenRun.exitCode === null ? "failed" : `exit ${thenRun.exitCode}`);
+	const executionStatus = thenRun.execution ? formatCommandOutcome(thenRun.execution) : undefined;
+	const status = executionStatus
+		? theme.fg("muted", executionStatus)
+		: thenRun.timedOut
+			? theme.fg("error", "timed out")
+			: thenRun.exitCode === 0
+				? theme.fg("success", "exit 0")
+				: theme.fg("error", thenRun.exitCode === null ? "failed" : `exit ${thenRun.exitCode}`);
 	const summary = `${theme.fg("muted", `then_run $ ${command} ·`)} ${status}`;
 	if (!expanded) return summary;
 	const text = textFromResult(result);
 	const markerIndex = text.indexOf(thenRunMarker(thenRun.command));
 	if (markerIndex < 0) return summary;
-	const body = text
-		.slice(markerIndex + thenRunMarker(thenRun.command).length)
-		.replace(/\n\n(Command exited with code \d+|Command timed out after .+ seconds)$/u, "");
+	const observedBody = text.slice(markerIndex + thenRunMarker(thenRun.command).length);
+	const footer = readCommandOutputFooter(thenRun.outputFooter);
+	const statusSuffix = footer && executionStatus === footer.status ? `\n\n${footer.status}` : "";
+	const body =
+		statusSuffix && observedBody.endsWith(statusSuffix) ? observedBody.slice(0, -statusSuffix.length) : observedBody;
 	return `${theme.fg("toolOutput", body)}\n${summary}`;
 }
 
@@ -1408,7 +1436,8 @@ function createFindToolsDefinition(
 	return {
 		name: "find_tools",
 		label: "find_tools",
-		description: "Search registered tools by natural-language intent, tool name, description, and parameter names.",
+		description:
+			"Search registered tools by natural-language intent, tool name, description, and parameter names. Returns available catalog names and parameter schemas; use those exact names and schemas, not invented names.",
 		promptSnippet: "Find a tool by describing the operation you need",
 		parameters: findToolsSchema,
 		execute: async (_toolCallId, args: FindToolsInput, _signal, _onUpdate, ctx) => {
@@ -1526,7 +1555,7 @@ async function startBackgroundCommand(
 					`Log: ${logPath}`,
 					stopCommand === undefined
 						? "Check progress with read_file on the log."
-						: `Check progress with read_file on the log; stop it and its child processes with run_command(${JSON.stringify(stopCommand)}).`,
+						: `Check progress with read_file on the log; stop it and its child processes with run_command using ${JSON.stringify({ command: stopCommand })}.`,
 				].join("\n"),
 			},
 		],
@@ -1562,7 +1591,8 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 		{
 			name: "list_directory",
 			label: "list_directory",
-			description: "List one directory with directories first. Prefer this before recursive shell listing.",
+			description:
+				"List one known directory with directories first. Hides dotfiles by default; set include_hidden=true to include them.",
 			promptSnippet: "List one directory with directories first",
 			parameters: listDirectorySchema,
 		},
@@ -1585,7 +1615,7 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 			name: "find_files",
 			label: "find_files",
 			description:
-				"Find files by glob pattern, sorted by modification time (newest first). Prefer this over shell find or recursive ls.",
+				"Find files by glob pattern, not a regular expression, under the path search root. Returns paths sorted by modification time (newest first).",
 			promptSnippet: "Find files by glob pattern",
 			parameters: findFilesSchema,
 		},
@@ -1608,7 +1638,7 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 			name: "search_files",
 			label: "search_files",
 			description:
-				"Search file contents with a regular expression. Returns matching file paths, line numbers, and matched lines. Prefer this over shell grep.",
+				"Search file contents with a regular expression. Returns matching file paths, line numbers, and matched lines. Escape regex metacharacters for literal code; narrow searches with path and glob.",
 			promptSnippet: "Search file contents with a regular expression",
 			parameters: searchFilesSchema,
 		},
@@ -1679,10 +1709,10 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 		name: "edit_file",
 		label: "edit_file",
 		description:
-			"Edit one file by literal search/replace. 'search' must match the current file content exactly and appear exactly once unless replace_all is true.",
+			"Edit one file by literal search/replace. 'search' must match current file content exactly, without displayed line prefixes, and appear exactly once unless replace_all is true. If no match is found, inspect current content; if ambiguous, add context to make the match unique.",
 		promptSnippet: "Make a precise literal search/replace edit",
 		promptGuidelines: [
-			"Use edit_file for precise changes; set replace_all=true only when every occurrence should change.",
+			"Use edit_file for precise literal changes against current file content, without displayed line prefixes. Include unique context; set replace_all=true only when every occurrence should change.",
 		],
 		parameters: editFileSchema,
 		constrainedSampling: nativeEdit.constrainedSampling,
@@ -1715,7 +1745,7 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 		name: "run_command",
 		label: "run_command",
 		description:
-			"Run a non-interactive shell command from the initial working directory by default. Use for tests, builds, formatters, git, and project scripts; prefer dedicated file/search tools for reading and searching.",
+			"Run a non-interactive shell command. Foreground calls return combined stdout/stderr; run_in_background=true returns a pid and log path. Uses cwd when supplied, otherwise the initial working directory.",
 		promptSnippet: "Run a non-interactive shell command",
 		parameters: runCommandSchema,
 		constrainedSampling: nativeBash.constrainedSampling,

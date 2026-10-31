@@ -20,20 +20,23 @@ export interface StepSystemPromptContext {
 
 const TOOL_RULES: Readonly<Record<string, string>> = {
 	list_directory:
-		"Use list_directory for one directory listing; it returns directories first and hides dotfiles by default.",
-	find_files: "Use find_files for glob searches and prefer it over recursive shell find or ls.",
-	search_files: "Use search_files for regular-expression content searches and prefer it over shell grep.",
+		"Use list_directory to inspect a known directory; it returns directories first and hides dotfiles by default. Set include_hidden:true when hidden entries matter.",
+	find_files:
+		"Use find_files to discover paths with a glob pattern, not a regular expression; set path to the search root.",
+	search_files:
+		"Use search_files for regular-expression content searches. Escape regex metacharacters when searching for literal code, and narrow the scope with path and glob.",
 	search_web:
 		"Use search_web for current or external information; when it informs the answer, cite relevant URLs in a final Sources: section.",
 	read_file:
-		"Use read_file to inspect text with optional line ranges; if output is truncated, narrow the range or increase max_chars; supported image files are returned as images.",
+		"Use read_file to inspect a known path with optional 1-based start_line/end_line ranges. Displayed line prefixes are not file content. If output is truncated, narrow the range or increase max_chars; supported image files are returned as images.",
 	edit_file:
-		"Use edit_file for precise literal search/replace edits; the search text must match the current file exactly, and use replace_all only when every occurrence should change.",
+		"Use edit_file for literal search/replace edits; search must match current content exactly, without displayed line prefixes. Include enough context for a unique match; use replace_all only when every occurrence should change. If no match is found, inspect current content; if ambiguous, add context.",
 	write_file:
-		"Use write_file for new files or deliberate full replacement; for an existing file prefer edit_file and preserve its line-ending style.",
+		"Use write_file for new files or deliberate full replacement with complete content; for targeted changes to an existing file use edit_file and preserve its line-ending style.",
 	run_command:
-		"Use run_command for non-interactive tests, builds, formatters, and git commands. Keep scope minimal, use its cwd parameter for another directory, and treat truncated output as incomplete. For long-running processes such as dev servers, set run_in_background:true — it returns a pid and a log path; read the log to confirm readiness and kill the pid to stop.",
-	find_tools: "Use find_tools when you know the intent but do not know the available tool name.",
+		"Use run_command for non-interactive git commands, builds, tests, formatting, pipelines, and read-only scripts that better express the task. Use cwd rather than cd to select a working directory. Each call starts a fresh shell: cd and environment changes do not persist between calls. Inspect output and command status; truncated output is incomplete, so read the returned full-output path when present. For long-lived processes set run_in_background:true; read the returned log for progress and readiness, and use the returned stop command to stop the process and its children. Do not start the same command again to check progress.",
+	find_tools:
+		"Use find_tools when available to discover a tool by intent. Call only exact available catalog names with their declared schemas; do not invent tool names.",
 	task_create:
 		"Use task_create to add a todo item to the active execution plan; newPlan starts a separate checklist and archives the current one. It records work rather than starting it.",
 	task_update:
@@ -318,7 +321,7 @@ export function buildStepSystemPromptAppendix(
 		"1. Understand first: read relevant code and project instructions, then investigate until the root cause is clear.",
 		"2. Track multi-step work: for several non-trivial steps, record progress with the task tools when they are available and update it as facts change. A todo list is not a plan proposal.",
 		"3. Test first when feasible: find or write the smallest check that reproduces a bug before fixing it.",
-		"4. Act in small, verifiable steps: reread the relevant file immediately before editing and prefer precise edits over rewrites.",
+		"4. Act in small, verifiable steps: read current content before editing when it is unknown or may be stale, and prefer precise edits over rewrites.",
 		"5. Validate: run focused tests, typechecks, lint, or builds after edits and report failures or skipped checks exactly. For UI-facing changes, also verify visually when a browser or screenshot tool is available; when none is, suggest installing the playwright plugin.",
 		"6. Stay in scope: do not add unrequested features, refactors, compatibility shims, or speculative behavior.",
 
@@ -345,10 +348,19 @@ export function buildStepSystemPromptAppendix(
 		"- Before a requested git mutation, inspect status and diff, target only relevant files, and preserve unrelated work. Never amend or rewrite commits you did not author in this session unless explicitly instructed.",
 
 		"# Tool usage",
-		"- Prefer dedicated StepCode tools over shell equivalents: list_directory over recursive ls, find_files over find, search_files over grep, and read_file over cat or sed.",
-		"- Use read_file before edit_file when the current content is not already known. Use edit_file for targeted replacements and write_file only for new files or deliberate full replacements.",
-		"- Keep tool calls narrow and independently verifiable. Do not use interactive commands or shell chains when a structured argument (such as cwd) is available.",
+		"- Use available file tools for straightforward reads, searches, and directory listings.",
+		"- For manual file edits, use available edit_file or write_file tools: edit_file for targeted replacements and write_file for new files or deliberate full replacements with complete content. Read current content when it is unknown or may be stale, and preserve existing line-ending style.",
+		"- For independent reads and searches, emit separate tool calls in the same response so they can run in parallel. Keep dependent operations and changes to the same file sequential. Do not invent a parallel tool wrapper.",
 	];
+
+	if (active.has("run_command")) {
+		sections.push(
+			"- Use run_command when shell pipelines or read-only scripts better express the task, and for formatting or bulk mechanical rewrites. When using shell search, prefer rg or rg --files; use an available alternative if rg is missing.",
+			"- Keep commands narrow and non-interactive. Use cwd rather than cd to select a working directory. Keep pipelines that express one operation, but do not concatenate independent commands with echo/printf separators; use separate calls instead. For long-lived commands use run_in_background:true.",
+			"- Treat shell text as code. JSON.stringify is not shell escaping; backticks and $() can execute commands. Quote paths and literal arguments for the selected shell.",
+			'- Example run_command arguments: {"command":"git diff --stat","cwd":".","timeout_ms":120000,"max_output_chars":24000}. Use the declared schema, not positional arguments.',
+		);
+	}
 
 	if ((active.has("edit_file") || active.has("write_file")) && active.has("run_command")) {
 		sections.push(

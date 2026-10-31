@@ -34,6 +34,8 @@ Source on GitHub ([step-harness](https://github.com/stepfun-ai/step-harness)):
 - [`packages/providers/src/types.ts`](https://github.com/stepfun-ai/step-harness/blob/main/packages/providers/src/types.ts) - Base message types (UserMessage, AssistantMessage, ToolResultMessage)
 - [`packages/agent/src/types.ts`](https://github.com/stepfun-ai/step-harness/blob/main/packages/agent/src/types.ts) - AgentMessage union type
 
+`BashExecutionMessage` now lives in [`packages/agent-core/src/harness/messages.ts`](https://github.com/stepfun-ai/step-harness/blob/main/packages/agent-core/src/harness/messages.ts); the coding-agent module re-exports it.
+
 For TypeScript definitions in your project, inspect `node_modules/@step-harness/coding-agent/dist/` and `node_modules/@step-harness/providers/dist/`.
 
 ## Message Types
@@ -119,6 +121,45 @@ interface Usage {
 
 The exported `StopReason` type also includes `"pending"`, but that value is reserved for partial messages in streaming events. Terminal `done`/`error` messages replace it with a completion reason before step persists the assistant message, so `"pending"` should never appear in session JSONL.
 
+### Command tool outcomes
+
+For `run_command`, `bash`, and `powershell`, `isError` describes whether the tool
+invocation failed, not whether the command met the user's objective. A nonzero
+exit code, an execution deadline, or termination by a signal returns an ordinary
+tool result with `isError: false`. Output retains the command status, and
+`details.execution` carries these observations:
+
+```typescript
+interface BashExecutionOutcome {
+  status: "exited" | "timed_out" | "signaled" | "canceled" | "unknown";
+  exitCode: number | null;
+  signal: string | null;
+  timedOut: boolean;
+  aborted: boolean;
+  timeoutSeconds?: number;
+}
+```
+
+Timeout and cancellation facts remain independent of the exit code: a command
+that exits with zero after a deadline still has `timedOut: true`. Missing exit
+information is `unknown`, not a fabricated zero. Caller cancellation continues
+to stop the agent and retains available execution facts in its error result.
+Unknown tools, invalid arguments, denied calls, startup failures, and output
+processing faults remain tool errors. An error after execution does not imply
+that effects were rolled back; verify state before repeating a mutation.
+
+An embedded `then_run` retains the same facts under
+`details.thenRun.execution`, alongside its existing summary fields. A nonzero
+exit or deadline does not undo the edit or write. An invocation fault in the
+check sets the enclosing result's error flag while retaining the file change.
+
+Existing records without `details.execution` remain readable and are not
+reclassified by parsing their output. The JSONL format version is unchanged.
+
+User-initiated bash executions keep the same optional facts in
+`BashExecutionMessage.execution`. They survive session recording and are shown
+in the next model request, including deadlines whose observed exit code is zero.
+
 Session totals and the cost breakdown use the shared [`usage-totals.ts`](../src/core/usage-totals.ts) ledger. It includes assistant, tool, compaction, branch-summary and incremental `step-auto-clm-usage` records; cumulative maintenance summaries are excluded. Token increments must contain nonnegative safe integers and must not overflow the accumulated total. A missing/invalid cost does not hide valid tokens. `SessionStats.tokens.input` excludes caches, which are reported separately; the [Account summary](account-usage.md) combines them into complete input.
 
 ### Extended Message Types (from the coding agent)
@@ -132,6 +173,7 @@ interface BashExecutionMessage {
   cancelled: boolean;
   truncated: boolean;
   fullOutputPath?: string;
+  execution?: BashExecutionOutcome;
   excludeFromContext?: boolean;  // true for !! prefix commands
   timestamp: number;
 }

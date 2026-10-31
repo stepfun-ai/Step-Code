@@ -157,12 +157,13 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	// File exploration guidelines
 	if ((hasBash || hasPowerShell) && !hasGrep && !hasFind && !hasLs) {
+		const shellTool = tools.includes("run_command") ? "run_command" : "bash";
 		if (hasBash && hasPowerShell) {
-			addGuideline("Use bash or PowerShell for file operations like listing, searching, and finding files");
+			addGuideline(`Use ${shellTool} or powershell for file operations like listing, searching, and finding files`);
 		} else if (hasPowerShell) {
-			addGuideline("Use PowerShell for file operations like listing, searching, and finding files");
+			addGuideline("Use powershell for file operations like listing, searching, and finding files");
 		} else {
-			addGuideline("Use bash for file operations like ls, rg, find");
+			addGuideline(`Use ${shellTool} for file operations like ls, rg, find`);
 		}
 	}
 

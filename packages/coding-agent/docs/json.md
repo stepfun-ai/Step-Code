@@ -117,11 +117,13 @@ Base messages from [`packages/providers/src/types.ts`](https://github.com/stepfu
 - `AssistantMessage` (line 140)
 - `ToolResultMessage` (line 152)
 
-Extended messages from [`packages/coding-agent/src/core/messages.ts`](https://github.com/stepfun-ai/step-harness/blob/main/packages/coding-agent/src/core/messages.ts#L29):
-- `BashExecutionMessage` (line 29)
-- `CustomMessage` (line 46)
-- `BranchSummaryMessage` (line 55)
-- `CompactionSummaryMessage` (line 62)
+Canonical shell messages from [`packages/agent-core/src/harness/messages.ts`](../../agent-core/src/harness/messages.ts):
+- `BashExecutionMessage`, including optional structured execution facts
+
+Product messages from [`packages/coding-agent/src/core/messages.ts`](../src/core/messages.ts):
+- `CustomMessage`
+- `BranchSummaryMessage`
+- `CompactionSummaryMessage`
 
 ## Output Format
 

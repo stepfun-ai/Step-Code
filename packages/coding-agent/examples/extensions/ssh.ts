@@ -100,12 +100,16 @@ function createRemoteBashOps(remote: string, remoteCwd: string, localCwd: string
 				});
 				const onAbort = () => child.kill();
 				signal?.addEventListener("abort", onAbort, { once: true });
-				child.on("close", (code) => {
+				child.on("close", (code, exitSignal) => {
 					if (timer) clearTimeout(timer);
 					signal?.removeEventListener("abort", onAbort);
-					if (signal?.aborted) reject(new Error("aborted"));
-					else if (timedOut) reject(new Error(`timeout:${timeout}`));
-					else resolve({ exitCode: code });
+					resolve({
+						exitCode: code,
+						signal: exitSignal,
+						timedOut,
+						aborted: signal?.aborted === true,
+						timeoutSeconds: timeout,
+					});
 				});
 			}),
 	};

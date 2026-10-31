@@ -181,17 +181,17 @@ function createSandboxedBashOps(): BashOperations {
 
 				signal?.addEventListener("abort", onAbort, { once: true });
 
-				child.on("close", (code) => {
+				child.on("close", (code, exitSignal) => {
 					if (timeoutHandle) clearTimeout(timeoutHandle);
 					signal?.removeEventListener("abort", onAbort);
 
-					if (signal?.aborted) {
-						reject(new Error("aborted"));
-					} else if (timedOut) {
-						reject(new Error(`timeout:${timeout}`));
-					} else {
-						resolve({ exitCode: code });
-					}
+					resolve({
+						exitCode: code,
+						signal: exitSignal,
+						timedOut,
+						aborted: signal?.aborted === true,
+						timeoutSeconds: timeout,
+					});
 				});
 			});
 		},

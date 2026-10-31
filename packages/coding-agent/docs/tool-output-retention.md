@@ -31,6 +31,13 @@ error. It states that the tool may already have run and that effects should be
 checked before repeating a state-changing call. Image blocks remain available even if text retention fails. Existing denial and
 termination policy remains in force. Small results create no artifact and are unchanged.
 
+Command outcomes remain separate from this output-processing status. A retained
+nonzero exit, signal, or execution deadline is not itself a tool error; its
+structured facts remain in `details.execution`. Typed execution errors retain
+observed output and full-output references through the agent loop. A failing
+return-stage hook also retains the prior result's details and termination hint,
+so it cannot erase an already-applied mutation or cause that mutation to replay.
+
 This bounds final model-facing text, not streaming progress updates or arbitrary
 typed `details` payloads. No new permission bypass or external upload is added.
 
