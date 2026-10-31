@@ -16,6 +16,8 @@ import type { AgentToolResult } from "@step-harness/agent-core";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "../core/extensions/types.ts";
 import {
+	PLAN_REVIEW_FEEDBACK_LABEL,
+	PLAN_REVIEW_PROMPT,
 	PlanReviewComponent,
 	type PlanReviewDetails,
 	type PlanReviewOutcome,
@@ -96,6 +98,18 @@ async function reviewPlanInteractively(
 	planFilePath: string,
 	planContents: string,
 ): Promise<PlanReviewResult> {
+	if (extensionContext.mode === "acp") {
+		const choice = await extensionContext.ui.select(
+			`${PLAN_REVIEW_PROMPT}\n\nPlan file: ${planFilePath}\n\n${planContents}`,
+			["Execute the plan", PLAN_REVIEW_FEEDBACK_LABEL],
+		);
+		if (choice === "Execute the plan") return { action: "execute" };
+		if (choice === PLAN_REVIEW_FEEDBACK_LABEL) {
+			const text = await extensionContext.ui.input("What should Step change in the plan?");
+			if (text?.trim()) return { action: "feedback", text: text.trim() };
+		}
+		return { action: "dismissed" };
+	}
 	return extensionContext.ui.custom<PlanReviewResult>(
 		(tui, theme, _keybindings, done) =>
 			new PlanReviewComponent({
@@ -165,9 +179,12 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				// to "Stay", leaving the child idle in plan mode forever. Exit plan mode
 				// and hand approval to the caller.
 				planMode.exitPlanMode("auto_rpc", ctx);
-				ctx.ui.notify("rpc child auto-approved plan mode exit — user oversight was not gated", "warning");
+				ctx.ui.notify(
+					"headless protocol child auto-approved plan mode exit — user oversight was not gated",
+					"warning",
+				);
 				return reviewedResult(
-					`Cannot gate approval in rpc child context. Plan file at ${planFilePath}; caller should approve externally. Plan mode exited and file mutations are re-enabled.\n\nPlan contents:\n${planContents}`,
+					`Cannot gate approval in a headless protocol child context. Plan file at ${planFilePath}; caller should approve externally. Plan mode exited and file mutations are re-enabled.\n\nPlan contents:\n${planContents}`,
 					reviewed("external_approval_required"),
 				);
 			}

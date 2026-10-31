@@ -20,8 +20,10 @@ import {
 	describeMcpStartFailure,
 	discoverStepMcpServers,
 	expandHeaderTemplate,
+	getHostMcpServerOverlay,
 	getStepMcpStatuses,
 	resolveStepMcpServer,
+	setHostMcpServerOverlay,
 } from "./mcp.ts";
 
 import type { StepPageReadiness } from "./steppage-provision.ts";
@@ -70,6 +72,9 @@ beforeEach(() => {
 	builtin.disabledUser = false;
 	preinstall.mockReset().mockResolvedValue({ installed: [], warnings: [] });
 	readiness.mockReset();
+	// The overlay is process state; leaving it set would leak servers into
+	// every later discovery in this file.
+	setHostMcpServerOverlay(undefined);
 });
 afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
@@ -694,4 +699,63 @@ test("shutdown suppresses late warnings from manifest preinstallation", async ()
 	release({ installed: [], warnings: ["late manifest warning"] });
 	await shutdown;
 	expect(harness.notify).not.toHaveBeenCalled();
+});
+
+test("a host overlay server is discovered alongside config servers", async () => {
+	config.value = { mcp_servers: { fromConfig: { command: "config-server" } } };
+	setHostMcpServerOverlay({ fromClient: { command: "client-server", args: ["--flag"] } });
+
+	const discovered = await discoverStepMcpServers(process.cwd(), false);
+
+	expect(discovered.map((server) => server.name).sort()).toEqual(["fromClient", "fromConfig"]);
+	expect(discovered.find((server) => server.name === "fromClient")?.declaration).toEqual({
+		command: "client-server",
+		args: ["--flag"],
+	});
+});
+
+test("a host overlay server replaces a same-named config entry", async () => {
+	config.value = { mcp_servers: { shared: { command: "config-server", args: ["--stale"] } } };
+	setHostMcpServerOverlay({ shared: { command: "client-server" } });
+
+	const discovered = await discoverStepMcpServers(process.cwd(), false);
+
+	// Replaced in place, not appended: two entries named `shared` would publish
+	// the same tool names twice.
+	expect(discovered).toHaveLength(1);
+	expect(discovered[0]?.declaration).toEqual({ command: "client-server" });
+});
+
+test("a host overlay server coexists with a differently named plugin server", async () => {
+	// Plugin servers are namespaced `<pluginId>__<name>`, so a client that asks
+	// for `docs` never collides with a plugin's `docs` and both stay available.
+	pluginMocks.dirs = ["/unused-test-plugins/local"];
+	pluginMocks.manifests.set("/unused-test-plugins/local", {
+		id: "local",
+		mcpServers: { docs: { command: "plugin-server" } },
+	});
+	setHostMcpServerOverlay({ docs: { url: "https://client.example.com/mcp" } });
+
+	const discovered = await discoverStepMcpServers(process.cwd(), false);
+
+	expect(discovered.map((server) => server.name).sort()).toEqual(["docs", "local__docs"]);
+	expect(discovered.find((server) => server.name === "docs")?.declaration).toEqual({
+		url: "https://client.example.com/mcp",
+	});
+});
+
+test("clearing the host overlay drops its servers from discovery", async () => {
+	setHostMcpServerOverlay({ fromClient: { command: "client-server" } });
+	expect((await discoverStepMcpServers(process.cwd(), false)).map((server) => server.name)).toEqual(["fromClient"]);
+
+	setHostMcpServerOverlay(undefined);
+
+	expect(await discoverStepMcpServers(process.cwd(), false)).toEqual([]);
+	expect(getHostMcpServerOverlay()).toBeUndefined();
+});
+
+test("an overlay entry without a transport is ignored", async () => {
+	setHostMcpServerOverlay({ broken: { args: ["--no-command-or-url"] } });
+
+	expect(await discoverStepMcpServers(process.cwd(), false)).toEqual([]);
 });

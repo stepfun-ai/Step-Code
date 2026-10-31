@@ -85,7 +85,7 @@ import { parseArgs, resolveAppMode, toPrintOutputMode } from "#args/index";
 import { loadStepStartupConfig } from "#bootstrap/config";
 import { createStepExtensionFactories } from "#bootstrap/extensions";
 import { captureRawStdout, sdkStdioRequested } from "#bootstrap/stdout-capture";
-import { InteractiveMode, runPrintMode, runRpcMode } from "#modes/index";
+import { InteractiveMode, runAcpMode, runPrintMode, runRpcMode } from "#modes/index";
 import { createSdkStdioMode } from "#modes/sdk-stdio";
 import {
 	selectConfig,
@@ -237,7 +237,7 @@ const stepMainOptions: MainOptions = {
 			present: showUsagePanel,
 			output: (ctx, model) => {
 				const text = usagePresentationRows(model).join("\n");
-				if (ctx.mode === "rpc") ctx.ui.notify(text, "info");
+				if (ctx.mode === "rpc" || ctx.mode === "acp") ctx.ui.notify(text, "info");
 				else process.stderr.write(`${text}\n`);
 			},
 		},
@@ -886,6 +886,10 @@ async function dispatchStepAppMode(prep: Extract<MainPreparation, { kind: "dispa
 	switch (prep.appMode) {
 		case "rpc": {
 			await runRpcMode(prep.runtimeHost, { includeLiveEvents: prep.parsed.includeLiveEvents });
+			break;
+		}
+		case "acp": {
+			await runAcpMode(prep.runtimeHost);
 			break;
 		}
 		case "interactive": {

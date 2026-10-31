@@ -36,7 +36,7 @@ export interface WriteOperations {
 	mkdir: (dir: string) => Promise<void>;
 }
 
-const defaultWriteOperations: WriteOperations = {
+export const defaultWriteOperations: WriteOperations = {
 	readFile: (path) => fsReadFile(path),
 	writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
 	mkdir: (dir) => fsMkdir(dir, { recursive: true }).then(() => {}),

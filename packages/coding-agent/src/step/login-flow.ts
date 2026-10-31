@@ -188,7 +188,8 @@ export function isStepInteractiveLoginStartup(input: {
 		input.args.fileArgs.length === 0 &&
 		input.args.print !== true &&
 		input.args.mode !== "json" &&
-		input.args.mode !== "rpc"
+		input.args.mode !== "rpc" &&
+		input.args.mode !== "acp"
 	);
 }
 

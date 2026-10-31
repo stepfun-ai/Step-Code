@@ -94,6 +94,7 @@ function createHarness(
 		cwd?: string;
 		flags?: Record<string, boolean | string>;
 		select?: (title: string, options: string[]) => Promise<string | undefined>;
+		input?: (title: string) => Promise<string | undefined>;
 		editor?: (title: string, prefill?: string) => Promise<string | undefined>;
 		/** Keystrokes fed to the plan review component mounted through ui.custom. */
 		review?: string[];
@@ -155,6 +156,7 @@ function createHarness(
 					notifications.push({ message, type });
 				},
 				select: options.select ?? (async () => undefined),
+				input: options.input ?? (async () => undefined),
 				editor: options.editor ?? (async () => undefined),
 				custom: async <T>(
 					factory: (
@@ -539,7 +541,7 @@ test.each([true, false])("rpc-mode exit_plan_mode hands approval to the caller (
 	expect(result.content).toEqual([
 		{
 			type: "text",
-			text: `Cannot gate approval in rpc child context. Plan file at ${planPath}; caller should approve externally. Plan mode exited and file mutations are re-enabled.\n\nPlan contents:\n${planContents}`,
+			text: `Cannot gate approval in a headless protocol child context. Plan file at ${planPath}; caller should approve externally. Plan mode exited and file mutations are re-enabled.\n\nPlan contents:\n${planContents}`,
 		},
 	]);
 	expect(result.details).toEqual({
@@ -561,13 +563,36 @@ test.each([true, false])("rpc-mode exit_plan_mode hands approval to the caller (
 	expect(
 		harness.notifications.some(
 			(notification) =>
-				notification.type === "warning" && notification.message.includes("rpc child auto-approved plan mode exit"),
+				notification.type === "warning" &&
+				notification.message.includes("headless protocol child auto-approved plan mode exit"),
 		),
 	).toBe(true);
 	expect(events.at(-1)).toEqual({
 		event: "plan_mode_exited",
 		properties: { source: "user", outcome: "auto_rpc" },
 	});
+});
+
+test("acp-mode exit_plan_mode keeps approval on the client dialog", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd, select: async () => "Execute the plan" });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx({ mode: "acp", hasUI: true });
+
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# The plan\n1. Do the thing\n");
+
+	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as {
+		details?: PlanReviewDetails;
+		terminate?: boolean;
+	};
+	expect(harness.customCalls()).toBe(0);
+	expect(result.details).toMatchObject({ outcome: "approved", approvalSource: "user" });
+	expect(result.terminate).toBe(false);
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
+	expect(harness.statuses.get("plan-mode")).toBeUndefined();
 });
 
 test("tui-mode exit_plan_mode still gates through the review dialog", async () => {

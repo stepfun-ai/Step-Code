@@ -6,6 +6,7 @@
  * (print/rpc/json) stay in this package.
  */
 
+export { runAcpMode } from "./acp/acp-mode.ts";
 export type { JsonAgentSessionEvent } from "./json-event.ts";
 export { type PrintModeOptions, runPrintMode } from "./print-mode.ts";
 export { type ModelInfo, RpcClient, type RpcClientOptions, type RpcEventListener } from "./rpc/rpc-client.ts";

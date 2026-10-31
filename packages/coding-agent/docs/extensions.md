@@ -2962,6 +2962,7 @@ const highlighted = highlightCode(code, lang, theme);
 |------|------------|-------------|-------|
 | Interactive | `"tui"` | `true` | Full TUI with terminal rendering |
 | RPC (`--mode rpc`) | `"rpc"` | `true` | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`. See [rpc.md](rpc.md) |
+| ACP (`--mode acp`) | `"acp"` | `true` | ACP permission requests and stderr notices; `input()`, `editor()`, and `custom()` are unsupported. See [acp.md](acp.md) |
 | JSON (`--mode json`) | `"json"` | `false` | Event stream to stdout; UI methods are no-ops |
 | Print (`-p`) | `"print"` | `false` | Extensions run but can't prompt |
 

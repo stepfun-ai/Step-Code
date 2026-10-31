@@ -101,7 +101,7 @@ export interface EditOperations {
 	access: (absolutePath: string) => Promise<void>;
 }
 
-const defaultEditOperations: EditOperations = {
+export const defaultEditOperations: EditOperations = {
 	readFile: (path) => fsReadFile(path),
 	writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
 	access: (path) => fsAccess(path, constants.R_OK | constants.W_OK),

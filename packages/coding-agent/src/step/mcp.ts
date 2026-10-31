@@ -3,6 +3,7 @@ import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { type Tool as McpTool, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -40,7 +41,7 @@ interface ConnectedServer {
 	pluginId?: string;
 	readonly name: string;
 	readonly client: Client;
-	readonly transport: StdioClientTransport | StreamableHTTPClientTransport;
+	readonly transport: StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport;
 	tools: McpTool[];
 	/** Ends when this connection closes or its session shuts down. */
 	readonly signal: AbortSignal;
@@ -49,12 +50,28 @@ interface ConnectedServer {
 	readonly callTimeoutMs: number;
 }
 
-interface ServerDeclaration {
+/**
+ * One MCP server as the engine can start it: a stdio command or a remote URL,
+ * plus the per-server tuning knobs.
+ *
+ * Exported because protocol hosts (ACP) build these from client-supplied
+ * server lists, which is the same shape `config.toml` uses.
+ */
+export interface ServerDeclaration {
 	command?: string;
 	args?: string[];
 	cwd?: string;
 	env?: Record<string, string>;
 	url?: string;
+	/**
+	 * Which remote transport a `url` declaration uses. Absent means Streamable
+	 * HTTP, the modern default and what `config.toml` has always meant.
+	 *
+	 * Only a protocol host sets this. ACP defines an SSE transport for MCP
+	 * servers and clients do send it, so the host marks such a server here rather
+	 * than guessing the transport from the URL, which cannot be done reliably.
+	 */
+	transport?: "sse";
 	bearer_token_env_var?: string;
 	http_headers?: Record<string, string>;
 	env_http_headers?: Record<string, string>;
@@ -71,6 +88,9 @@ interface ServerDeclaration {
 	};
 }
 
+/** Public alias for {@link ServerDeclaration}, named for its config-file origin. */
+export type McpServerDeclaration = ServerDeclaration;
+
 interface DiscoveredServer {
 	pluginId?: string;
 	name: string;
@@ -86,6 +106,32 @@ export interface StepMcpStatus {
 
 let currentMcpStatuses: StepMcpStatus[] = [];
 const currentMcpToolOwners = new WeakMap<object, Map<string, string>>();
+
+/**
+ * Servers contributed by the current protocol host for this process, keyed by
+ * the name the client used.
+ *
+ * ACP clients pass MCP servers per session (`session/new` and `session/load`),
+ * which has no config-file equivalent: the same binary can be driven by
+ * different clients, each with its own server list. Discovery therefore merges
+ * this overlay on top of config.toml and plugin manifests, with the overlay
+ * winning on a name collision so a client can override a stale global entry.
+ *
+ * The overlay is process-scoped on purpose. A host that supports exactly one
+ * active session at a time (ACP, RPC) replaces it before switching sessions;
+ * discovery reads it once per `session_start`.
+ */
+let hostMcpServerOverlay: Map<string, ServerDeclaration> | undefined;
+
+export function setHostMcpServerOverlay(servers: Record<string, ServerDeclaration> | undefined): void {
+	hostMcpServerOverlay = servers === undefined ? undefined : new Map(Object.entries(servers));
+}
+
+export function getHostMcpServerOverlay(): Record<string, ServerDeclaration> | undefined {
+	return hostMcpServerOverlay === undefined
+		? undefined
+		: Object.fromEntries([...hostMcpServerOverlay].map(([name, declaration]) => [name, { ...declaration }]));
+}
 export function getStepMcpToolOwner(toolName: string, session: object): string | undefined {
 	return currentMcpToolOwners.get(session)?.get(toolName);
 }
@@ -419,7 +465,31 @@ export async function discoverStepMcpServers(cwd: string, projectTrusted: boolea
 			}
 		}
 	}
+	mergeHostOverlay(result, seen);
 	return result;
+}
+
+/**
+ * Merge the host-contributed overlay into a discovery result, in place.
+ *
+ * Runs last so a client-provided server replaces a same-named config or plugin
+ * entry instead of being skipped by the `seen` guard, which is what makes an
+ * ACP client able to override a stale global `config.toml` entry. Overlay
+ * entries are already normalized by the host, so they are trusted as-is apart
+ * from the transport check.
+ */
+function mergeHostOverlay(result: DiscoveredServer[], seen: Set<string>): void {
+	if (hostMcpServerOverlay === undefined || hostMcpServerOverlay.size === 0) return;
+	for (const [name, declaration] of hostMcpServerOverlay) {
+		if (typeof declaration.command !== "string" && typeof declaration.url !== "string") continue;
+		const existing = result.findIndex((server) => server.name === name);
+		if (existing >= 0) {
+			result[existing] = { name, declaration };
+			continue;
+		}
+		seen.add(name);
+		result.push({ name, declaration });
+	}
 }
 
 /**
@@ -582,7 +652,7 @@ export async function connectStepMcpServer(
 	abortSignal?.throwIfAborted();
 	const timeout = timeoutMs(input.declaration.startup_timeout_sec, MCP_STARTUP_TIMEOUT_SEC);
 	const callTimeoutMs = timeoutMs(input.declaration.tool_timeout_sec, MCP_CALL_TIMEOUT_SEC);
-	let transport: StdioClientTransport | StreamableHTTPClientTransport;
+	let transport: StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport;
 	if (input.declaration.command) {
 		const env = resolveStepMcpEnvironment(input.declaration.env);
 		let command = input.declaration.command;
@@ -603,14 +673,38 @@ export async function connectStepMcpServer(
 		transport.stderr?.on("data", () => undefined);
 	} else if (input.declaration.url) {
 		const headers = resolveHttpHeaders(input.declaration);
-		transport = new StreamableHTTPClientTransport(new URL(input.declaration.url), {
-			requestInit: Object.keys(headers).length > 0 ? { headers } : undefined,
-			...(hasStoredMcpOAuthCredential(input.name, input.declaration.url, process.env)
-				? {
-						authProvider: createStoredMcpOAuthProvider(input.name, input.declaration.url, process.env),
-					}
-				: {}),
-		});
+		if (input.declaration.transport === "sse") {
+			// The deprecated HTTP+SSE transport. ACP still defines it and clients
+			// still send it, so it is honoured rather than reported and dropped.
+			// OAuth is not wired here: the streamable-HTTP path owns that, and an
+			// SSE server that needs OAuth fails at startup instead of half-working.
+			// Headers go on both legs: `eventSourceInit` covers the stream the
+			// transport opens, `requestInit` covers the POSTs it sends, and a
+			// server behind an API gateway rejects the second without them.
+			transport = new SSEClientTransport(new URL(input.declaration.url), {
+				...(Object.keys(headers).length > 0
+					? {
+							eventSourceInit: {
+								fetch: (url, init) => {
+									const eventSourceHeaders = new Headers(init?.headers);
+									for (const [name, value] of Object.entries(headers)) eventSourceHeaders.set(name, value);
+									return fetch(url, { ...init, headers: eventSourceHeaders });
+								},
+							},
+							requestInit: { headers },
+						}
+					: {}),
+			});
+		} else {
+			transport = new StreamableHTTPClientTransport(new URL(input.declaration.url), {
+				requestInit: Object.keys(headers).length > 0 ? { headers } : undefined,
+				...(hasStoredMcpOAuthCredential(input.name, input.declaration.url, process.env)
+					? {
+							authProvider: createStoredMcpOAuthProvider(input.name, input.declaration.url, process.env),
+						}
+					: {}),
+			});
+		}
 	} else {
 		throw new Error("MCP server must define command or url");
 	}

@@ -23,7 +23,13 @@ import type {
 	ToolRenderContext,
 	ToolRenderResultOptions,
 } from "../core/extensions/types.ts";
-import { ShellToolError } from "../core/tools/bash.ts";
+import { createLocalBashOperations, ShellToolError } from "../core/tools/bash.ts";
+import {
+	withClientFileSystemEditOptions,
+	withClientFileSystemReadOptions,
+	withClientFileSystemWriteOptions,
+} from "../core/tools/client-fs.ts";
+import { withClientTerminalOperations } from "../core/tools/client-terminal.ts";
 import type { EditToolOptions } from "../core/tools/edit.ts";
 import { generateDiffString, generateUnifiedPatch, normalizeToLF } from "../core/tools/edit-diff.ts";
 import { withFileMutationQueue } from "../core/tools/file-mutation-queue.ts";
@@ -1548,13 +1554,29 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 	};
 	const nativeFindOptions = withAgentDir(options.find);
 	const nativeGrepOptions = withAgentDir(options.grep);
-	const nativeBashOptions = withAgentDir(options.bash);
+	// Commands run in the client's terminal when a protocol host installed one, so
+	// the local shell has to be resolved explicitly rather than left to the tool's
+	// own default: it is the fallback the wrapper needs, and it supplies the shell
+	// the client is asked to run.
+	const localBashOperations =
+		options.bash?.operations ?? createLocalBashOperations({ shellPath: options.bash?.shellPath, agentDir });
+	const nativeBashOptions = withAgentDir({
+		...options.bash,
+		operations: withClientTerminalOperations(localBashOperations, () => getShellConfig(options.bash?.shellPath)),
+	});
 	const nativeLs = createLsToolDefinition(cwd, options.ls);
 	const nativeFind = createFindToolDefinition(cwd, nativeFindOptions);
 	const nativeGrep = createGrepToolDefinition(cwd, nativeGrepOptions);
-	const nativeRead = createReadToolDefinition(cwd, options.read);
-	const nativeWrite = createWriteToolDefinition(cwd, options.write);
-	const nativeEdit = createEditToolDefinition(cwd, options.edit);
+	// File tools go through the client filesystem when a protocol host installs a
+	// bridge, so the three tools and the Step-facing aliases that reuse their
+	// operations must share one normalized options object. Building it once here
+	// is what keeps an alias from silently staying on the local filesystem.
+	const readOptions = withClientFileSystemReadOptions(options.read);
+	const writeOptions = withClientFileSystemWriteOptions(options.write);
+	const editOptions = withClientFileSystemEditOptions(options.edit);
+	const nativeRead = createReadToolDefinition(cwd, readOptions);
+	const nativeWrite = createWriteToolDefinition(cwd, writeOptions);
+	const nativeEdit = createEditToolDefinition(cwd, editOptions);
 	const nativeBash = createBashToolDefinition(cwd, nativeBashOptions);
 	const searchWeb = createSearchWebTool(options.searchWeb);
 
@@ -1645,7 +1667,7 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 			signal: AbortSignal | undefined,
 			onUpdate: AgentToolUpdateCallback<any> | undefined,
 			ctx: ExtensionContext,
-		) => executeReadFile(nativeRead, args, cwd, options.read, signal, onUpdate, ctx),
+		) => executeReadFile(nativeRead, args, cwd, readOptions, signal, onUpdate, ctx),
 	} as AnyToolDefinition;
 
 	const writeFileBase = aliasDefinition(
@@ -1668,7 +1690,7 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 			_onUpdate: AgentToolUpdateCallback<any> | undefined,
 			ctx: ExtensionContext,
 		) => {
-			const result = await executeStepWriteFile(args, cwd, options.write, signal, ctx);
+			const result = await executeStepWriteFile(args, cwd, writeOptions, signal, ctx);
 			const thenRun = readThenRunCommand(args);
 			return thenRun === undefined ? result : withThenRunResult(result, runCommand, thenRun, signal, ctx);
 		},
@@ -1689,7 +1711,7 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 		executionMode: nativeEdit.executionMode,
 		renderShell: nativeEdit.renderShell,
 		execute: async (toolCallId, args, signal, onUpdate, ctx) => {
-			const result = await executeStepEdit(nativeEdit, toolCallId, args, cwd, options.edit, signal, onUpdate, ctx);
+			const result = await executeStepEdit(nativeEdit, toolCallId, args, cwd, editOptions, signal, onUpdate, ctx);
 			const thenRun = readThenRunCommand(args);
 			return thenRun === undefined ? result : withThenRunResult(result, runCommand, thenRun, signal, ctx);
 		},

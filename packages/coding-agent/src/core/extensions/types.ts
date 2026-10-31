@@ -367,7 +367,7 @@ export interface CompactOptions {
 /**
  * Context passed to extension event handlers.
  */
-export type ExtensionMode = "tui" | "rpc" | "json" | "print";
+export type ExtensionMode = "tui" | "rpc" | "acp" | "json" | "print";
 
 export interface ExtensionContext {
 	/** UI methods for user interaction */
@@ -937,7 +937,7 @@ export interface UserBashEvent {
 // ============================================================================
 
 /** Source of user input */
-export type InputSource = "interactive" | "rpc" | "extension";
+export type InputSource = "interactive" | "rpc" | "acp" | "extension";
 
 /** Fired when user input is received, before agent processing */
 export interface InputEvent {

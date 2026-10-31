@@ -154,6 +154,18 @@ describe("parseArgs", () => {
 			expect(result.mode).toBe("rpc");
 		});
 
+		test("parses --mode acp", () => {
+			const result = parseArgs(["--mode", "acp"]);
+			expect(result.mode).toBe("acp");
+		});
+
+		test("rejects completion checks in acp mode", () => {
+			const result = parseArgs(["--mode", "acp", "--completion-check", "git-committed"]);
+			expect(result.diagnostics).toEqual([
+				{ type: "error", message: "--completion-check is only supported in print or JSON mode" },
+			]);
+		});
+
 		test("parses --session", () => {
 			const result = parseArgs(["--session", "/path/to/session.jsonl"]);
 			expect(result.session).toBe("/path/to/session.jsonl");

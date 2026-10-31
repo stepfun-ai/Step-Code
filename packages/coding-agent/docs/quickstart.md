@@ -154,7 +154,7 @@ cat README.md | step -p "Summarize this text"
 step -p @screenshot.png "What's in this image?"
 ```
 
-Use `--mode json` for JSON event output or `--mode rpc` for process integration.
+Use `--mode json` for JSON event output, `--mode rpc` for process integration, or `--mode acp` for Agent Client Protocol clients.
 
 ## Next steps
 
