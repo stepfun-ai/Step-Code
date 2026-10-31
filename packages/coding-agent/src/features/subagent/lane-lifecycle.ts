@@ -81,6 +81,12 @@ export interface StepSubagentLaneRuntime {
 	keepAlive?: boolean;
 	/** Wall-clock limit for each child turn, in ms. */
 	turnTimeoutMs?: number;
+	/**
+	 * Telemetry label for this run. Defaults to `background` when a lane runtime is
+	 * present; a detachable foreground call passes `blocking` so it is not
+	 * misreported as a background lane just because it carries a session id.
+	 */
+	execution?: "blocking" | "background";
 }
 
 /** Live children by subagent session id. One parent process owns its children. */
@@ -208,6 +214,13 @@ export interface LaneLifecycle {
 		prepared: PreparedSubagentRun,
 		turnTimeoutMs: number,
 	) => BackgroundAgentLane | string;
+	/**
+	 * Adopt an already running foreground call as a background lane. The caller
+	 * stops awaiting `promise` and returns its own tool result; this lane owns the
+	 * promise from then on and sends the final notification when it settles.
+	 * Returns an error string, and adopts nothing, at the running-lane limit.
+	 */
+	adoptForegroundRun: (input: ForegroundRunAdoption) => BackgroundAgentLane | string;
 	stopLane: (lane: BackgroundAgentLane) => string;
 	replyToLane: (lane: BackgroundAgentLane, prompt: string, interrupt: boolean) => string;
 	laneStatus: (lane: BackgroundAgentLane) => string;
@@ -221,6 +234,30 @@ export interface LaneLifecycle {
 }
 
 type LaneTurnSource = { prepared: PreparedSubagentRun } | { params: SubagentParams };
+
+/** A foreground subagent call handed to the lane lifecycle mid-flight. */
+export interface ForegroundRunAdoption {
+	params: SubagentParams;
+	ctx: ExtensionContext;
+	/** Controller whose signal the running call already passed to its children. */
+	controller: AbortController;
+	/** Last streamed details; seeds the lane so its widget and status are live. */
+	details: StepSubagentDetails;
+	/** The in-flight call. The lane attaches its final handling to this promise. */
+	promise: Promise<AgentToolResult<StepSubagentDetails>>;
+	/** Notification level for the adopted lane. Defaults to `final`. */
+	subscribe?: BackgroundLaneSubscribeLevel;
+	/** Child session id when the foreground call already reported one. */
+	sessionId?: string;
+	/**
+	 * Wall-clock limit for later background turns started from this lane, for
+	 * example an `agent_send` reply. The already-running adopted turn keeps its
+	 * original foreground semantics; this only bounds future turns.
+	 */
+	turnTimeoutMs?: number;
+	/** Receives the lane's update callback so later streamed deltas reach the lane. */
+	setUpdate?: (update: (result: AgentToolResult<StepSubagentDetails>) => void) => void;
+}
 
 export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 	const { pi, lanes } = host;
@@ -433,6 +470,19 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 			return host.run(prepared, signal, onUpdate, lane.ctx, laneRuntime);
 		})();
 		lane.promise = promise;
+		attachRunPromise(lane, promise, generation);
+	};
+
+	/**
+	 * Final handling shared by started and adopted lanes: publish the result, run a
+	 * queued follow-up turn if one exists, otherwise notify and arm idle expiry.
+	 * Stale generations (a reply, stop, or shutdown intervened) are dropped.
+	 */
+	const attachRunPromise = (
+		lane: BackgroundAgentLane,
+		promise: Promise<AgentToolResult<StepSubagentDetails>>,
+		generation: number,
+	): void => {
 		void promise
 			.then((result) => {
 				if (!isCurrent(lane, generation)) return;
@@ -525,6 +575,71 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 		laneEpochs.set(lane, epoch);
 		lanes.set(id, lane);
 		startLane(lane, { prepared });
+		return lane;
+	};
+
+	/**
+	 * Adopt a foreground call that is already running. The caller returns its own
+	 * "detached" tool result immediately; from here on the lane owns the original
+	 * promise, its streamed updates, and its final notification. Nothing is
+	 * respawned, so the child process keeps the work it was already doing.
+	 */
+	const adoptForegroundRun: LaneLifecycle["adoptForegroundRun"] = (input) => {
+		const running = [...lanes.values()].filter((lane) => lane.status === "running").length;
+		if (running >= MAX_RUNNING_LANES) {
+			return `This session already has ${running} running background lanes (limit ${MAX_RUNNING_LANES}); the foreground subagent was left running and compaction will wait for it.`;
+		}
+		const id = newLaneId();
+		const now = Date.now();
+		const startedAt = input.details.startedAt ?? now;
+		const details: StepSubagentDetails = {
+			...input.details,
+			agentId: id,
+			status: "running",
+			startedAt,
+			updatedAt: now,
+		};
+		const lane: BackgroundAgentLane = {
+			id,
+			params: input.params,
+			ctx: input.ctx,
+			controller: input.controller,
+			status: "running",
+			details,
+			promise: input.promise,
+			queuedPrompts: [],
+			startedAt,
+			updatedAt: now,
+			// The adopted run is already generation 1; a later reply bumps it.
+			runGeneration: 1,
+			subscribe: input.subscribe ?? (input.params.subscribe === "progress" ? "progress" : "final"),
+			lastProgressNotifyAt: now,
+			sessionId: input.sessionId ?? `${SUBAGENT_SESSION_ID_PREFIX}${randomUUID()}`,
+			// The adopted turn already runs with foreground semantics; later turns
+			// started from this lane use the supplied background limit.
+			turnTimeoutMs: input.turnTimeoutMs ?? 0,
+		};
+		laneEpochs.set(lane, epoch);
+		lanes.set(id, lane);
+		const generation = lane.runGeneration;
+		const onUpdate = (partial: AgentToolResult<StepSubagentDetails>): void => {
+			if (!isCurrent(lane, generation)) return;
+			if (partial.details) {
+				lane.details = {
+					...partial.details,
+					agentId: lane.id,
+					status: "running",
+					startedAt: lane.startedAt,
+					updatedAt: Date.now(),
+				};
+				lane.updatedAt = Date.now();
+			}
+			maybeNotifyLaneProgress(pi, lane);
+			updateLaneWidget(lane);
+		};
+		input.setUpdate?.(onUpdate);
+		attachRunPromise(lane, input.promise, generation);
+		updateLaneWidget(lane);
 		return lane;
 	};
 
@@ -684,5 +799,5 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 		return running;
 	};
 
-	return { launchLane, stopLane, replyToLane, laneStatus, shutdown };
+	return { launchLane, adoptForegroundRun, stopLane, replyToLane, laneStatus, shutdown };
 }

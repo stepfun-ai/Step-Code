@@ -328,7 +328,8 @@ user sends another prompt ◄─────────────────
 /name or pi.setSessionName()
   └─► session_info_changed
 
-/compact or auto-compaction
+/compact (manual)
+  ├─► session_detach_foreground (best-effort; hand foreground work to a lane)
   ├─► session_before_compact (can cancel or customize)
   ├─► session_compact (success)
   └─► session_compact_failed (failure or abort)
@@ -448,6 +449,17 @@ pi.on("session_before_fork", async (event, ctx) => {
 
 After a successful fork or clone, step emits `session_shutdown` for the old extension instance, reloads and rebinds extensions for the new session, then emits `session_start` with `reason: "fork"` and `previousSessionFile`.
 Do cleanup work in `session_shutdown`, then reestablish any in-memory state in `session_start`.
+
+#### session_detach_foreground
+
+Fired only for manual compaction, before it waits for the active run to settle. A host whose foreground work can continue in the background (for example a blocking `subagent` call) hands that work to a lane here and returns at once, so compaction does not wait for the work to finish. Detach is best-effort: when no handler claims the work, or the host cannot own a lane, compaction keeps its old behaviour and waits for the run. The return value is ignored.
+
+```typescript
+pi.on("session_detach_foreground", async (event, ctx) => {
+	// event.reason - "manual"
+	// Move long-running foreground work into a background lane here.
+});
+```
 
 #### session_before_compact / session_compact / session_compact_failed
 

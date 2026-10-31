@@ -364,6 +364,8 @@ export class AgentSession {
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
+	/** True while a manual compaction is waiting for the current run to settle. */
+	private _manualCompactionPending = false;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
 	private _liveContext?: LiveContextManager;
@@ -941,6 +943,7 @@ export class AgentSession {
 			!settings.enabled ||
 			!this.settingsManager.getCompactionEnabled() ||
 			this._manualClm ||
+			this._manualCompactionPending ||
 			this._autoClmAbortController ||
 			this._blocksNativeThreshold() ||
 			this._thresholdCompactionPaused() ||
@@ -2809,20 +2812,53 @@ export class AgentSession {
 	/**
 	 * Manually compact the session context.
 	 *
-	 * This is the manual entry point used by `/compact`, RPC, and extensions. It is
-	 * separate from automatic threshold/overflow compaction, which enters through
-	 * `_checkCompaction()` and `_runAutoCompaction()`. After preparation and the
-	 * `session_before_compact` hook, both paths call the lower-level `compact()`
-	 * function imported from `./compaction/index.ts`, unless the hook cancels or
-	 * supplies a custom result.
-	 *
-	 * Aborts the current agent operation first. Manual compaction never retries or
-	 * continues the interrupted agent turn.
+	 * This is the manual entry point used by `/compact`, RPC, and extensions. It
+	 * shares the non-aborting lifecycle with automatic threshold/overflow
+	 * compaction: it never cancels the current run. Before waiting for the run to
+	 * settle it offers foreground work to extensions through
+	 * `session_detach_foreground`; a host that hands its work to a background lane
+	 * lets compaction proceed while that work keeps running. If no host claims the
+	 * work, the request waits as before, which keeps a foreground subagent alive
+	 * until its result can be compacted with the session.
 	 *
 	 * @param customInstructions Optional instructions for the compaction summary
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
-		await this.abort();
+		this._manualCompactionPending = true;
+		try {
+			await this._detachForegroundWorkForCompaction();
+			await this.waitForIdle();
+			return await this._compactNow(customInstructions);
+		} finally {
+			this._manualCompactionPending = false;
+		}
+	}
+
+	/**
+	 * Ask extensions to hand foreground work to a background lane before manual
+	 * compaction waits for the run. Best-effort by design: a failed or absent
+	 * handler leaves the work in the foreground, and `waitForIdle()` keeps the old
+	 * behaviour of waiting for it to finish.
+	 */
+	private async _detachForegroundWorkForCompaction(): Promise<void> {
+		if (!this._extensionRunner.hasHandlers("session_detach_foreground")) return;
+		try {
+			await this._extensionRunner.emit({ type: "session_detach_foreground", reason: "manual" });
+		} catch {
+			// Detaching is an optimisation, not a precondition for compaction.
+		}
+	}
+
+	/**
+	 * Run manual compaction once the session is idle. Automatic compaction enters
+	 * through `_checkCompaction()` and `_runAutoCompaction()`; after preparation
+	 * and the `session_before_compact` hook, both paths call the lower-level
+	 * `compact()` function imported from `./compaction/index.ts`, unless the hook
+	 * cancels or supplies a custom result.
+	 *
+	 * @param customInstructions Optional instructions for the compaction summary
+	 */
+	private async _compactNow(customInstructions?: string): Promise<CompactionResult> {
 		this._compactionAbortController = new AbortController();
 		this._emit({ type: "compaction_start", reason: "manual" });
 		let fromExtension = false;
@@ -3159,6 +3195,9 @@ export class AgentSession {
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
 		const runSignal = this._agentRunAbortController?.signal;
 		if (runSignal?.aborted) return false;
+		// A manual compaction request owns the next rewrite. Auto-compaction must not
+		// win the race and leave the manual request with "Already compacted".
+		if (this._manualCompactionPending) return false;
 		if (reason === "threshold" && this._blocksNativeThreshold()) return false;
 		if (reason === "threshold" && this._thresholdCompactionPaused()) return false;
 		const settings = this.settingsManager.getCompactionSettings();

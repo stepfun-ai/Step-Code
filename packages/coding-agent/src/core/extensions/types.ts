@@ -737,6 +737,18 @@ export interface SessionTreeEvent {
 	fromExtension?: boolean;
 }
 
+/**
+ * Fired before manual compaction waits for the session to settle, so a host can
+ * hand its foreground work to a background lane instead of blocking compaction
+ * until that work finishes. Detach is best-effort: compaction still waits when
+ * no handler claims the work.
+ */
+export interface SessionDetachForegroundEvent {
+	type: "session_detach_foreground";
+	/** What triggered the detach request. Only manual compaction uses it today. */
+	reason: "manual";
+}
+
 export type SessionEvent =
 	| SessionStartEvent
 	| SessionInfoChangedEvent
@@ -747,7 +759,8 @@ export type SessionEvent =
 	| SessionCompactFailedEvent
 	| SessionShutdownEvent
 	| SessionBeforeTreeEvent
-	| SessionTreeEvent;
+	| SessionTreeEvent
+	| SessionDetachForegroundEvent;
 
 // ============================================================================
 // Agent Events
@@ -1349,6 +1362,7 @@ export interface ExtensionAPI {
 	on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): void;
 	on(event: "session_before_tree", handler: ExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>): void;
 	on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): void;
+	on(event: "session_detach_foreground", handler: ExtensionHandler<SessionDetachForegroundEvent>): void;
 	on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): void;
 	on(
 		event: "before_provider_request",

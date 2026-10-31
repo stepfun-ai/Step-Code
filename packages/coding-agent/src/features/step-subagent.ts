@@ -40,6 +40,7 @@ import {
 	createLaneLifecycle,
 	getLiveSubagentSession,
 	MAX_RETAINED_FINISHED_LANES,
+	type StepSubagentLaneRuntime,
 } from "./subagent/lane-lifecycle.ts";
 import {
 	renderAgentNotification,
@@ -818,6 +819,147 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 			clearLaneWidget,
 		});
 
+		// Foreground calls that manual compaction may hand to a background lane.
+		// Keyed by tool call id so several concurrent foreground calls can each be
+		// detached independently; the entry is removed as soon as the call returns.
+		interface ForegroundSubagentRun {
+			toolCallId: string;
+			params: SubagentParams;
+			ctx: ExtensionContext;
+			controller: AbortController;
+			/** Child session id chosen before the run starts, so an early detach still knows it. */
+			sessionId: string;
+			details?: StepSubagentDetails;
+			onLaneUpdate?: (result: AgentToolResult<StepSubagentDetails>) => void;
+			detach?: () => BackgroundAgentLane | string | undefined;
+		}
+		const foregroundRuns = new Map<string, ForegroundSubagentRun>();
+		const subagentListWidgetKey = (toolCallId: string): string => `step-subagent-list:${toolCallId}`;
+		const clearSubagentListWidget = (ctx: ExtensionContext, toolCallId: string): void => {
+			if (!ctx.hasUI) return;
+			try {
+				ctx.ui.setWidget(subagentListWidgetKey(toolCallId), undefined);
+			} catch {
+				// The host may already have torn its UI down; widget cleanup is best-effort.
+			}
+		};
+		const foregroundDetailsFallback = (params: SubagentParams, ctx: ExtensionContext): StepSubagentDetails => {
+			const mode: StepSubagentDetails["mode"] = params.tasks ? "parallel" : params.chain ? "chain" : "single";
+			return {
+				mode,
+				agentScope: params.agentScope ?? "user",
+				userAgentsDir: path.join(resolved.agentDir, "agents"),
+				projectAgentsDir: path.join(ctx.cwd, resolved.configDirName, "agents"),
+				results: [],
+			};
+		};
+
+		/**
+		 * Run a foreground subagent call so it can be detached mid-flight. The tool
+		 * result races the real run against a detach request: when compaction asks
+		 * for the foreground work, the running promise is adopted by a background
+		 * lane and this call returns at once with the lane id. The child process is
+		 * never respawned or aborted by the detach itself.
+		 */
+		const runDetachableForeground = async (
+			toolCallId: string,
+			params: SubagentParams,
+			signal: AbortSignal | undefined,
+			onUpdate: AgentToolUpdateCallback<StepSubagentDetails> | undefined,
+			ctx: ExtensionContext,
+		): Promise<AgentToolResult<StepSubagentDetails>> => {
+			const controller = new AbortController();
+			const abortFromTool = (): void => controller.abort();
+			if (signal) {
+				if (signal.aborted) controller.abort();
+				else signal.addEventListener("abort", abortFromTool, { once: true });
+			}
+			// Choose the child session id before the run starts. A detach can arrive
+			// before the first streamed update, and the lane must still reuse this
+			// child's transcript for later replies.
+			const sessionId = `${SUBAGENT_SESSION_ID_PREFIX}${randomUUID()}`;
+			const run: ForegroundSubagentRun = { toolCallId, params, ctx, controller, sessionId };
+			foregroundRuns.set(toolCallId, run);
+			let detached = false;
+			let settled = false;
+			let resolveDetached!: (result: AgentToolResult<StepSubagentDetails>) => void;
+			const detachedResult = new Promise<AgentToolResult<StepSubagentDetails>>((resolve) => {
+				resolveDetached = resolve;
+			});
+			const captureUpdate = (result: AgentToolResult<StepSubagentDetails>): void => {
+				if (!detached) onUpdate?.(result);
+				if (result.details) run.details = result.details;
+				run.onLaneUpdate?.(result);
+			};
+			const laneRuntime: StepSubagentLaneRuntime = { sessionId, execution: "blocking" };
+			const rawRunPromise = withSubagentListWidget(toolCallId, ctx, captureUpdate, (update) =>
+				executeSubagent(params, controller.signal, update, ctx, resolved, laneRuntime),
+			);
+			// Mark the call settled before the raced promise resolves, so a detach
+			// request that arrives after the child finished cannot adopt a dead run.
+			const runPromise = rawRunPromise.then(
+				(result) => {
+					settled = true;
+					return result;
+				},
+				(error) => {
+					settled = true;
+					throw error;
+				},
+			);
+			run.detach = () => {
+				if (detached || settled) return undefined;
+				// Respect the same host/config gates as `run_in_background`: a host that
+				// cannot own lanes keeps the foreground call and compaction waits for it.
+				if (backgroundUnavailableReason(ctx, options.backgroundSettings?.())) return undefined;
+				const lane = lifecycle.adoptForegroundRun({
+					params,
+					ctx,
+					controller,
+					details: run.details ?? foregroundDetailsFallback(params, ctx),
+					promise: runPromise,
+					sessionId: run.sessionId,
+					turnTimeoutMs: resolveBackgroundTimeoutMs(undefined, options.backgroundSettings?.()?.timeoutSeconds),
+					setUpdate: (update) => {
+						run.onLaneUpdate = update;
+					},
+				});
+				if (typeof lane === "string") return lane;
+				detached = true;
+				clearSubagentListWidget(ctx, toolCallId);
+				resolveDetached(
+					makeToolResult(
+						lane.details,
+						[
+							`Subagent detached to background lane ${lane.id} because manual compaction was requested.`,
+							"It keeps running; you will get one <agent-notification> when it finishes.",
+							"Do not wait for it with sleep or polling.",
+						].join(" "),
+					),
+				);
+				return lane;
+			};
+			try {
+				return await Promise.race([runPromise, detachedResult]);
+			} finally {
+				foregroundRuns.delete(toolCallId);
+				if (signal) signal.removeEventListener("abort", abortFromTool);
+			}
+		};
+
+		// Manual compaction asks for foreground work before it waits for the run.
+		// Detach is best-effort: a host that cannot own lanes, or a session already
+		// at its lane limit, leaves the call foreground and compaction waits for it.
+		pi.on("session_detach_foreground", async () => {
+			for (const run of [...foregroundRuns.values()]) {
+				try {
+					run.detach?.();
+				} catch {
+					// One failed detach must not stop the others or break compaction.
+				}
+			}
+		});
+
 		// Lanes belong to this session runtime. Quit, signals, /new, /resume,
 		// /fork, and reload all tear the runtime down through session_shutdown;
 		// lanes are stopped rather than carried into the next session.
@@ -843,9 +985,7 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 			execute: async (toolCallId, params, signal, onUpdate, ctx) => {
 				const callParams = params as SubagentParams;
 				const foreground = (runParams: SubagentParams) =>
-					withSubagentListWidget(toolCallId, ctx, onUpdate, (update) =>
-						executeSubagent(runParams, signal, update, ctx, resolved),
-					);
+					runDetachableForeground(toolCallId, runParams, signal, onUpdate, ctx);
 				if (!callParams.run_in_background) return foreground(callParams);
 
 				const settings = options.backgroundSettings?.();

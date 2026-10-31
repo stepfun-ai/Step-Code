@@ -1213,7 +1213,7 @@ test("status reports state, usage, child sessions, and the output tail without w
 		runner: async (input) => {
 			input.onUpdate?.({ ...textResult(""), exitCode: -1, messages: [] });
 			await gate.promise;
-			return { ...textResult("x".repeat(40_000) + "THE END"), sessionFile: "/sessions/child.jsonl" };
+			return { ...textResult(`${"x".repeat(40_000)}THE END`), sessionFile: "/sessions/child.jsonl" };
 		},
 	})(api);
 	const lane = laneIdOf(await startLane(tools, { agent: "general", task: "long" }));
@@ -1253,12 +1253,55 @@ test("an oversized final output is saved to disk and the notification keeps its 
 		expect(content).toMatch(
 			/^<agent-notification lane="lane_[0-9a-f]{8}" tasks="1">Lane lane_[0-9a-f]{8} finished: 1 completed\./u,
 		);
-		expect(content).toContain(`Full output: &quot;${join(sessionDir, "tool-output")}`);
+		const escapedPath = JSON.stringify(join(sessionDir, "tool-output")).slice(1, -1).replaceAll('"', "&quot;");
+		expect(content).toContain(`Full output: &quot;${escapedPath}`);
 		expect(content).toContain("TAIL");
 		expect(content.length).toBeLessThan(60_000);
 	} finally {
 		await rm(sessionDir, { recursive: true, force: true });
 	}
+});
+
+test("a detached foreground subagent keeps its child session id for later replies", async () => {
+	let releaseFirst!: (result: StepSubagentRunResult) => void;
+	const firstDone = new Promise<StepSubagentRunResult>((resolve) => {
+		releaseFirst = resolve;
+	});
+	const { api, tools, sent, handlers } = createApi();
+	const inputs: StepSubagentRunInput[] = [];
+	createStepSubagentExtension({
+		agentDir: "/tmp/step-agent-test",
+		runner: async (input) => {
+			inputs.push(input);
+			return inputs.length === 1 ? firstDone : textResult("second done");
+		},
+	})(api);
+	const callPromise = tools
+		.get("subagent")!
+		.execute(
+			"call",
+			{ agent: "general", task: "first" } as never,
+			undefined,
+			undefined,
+			createContext("/workspace"),
+		) as Promise<AgentToolResult<unknown>>;
+	await waitFor(() => inputs.length === 1);
+
+	const detach = handlers.get("session_detach_foreground");
+	expect(detach).toHaveLength(1);
+	await detach![0]!({ type: "session_detach_foreground", reason: "manual" }, createContext("/workspace"));
+
+	const detached = await callPromise;
+	const lane = laneIdOf(detached);
+	expect(textOf(detached)).toContain(`Subagent detached to background lane ${lane}`);
+	releaseFirst(textResult("first done"));
+	await waitFor(() => sent.some((message) => message.details?.event === "background_done"));
+
+	expect(textOf(await agentSend(tools, { lane_id: lane, action: "reply", prompt: "second" }))).toContain(
+		"Started follow-up",
+	);
+	await waitFor(() => inputs.length === 2);
+	expect(inputs[1]!.sessionId).toBe(inputs[0]!.sessionId);
 });
 
 test("session shutdown stops this session's lanes silently and leaves another session's lanes running", async () => {
@@ -1363,9 +1406,13 @@ test("idle keep-alive children are stopped after the TTL and a reply resumes qui
 		 * virtual budget instead, and report what did arrive.
 		 */
 		const settle = async (count: number): Promise<boolean> => {
-			for (let i = 0; i < 500; i += 1) {
+			for (let i = 0; i < 1_000; i += 1) {
 				if (sent.filter((m) => m.details?.event === "background_done").length >= count) return true;
 				await vi.advanceTimersByTimeAsync(10);
+				// Yield to the real event loop as well: the final notification is
+				// published from an async continuation, and a loaded runner can lose
+				// the race if we only advance virtual time.
+				await new Promise((resolve) => setImmediate(resolve));
 			}
 			return false;
 		};

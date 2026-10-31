@@ -387,7 +387,7 @@ export async function runPreparedSubagent(
 	const records = tasks.map((task) => makeEmptyResult(task.agent, task.task));
 	let lastFrameAt = 0;
 	let pendingFrame: ReturnType<typeof setTimeout> | undefined;
-	const execution = laneRuntime ? "background" : "blocking";
+	const execution = laneRuntime?.execution ?? (laneRuntime ? "background" : "blocking");
 	const createdAt = tasks.map(() => Date.now());
 	const createdTasks = new Set<number>();
 	const reportCreated = (agent: StepAgentConfig, index: number): void => {

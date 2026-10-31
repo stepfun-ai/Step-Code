@@ -23,7 +23,7 @@ describe("issue #7253: manual compaction during an active response", () => {
 		}
 	});
 
-	it("persists the aborted response before running the requested manual compaction", async () => {
+	it("waits for the active response before running the requested manual compaction", async () => {
 		let markSecondResponseStarted = () => {};
 		const secondResponseStarted = new Promise<void>((resolve) => {
 			markSecondResponseStarted = resolve;
@@ -75,9 +75,16 @@ describe("issue #7253: manual compaction during an active response", () => {
 			(entry) =>
 				entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "aborted",
 		);
+		const completedResponseIndex = entries.findIndex(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "assistant" &&
+				entry.message.content.some((part) => part.type === "text" && part.text.startsWith("second response:")),
+		);
 		const compactionIndex = entries.findIndex((entry) => entry.type === "compaction");
-		expect(abortedResponseIndex).toBeGreaterThan(-1);
-		expect(compactionIndex).toBeGreaterThan(abortedResponseIndex);
+		expect(abortedResponseIndex).toBe(-1);
+		expect(completedResponseIndex).toBeGreaterThan(-1);
+		expect(compactionIndex).toBeGreaterThan(completedResponseIndex);
 		expect(entries.filter((entry) => entry.type === "compaction")).toHaveLength(1);
 	});
 });
