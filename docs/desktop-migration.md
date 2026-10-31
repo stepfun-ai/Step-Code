@@ -18,9 +18,9 @@ coding-agent service; it does not implement a second session store.
 
 The first-use invitation is **Desktop-only**. Bootstrap reports
 `migrationAvailable`, `migrationSuggested` and, when readable,
-`desktopOnboarding`. The Host suggests the invitation when migration is available,
-the invitation state is `unseen`, there are no existing sessions, and no workspace
-has been explicitly hidden. This is not a claim that external resources exist.
+`desktopOnboarding`. The Host suggests the invitation when migration is available
+and the invitation state is `unseen`; existing sessions and explicitly hidden
+workspaces do not suppress it. This is not a claim that external resources exist.
 The client persists `offered` before displaying the invitation. Web does not
 show this automatic Desktop invitation; the settings migration entry remains
 available for later use. Migration uses the settings surface's active light/dark

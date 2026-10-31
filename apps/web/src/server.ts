@@ -876,13 +876,9 @@ const server = createServer(async (request, response) => {
 			} catch {
 				/* The explicit onboarding API reports recovery errors. */
 			}
-			const [existingSessions, existingWorkspaces] =
-				desktopOnboarding?.status === "unseen" ? await Promise.all([store.list(), workspaces.list()]) : [[], []];
-			const migrationSuggested =
-				!!migrations &&
-				desktopOnboarding?.status === "unseen" &&
-				!existingSessions.length &&
-				!existingWorkspaces.some((workspace) => workspace.hidden);
+			// Existing sessions or hidden workspaces do not suppress the invitation: users with
+			// StepCode history may still want to bring Claude Code / Codex resources over once.
+			const migrationSuggested = !!migrations && desktopOnboarding?.status === "unseen";
 			// The identity of the running build, so a page (and the person looking at
 			// it) can tell which build it is talking to. `buildTime` is staged beside
 			// the server entry by the installer; a source checkout reports none.
