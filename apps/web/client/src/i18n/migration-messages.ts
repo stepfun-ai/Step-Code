@@ -36,8 +36,6 @@ const labels = {
 		"已选 {workspaces} 个工作区 · {sessions} 条会话 · {resources} 项资源",
 		"{workspaces} workspaces · {sessions} sessions · {resources} resources selected",
 	],
-	migrationClosePreview: ["关闭预览", "Close preview"],
-	migrationSessionHistory: ["历史对话", "Conversation history"],
 	migrationMcpCliReviewedTitle: ["MCP 已迁移", "MCP servers already migrated"],
 	migrationMcpCliReviewed: [
 		"{sources} 的 MCP 已通过 StepCode CLI 迁移，无需重复迁移。",
@@ -311,6 +309,10 @@ const labels = {
 	migrationNoCandidates: [
 		"没有符合筛选条件的待迁移项；其他状态和检查错误可在下方查看。",
 		"No matching actionable items. Other states and scan errors are shown below.",
+	],
+	migrationNoSessionCandidates: [
+		"没有符合筛选条件的待迁移项，可以调整时间范围和最大数量。",
+		"No matching sessions to migrate. Try a wider time range or a higher limit.",
 	],
 	migrationScanReports: ["来源检查结果与诊断", "Source scan results and diagnostics"],
 	migrationTruncated: [
