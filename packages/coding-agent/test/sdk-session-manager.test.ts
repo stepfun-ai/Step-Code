@@ -89,7 +89,8 @@ describe("createAgentSession session manager defaults", () => {
 			.map((item) => item.text)
 			.join("");
 
-		expect(realpathSync(output.trim())).toBe(realpathSync(sessionCwd));
+		expect(realpathSync(output.split("\n")[0])).toBe(realpathSync(sessionCwd));
+		expect(result.details).toMatchObject({ execution: { status: "exited", exitCode: 0 } });
 
 		session.dispose();
 	});
@@ -117,7 +118,7 @@ describe("createAgentSession session manager defaults", () => {
 			.map((item) => item.text)
 			.join("");
 
-		expect(output).toBe("shell-value");
+		expect(output).toBe("shell-value\n\nCommand exited with code 0");
 
 		session.dispose();
 	});

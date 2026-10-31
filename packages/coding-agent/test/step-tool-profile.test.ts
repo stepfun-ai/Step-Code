@@ -34,21 +34,22 @@ describe("Step tool profile", () => {
 		expect(Object.keys(editSchema.properties)).toEqual(["path", "search", "replace", "replace_all", "then_run"]);
 	});
 
-	it("keeps the legacy model-facing descriptions byte-for-byte compatible", () => {
+	it("publishes the approved model-facing descriptions without changing tool names", () => {
 		const tools = createStepToolProfile(process.cwd());
 		const expected: Record<string, { description: string; promptSnippet: string }> = {
 			list_directory: {
-				description: "List one directory with directories first. Prefer this before recursive shell listing.",
+				description:
+					"List one known directory with directories first. Hides dotfiles by default; set include_hidden=true to include them.",
 				promptSnippet: "List one directory with directories first",
 			},
 			find_files: {
 				description:
-					"Find files by glob pattern, sorted by modification time (newest first). Prefer this over shell find or recursive ls.",
+					"Find files by glob pattern, not a regular expression, under the path search root. Returns paths sorted by modification time (newest first).",
 				promptSnippet: "Find files by glob pattern",
 			},
 			search_files: {
 				description:
-					"Search file contents with a regular expression. Returns matching file paths, line numbers, and matched lines. Prefer this over shell grep.",
+					"Search file contents with a regular expression. Returns matching file paths, line numbers, and matched lines. Escape regex metacharacters for literal code; narrow searches with path and glob.",
 				promptSnippet: "Search file contents with a regular expression",
 			},
 			search_web: {
@@ -58,27 +59,27 @@ describe("Step tool profile", () => {
 			},
 			read_file: {
 				description:
-					"Read a text file with optional line range; image files (PNG/JPEG/GIF/WebP) are returned as attached images. Prefer this over shell cat for token efficiency.",
+					"Read a known text file with an optional 1-based line range; displayed line prefixes are not file content. Image files (PNG/JPEG/GIF/WebP) are returned as attached images.",
 				promptSnippet: "Read a file with an optional line range",
 			},
 			write_file: {
 				description:
-					"Write full content to a file, creating parent directories if missing. Overwrites existing content — for existing files prefer edit_file.",
+					"Write complete content to a new file or deliberately replace an entire file, creating parent directories if missing. Overwrites existing content and preserves an existing file's line-ending style; use edit_file for targeted changes.",
 				promptSnippet: "Write full content to a file",
 			},
 			edit_file: {
 				description:
-					"Edit one file by literal search/replace. 'search' must match the current file content exactly and appear exactly once unless replace_all is true.",
+					"Edit one file by literal search/replace. 'search' must match current file content exactly, without displayed line prefixes, and appear exactly once unless replace_all is true. If no match is found, inspect current content; if ambiguous, add context to make the match unique.",
 				promptSnippet: "Make a precise literal search/replace edit",
 			},
 			run_command: {
 				description:
-					"Run a non-interactive shell command from the initial working directory by default. Use for tests, builds, formatters, git, and project scripts; prefer dedicated file/search tools for reading and searching.",
+					"Run a non-interactive shell command. Foreground calls return combined stdout/stderr; run_in_background=true returns a pid and log path. Uses cwd when supplied, otherwise the initial working directory.",
 				promptSnippet: "Run a non-interactive shell command",
 			},
 			find_tools: {
 				description:
-					"Search registered tools by natural-language intent, tool name, description, and parameter names.",
+					"Search registered tools by natural-language intent, tool name, description, and parameter names. Returns available catalog names and parameter schemas; use those exact names and schemas, not invented names.",
 				promptSnippet: "Find a tool by describing the operation you need",
 			},
 		};
@@ -647,11 +648,19 @@ describe("Step tool profile", () => {
 			expect(text(passed)).toContain("Successfully replaced 1 occurrence(s) in sample.txt.");
 			expect(text(passed)).toContain("then_run: $ cat sample.txt\nbeta");
 			expect(text(passed)).toMatch(/Command exited with code 0$/u);
-			expect((passed.details as { thenRun: unknown }).thenRun).toEqual({
+			expect((passed.details as { thenRun: unknown }).thenRun).toMatchObject({
 				command: "cat sample.txt",
 				exitCode: 0,
 				timedOut: false,
 				stepTruncated: false,
+				execution: {
+					status: "exited",
+					exitCode: 0,
+					signal: null,
+					timedOut: false,
+					aborted: false,
+					timeoutSeconds: 120,
+				},
 			});
 
 			const failed = await edit.execute(

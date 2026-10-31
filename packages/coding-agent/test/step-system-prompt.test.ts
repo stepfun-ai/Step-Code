@@ -34,6 +34,93 @@ describe("Step system prompt appendix", () => {
 		expect(prompt).not.toContain("Tool selection:");
 	});
 
+	it("balances file tools with shell pipelines without inventing parallel wrappers", () => {
+		const prompt = buildStepSystemPromptAppendix(["read_file", "edit_file", "write_file", "run_command"]);
+
+		for (const guidance of [
+			"Use available file tools for straightforward reads, searches, and directory listings",
+			"shell pipelines or read-only scripts better express the task",
+			"formatting or bulk mechanical rewrites",
+			"prefer rg or rg --files; use an available alternative if rg is missing",
+			"For manual file edits, use available edit_file or write_file tools",
+			"Read current content when it is unknown or may be stale",
+			"preserve existing line-ending style",
+			"emit separate tool calls in the same response so they can run in parallel",
+			"dependent operations and changes to the same file sequential",
+			"Do not invent a parallel tool wrapper",
+			"Keep pipelines that express one operation",
+			"do not concatenate independent commands with echo/printf separators",
+			"Treat shell text as code",
+			"JSON.stringify is not shell escaping; backticks and $() can execute commands",
+			"Quote paths and literal arguments for the selected shell",
+		]) {
+			expect(prompt).toContain(guidance);
+		}
+		expect(prompt).not.toContain("Prefer dedicated StepCode tools over shell equivalents");
+		expect(prompt).not.toContain("reread the relevant file immediately before editing");
+	});
+
+	it("advertises only available command and discovery guidance with schema-correct examples", () => {
+		const prompt = buildStepSystemPromptAppendix(["run_command", "find_tools"]);
+		const example = prompt.match(/Example run_command arguments: (\{[^\n]+?\})\./)?.[1];
+		expect(example).toBeDefined();
+		expect(JSON.parse(example ?? "null")).toEqual({
+			command: "git diff --stat",
+			cwd: ".",
+			timeout_ms: 120000,
+			max_output_chars: 24000,
+		});
+		for (const guidance of [
+			"Use cwd rather than cd",
+			"Each call starts a fresh shell",
+			"cd and environment changes do not persist between calls",
+			"Inspect output and command status",
+			"read the returned full-output path when present",
+			"read the returned log for progress and readiness",
+			"use the returned stop command",
+			"Do not start the same command again to check progress",
+			"Call only exact available catalog names with their declared schemas",
+		]) {
+			expect(prompt).toContain(guidance);
+		}
+		const readOnly = buildStepSystemPromptAppendix(["read_file"]);
+		expect(readOnly).not.toContain("Example run_command arguments");
+		expect(readOnly).not.toContain("- find_tools:");
+		expect(readOnly).not.toContain("Use run_command when shell pipelines");
+		expect(prompt).not.toMatch(/completion notification|session_id|sessionId/);
+	});
+
+	it("explains file arguments and literal edit recovery without fuzzy matching", () => {
+		const prompt = buildStepSystemPromptAppendix([
+			"list_directory",
+			"find_files",
+			"search_files",
+			"read_file",
+			"edit_file",
+			"write_file",
+		]);
+		for (const guidance of [
+			"inspect a known directory",
+			"Set include_hidden:true",
+			"glob pattern, not a regular expression",
+			"set path to the search root",
+			"Escape regex metacharacters when searching for literal code",
+			"narrow the scope with path and glob",
+			"known path with optional 1-based start_line/end_line ranges",
+			"Displayed line prefixes are not file content",
+			"narrow the range or increase max_chars",
+			"without displayed line prefixes",
+			"search must match current content exactly",
+			"Include enough context for a unique match",
+			"replace_all only when every occurrence should change",
+			"If no match is found, inspect current content; if ambiguous, add context",
+			"full replacement with complete content",
+		]) {
+			expect(prompt).toContain(guidance);
+		}
+		expect(prompt).not.toMatch(/prefer it over|fuzzy/i);
+	});
+
 	it("carries the product safety and workflow contract from Step", () => {
 		const prompt = buildStepSystemPromptAppendix([
 			"list_directory",

@@ -3,6 +3,7 @@ import type { AgentTool } from "@step-harness/agent-core";
 import { fauxAssistantMessage, fauxToolCall } from "@step-harness/providers";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
+import { bashExecutionToText } from "../../src/core/messages.ts";
 import type { BashOperations } from "../../src/core/tools/bash.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
@@ -121,6 +122,30 @@ describe("AgentSession bash and persistence characterization", () => {
 
 		expect(result.output).toContain("hello");
 		expect(harness.session.messages[harness.session.messages.length - 1]?.role).toBe("bashExecution");
+	});
+
+	it("persists structured command facts for a user bash execution and restores their model view", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		const result = await harness.session.executeBash("fixture", undefined, {
+			operations: {
+				exec: async (_command, _cwd, { onData }) => {
+					onData(Buffer.from("partial output"));
+					return { exitCode: 0, timedOut: true, timeoutSeconds: 1 };
+				},
+			},
+		});
+		expect(result.execution).toMatchObject({ status: "timed_out", exitCode: 0, timedOut: true, timeoutSeconds: 1 });
+		const message = harness.session.messages.find((entry) => entry.role === "bashExecution");
+		if (!message || message.role !== "bashExecution") throw new Error("Bash execution message is missing");
+		expect(message.execution).toEqual(result.execution);
+		expect(bashExecutionToText(message)).toContain("Command timed out after 1 seconds");
+		expect(harness.sessionManager.getEntries()).toContainEqual(
+			expect.objectContaining({
+				type: "message",
+				message: expect.objectContaining({ execution: result.execution }),
+			}),
+		);
 	});
 
 	it("cancels running bash commands with abortBash", async () => {

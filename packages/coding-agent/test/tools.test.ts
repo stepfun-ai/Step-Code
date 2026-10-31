@@ -479,44 +479,61 @@ describe("Coding Agent Tools", () => {
 			const result = await bashTool.execute("test-call-8", { command: "echo 'test output'" });
 
 			expect(getTextOutput(result)).toContain("test output");
-			expect(result.details).toBeUndefined();
+			expect(result.details).toMatchObject({ execution: { status: "exited", exitCode: 0, timedOut: false } });
 		});
 
-		it("should handle command errors", async () => {
-			await expect(bashTool.execute("test-call-9", { command: "exit 1" })).rejects.toThrow(
-				/(Command failed|code 1)/,
-			);
+		it("returns a nonzero command exit as an execution result", async () => {
+			const result = await bashTool.execute("test-call-9", { command: "exit 1" });
+			expect(result.isError).toBe(false);
+			expect(result.details).toMatchObject({ execution: { status: "exited", exitCode: 1 } });
+			expect(getTextOutput(result)).toContain("Command exited with code 1");
 		});
 
 		it("should respect timeout", async () => {
 			const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify("setInterval(() => {}, 1000)")}`;
-			await expect(bashTool.execute("test-call-10", { command, timeout: 0.05 })).rejects.toThrow(/timed out/i);
+			const result = await bashTool.execute("test-call-10", { command, timeout: 0.05 });
+			expect(result.isError).toBe(false);
+			expect(result.details).toMatchObject({ execution: { status: "timed_out", timedOut: true, aborted: false } });
+			expect(getTextOutput(result)).toMatch(/timed out/i);
 		});
 
-		it("should include full output path for truncated timeout and abort errors", async () => {
+		it("retains full output for execution deadlines and caller cancellation", async () => {
 			for (const testCase of [
-				{ error: "timeout:5", expected: "Command timed out after 5 seconds" },
-				{ error: "aborted", expected: "Command aborted" },
+				{ canceled: false, expected: "Command timed out after 5 seconds" },
+				{ canceled: true, expected: "Command aborted" },
 			]) {
+				const controller = new AbortController();
 				const operations: BashOperations = {
 					exec: async (_command, _cwd, { onData }) => {
 						for (let i = 1; i <= 3000; i++) {
 							onData(Buffer.from(`${i}\n`, "utf-8"));
 						}
-						throw new Error(testCase.error);
+						if (testCase.canceled) controller.abort();
+						return {
+							exitCode: null,
+							signal: "SIGTERM",
+							timedOut: !testCase.canceled,
+							aborted: testCase.canceled,
+						};
 					},
 				};
 				const bash = createBashTool(testDir, { operations });
 
-				let error: unknown;
+				let message: string;
 				try {
-					await bash.execute(`test-call-${testCase.error}`, { command: "chatty-fail" });
+					const result = await bash.execute(
+						"chatty-call",
+						{ command: "chatty-fail", timeout: 5 },
+						controller.signal,
+					);
+					expect(testCase.canceled).toBe(false);
+					expect(result.isError).toBe(false);
+					message = getTextOutput(result);
 				} catch (err) {
-					error = err;
+					expect(testCase.canceled).toBe(true);
+					expect(err).toBeInstanceOf(Error);
+					message = (err as Error).message;
 				}
-
-				expect(error).toBeInstanceOf(Error);
-				const message = (error as Error).message;
 				expect(message).toContain(testCase.expected);
 				expect(message).toMatch(/\[Showing lines \d+-\d+ of \d+\. Full output: /);
 				expect(message).not.toContain("Full output: undefined");
@@ -526,6 +543,7 @@ describe("Coding Agent Tools", () => {
 				const fullOutput = readFileSync(fullOutputPath!, "utf-8");
 				expect(fullOutput).toContain("1\n2\n3");
 				expect(fullOutput).toContain("2998\n2999\n3000");
+				rmSync(fullOutputPath!, { force: true });
 			}
 		});
 
@@ -628,7 +646,7 @@ describe("Coding Agent Tools", () => {
 			});
 
 			const result = await bashWithPrefix.execute("test-prefix-1", { command: "echo $TEST_VAR" });
-			expect(getTextOutput(result).trim()).toBe("hello");
+			expect(getTextOutput(result).trim()).toBe("hello\n\n\nCommand exited with code 0");
 		});
 
 		it("should include output from both prefix and command", async () => {
@@ -637,14 +655,14 @@ describe("Coding Agent Tools", () => {
 			});
 
 			const result = await bashWithPrefix.execute("test-prefix-2", { command: "echo command-output" });
-			expect(getTextOutput(result).trim()).toBe("prefix-output\ncommand-output");
+			expect(getTextOutput(result).trim()).toBe("prefix-output\ncommand-output\n\n\nCommand exited with code 0");
 		});
 
 		it("should work without command prefix", async () => {
 			const bashWithoutPrefix = createBashTool(testDir, {});
 
 			const result = await bashWithoutPrefix.execute("test-prefix-3", { command: "echo no-prefix" });
-			expect(getTextOutput(result).trim()).toBe("no-prefix");
+			expect(getTextOutput(result).trim()).toBe("no-prefix\n\n\nCommand exited with code 0");
 		});
 
 		it("should coalesce streaming updates for chatty output", async () => {
@@ -702,7 +720,7 @@ describe("Coding Agent Tools", () => {
 
 			const result = await bash.execute("test-call-split-utf8", { command: "split-utf8" });
 
-			expect(getTextOutput(result).trim()).toBe("€");
+			expect(getTextOutput(result).trim()).toBe("€\n\n\nCommand exited with code 0");
 		});
 
 		it("should expose local bash operations for extension reuse", async () => {

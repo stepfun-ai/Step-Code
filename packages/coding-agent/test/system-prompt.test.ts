@@ -49,10 +49,10 @@ describe("buildSystemPrompt", () => {
 
 		test.each([
 			[["bash"], "Use bash for file operations"],
-			[["run_command"], "Use bash for file operations"],
-			[["powershell"], "Use PowerShell for file operations"],
-			[["bash", "powershell"], "Use bash or PowerShell for file operations"],
-			[["run_command", "powershell"], "Use bash or PowerShell for file operations"],
+			[["run_command"], "Use run_command for file operations"],
+			[["powershell"], "Use powershell for file operations"],
+			[["bash", "powershell"], "Use bash or powershell for file operations"],
+			[["run_command", "powershell"], "Use run_command or powershell for file operations"],
 		] as const)("uses shell-specific guidance for %j", (selectedTools, expected) => {
 			const prompt = buildSystemPrompt({
 				selectedTools: [...selectedTools],
