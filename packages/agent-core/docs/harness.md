@@ -2615,6 +2615,25 @@ Replay across retry and resume:
 
 ## 5.7 Agent-loop building blocks
 
+The current low-level loop uses `AgentToolResult.isError` for invocation failure,
+not for a product tool's business result. A tool can throw `ToolExecutionError`
+with observed content and details; these survive into its error event and
+transcript message. If result delivery or a return-stage hook fails after a
+result exists, the loop retains its observations, usage, and termination hint.
+Output-preparation failures may replace text with recovery diagnostics while
+retaining metadata and termination policy. The loop does not automatically
+execute the tool again.
+
+`CommandExecutionResult` describes adapter observations (`exitCode` and optional
+`signal`, `timedOut`, `aborted`, and `timeoutSeconds`). `CommandExecutionOutcome`
+normalizes those facts with an explicit `status`: `exited`, `timed_out`,
+`signaled`, `canceled`, or `unknown`. A deadline can coexist with exit code zero;
+an unknown exit is not success. These DTOs and their shared formatter live in
+[`src/harness/command-outcome.ts`](../src/harness/command-outcome.ts).
+The canonical [`BashExecutionMessage`](../src/harness/messages.ts) stores the
+optional `execution` outcome and uses the shared formatter for model projection.
+Older messages without the field retain their existing projection.
+
 The existing `agent-loop.ts` remains behavior-compatible and is refactored into these exported phases. Existing fields on `AgentTool`, `AgentToolResult`, and provider messages are retained. Add recovery declaration `replay?: "never" | "safe"` to `AgentTool`; omission means `"never"`. `AgentHarnessTool` inherits it. The `AgentEventSink` below is the existing agent-loop sink, not the harness event listener; the harness adapts agent events into §5.5 events.
 
 ```ts

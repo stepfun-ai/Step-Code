@@ -1,5 +1,6 @@
 import type { ImageContent, Message, TextContent } from "@step-harness/providers";
 import type { AgentMessage } from "../types.ts";
+import { type CommandExecutionOutcome, formatCommandExecutionOutcome } from "./command-outcome.ts";
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
 
@@ -24,6 +25,7 @@ export interface BashExecutionMessage {
 	cancelled: boolean;
 	truncated: boolean;
 	fullOutputPath?: string;
+	execution?: CommandExecutionOutcome;
 	timestamp: number;
 	excludeFromContext?: boolean;
 }
@@ -67,7 +69,9 @@ export function bashExecutionToText(msg: BashExecutionMessage): string {
 	} else {
 		text += "(no output)";
 	}
-	if (msg.cancelled) {
+	if (msg.execution) {
+		text += `\n\n${formatCommandExecutionOutcome(msg.execution)}`;
+	} else if (msg.cancelled) {
 		text += "\n\n(command cancelled)";
 	} else if (msg.exitCode !== null && msg.exitCode !== undefined && msg.exitCode !== 0) {
 		text += `\n\nCommand exited with code ${msg.exitCode}`;
