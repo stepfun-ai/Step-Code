@@ -172,6 +172,7 @@ Set `api` at provider level (default for all models) or model level (override pe
 | `apiKey` | Optional API key config (see value resolution below). Omit it when auth is provided by `/login`/`auth.json` or CLI `--api-key`. |
 | `headers` | Custom headers (see value resolution below) |
 | `authHeader` | Set `true` to add `Authorization: Bearer <apiKey>` automatically |
+| `cacheRetention` | Default prompt-cache retention for every model of this provider: `none`, `short`, or `long` (see [Prompt Cache Retention](#prompt-cache-retention)) |
 | `models` | Array of model configurations |
 | `modelOverrides` | Per-model overrides for built-in or extension-registered models on this provider |
 
@@ -240,6 +241,7 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
 | `contextWindow` | No | `128000` | Context window size in tokens |
 | `maxTokens` | No | `16384` | Maximum output tokens |
 | `samplingParams` | No | omitted | Sampling parameters merged verbatim into every request body (see below) |
+| `cacheRetention` | No | provider `cacheRetention`, else `short` | Prompt-cache retention: `none`, `short`, or `long` (see below) |
 | `cost` | No | all zeros | Per-million-token rates with optional request-wide input pricing tiers |
 | `compat` | No | provider `compat` | Provider compatibility overrides. Merged with provider-level `compat` when both are set. |
 
@@ -288,6 +290,34 @@ Current behavior:
 Only OpenAI-compatible APIs apply it (`openai-completions`, `openai-responses`, `azure-openai-responses`); other APIs ignore it. Keys override step's named request fields (for example a `temperature` key here beats the request-level temperature), so prefer it as the single source of sampling truth for a model. In `modelOverrides`, `samplingParams` merges per key with the base model's value.
 
 A constant thinking-token cap can go here too, but it will not follow `thinkingBudgets` or leave room for the answer. Prefer `compat.thinkingTokenBudgetField` (or the `supportsThinkingTokenBudget` alias) for that.
+
+### Prompt Cache Retention
+
+`cacheRetention` sets how long the provider should keep the cached prompt prefix. Set it on a provider to cover all its models, then on a model or in `modelOverrides` to override that model alone.
+
+| Value | `anthropic-messages` (and `cacheControlFormat: "anthropic"`) | OpenAI APIs |
+|-------|------------------------------|-------------|
+| `short` (default) | `cache_control: { "type": "ephemeral" }` — 5-minute TTL | provider default retention |
+| `long` | `cache_control: { "type": "ephemeral", "ttl": "1h" }` — 1-hour TTL | `prompt_cache_retention: "24h"` |
+| `none` | no `cache_control` markers | no prompt cache key; implicit caching disabled where supported |
+
+```json
+{
+  "providers": {
+    "my-anthropic-gateway": {
+      "baseUrl": "https://gateway.example.com",
+      "api": "anthropic-messages",
+      "cacheRetention": "long",
+      "models": [
+        { "id": "claude-opus-4-8" },
+        { "id": "claude-haiku-4-5", "cacheRetention": "short" }
+      ]
+    }
+  }
+}
+```
+
+`long` only sends the extended TTL when `compat.supportsLongCacheRetention` is not `false`; set that to `false` for a gateway that rejects the `ttl` field. A long cache write costs more than a short one (Anthropic bills 2x base input for a 1-hour write versus 1.25x for 5 minutes), so it pays off only when turns are often more than five minutes apart. Requests that set their own retention keep it: compaction summaries still use `none`.
 
 ### Thinking Level Map
 
@@ -392,7 +422,7 @@ Use `modelOverrides` to customize built-in models and matching extension-registe
 }
 ```
 
-`modelOverrides` supports these fields per model: `name`, `reasoning`, `thinkingLevelMap`, `input`, `cost` (partial), `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `headers`, `compat`.
+`modelOverrides` supports these fields per model: `name`, `reasoning`, `thinkingLevelMap`, `input`, `cost` (partial), `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `cacheRetention`, `headers`, `compat`.
 
 Direct OpenAI GPT-5.6 Sol, Terra, and Luna default to a `272000` context window so requests remain within OpenAI's short-context pricing tier. To opt into OpenAI's 1.05M context window, increase it for each model you use:
 

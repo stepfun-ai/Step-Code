@@ -17,6 +17,7 @@ import {
 	discoverProviderModels,
 	importLocalStepgoModels,
 	listModelProviders,
+	openModelsJson,
 	parseModelProvider,
 	saveModelProvider,
 	setStoredApiKey,
@@ -265,6 +266,7 @@ test("an edit keeps the model and provider fields the form does not show", async
 					api: "anthropic-messages",
 					headers: { "x-gw": "1" },
 					compat: { supportsStrictTools: true },
+					cacheRetention: "long",
 					authHeader: true,
 					modelOverrides: { "m-keep": { contextWindow: 4096 } },
 					models: [
@@ -273,6 +275,7 @@ test("an edit keeps the model and provider fields the form does not show", async
 							reasoning: true,
 							thinkingLevelMap: { low: "low" },
 							maxTokens: 64000,
+							cacheRetention: "short",
 							compat: { forceAdaptiveThinking: true },
 							cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0.5 },
 							headers: { "x-model": "1" },
@@ -303,12 +306,14 @@ test("an edit keeps the model and provider fields the form does not show", async
 	assert.deepEqual((document.providers as Record<string, Record<string, unknown>>)["gw-hidden"], {
 		headers: { "x-gw": "1" },
 		compat: { supportsStrictTools: true },
+		cacheRetention: "long",
 		authHeader: true,
 		modelOverrides: { "m-keep": { contextWindow: 4096 } },
 		baseUrl: "https://gw.example",
 		api: "anthropic-messages",
 		models: [
 			{
+				cacheRetention: "short",
 				compat: { forceAdaptiveThinking: true },
 				cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0.5 },
 				headers: { "x-model": "1" },
@@ -324,6 +329,28 @@ test("an edit keeps the model and provider fields the form does not show", async
 	});
 	assert.deepEqual((await authOnDisk())["gw-hidden"], { type: "api_key", key: "sk-rotated" });
 	await deleteModelProvider("gw-hidden");
+});
+
+test("opening the config creates an empty models.json once and never overwrites one", async () => {
+	const file = join(home, ".stepcode", "models.json");
+	await rm(file, { force: true });
+	const opened: string[] = [];
+	const open = async (path: string) => {
+		opened.push(path);
+	};
+	assert.equal(await openModelsJson(open), file);
+	assert.deepEqual(opened, [file]);
+	assert.deepEqual(await onDisk(), { providers: {} });
+
+	const handWritten = { providers: { mine: { baseUrl: "https://gw.example", api: "openai-completions" } } };
+	await writeFile(file, JSON.stringify(handWritten), "utf8");
+	await openModelsJson(open);
+	assert.deepEqual(await onDisk(), handWritten);
+	await assert.rejects(
+		openModelsJson(async () => Promise.reject(new Error("no editor"))),
+		/no editor/,
+	);
+	await rm(file, { force: true });
 });
 
 test("deleting a provider removes its declaration and its stored key", async () => {

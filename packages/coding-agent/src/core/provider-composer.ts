@@ -65,6 +65,7 @@ export interface ProviderConfigInput {
 		contextWindow: number;
 		maxTokens: number;
 		samplingParams?: Record<string, unknown>;
+		cacheRetention?: Model<Api>["cacheRetention"];
 		headers?: Record<string, string>;
 		compat?: Model<Api>["compat"];
 	}>;
@@ -128,6 +129,7 @@ function applyModelOverride(model: Model<Api>, override: ModelsJsonModelOverride
 		samplingParams: override.samplingParams
 			? { ...model.samplingParams, ...override.samplingParams }
 			: model.samplingParams,
+		cacheRetention: override.cacheRetention ?? model.cacheRetention,
 		compat: mergeCompat(model.compat, override.compat),
 	};
 }
@@ -168,6 +170,7 @@ function modelFromJson(
 		contextWindow: definition.contextWindow ?? 128000,
 		maxTokens: definition.maxTokens ?? 16384,
 		samplingParams: definition.samplingParams,
+		cacheRetention: definition.cacheRetention ?? providerConfig.cacheRetention ?? defaults?.cacheRetention,
 		headers: undefined,
 		compat: mergeCompat(providerConfig.compat, definition.compat),
 	};
@@ -185,6 +188,7 @@ function applyModelsJson(
 		!config.baseUrl &&
 		!config.headers &&
 		!config.compat &&
+		!config.cacheRetention &&
 		!hasOverrides &&
 		!config.apiKey &&
 		config.authHeader === undefined
@@ -198,6 +202,7 @@ function applyModelsJson(
 		...model,
 		baseUrl: normalizeProviderBaseUrl(config.baseUrl, model.api) ?? model.baseUrl,
 		compat: mergeCompat(model.compat, config.compat),
+		cacheRetention: config.cacheRetention ?? model.cacheRetention,
 	}));
 	for (const definition of config.models ?? []) {
 		const existingIndex = models.findIndex((model) => model.id === definition.id);

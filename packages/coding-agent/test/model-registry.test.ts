@@ -745,6 +745,53 @@ describe("ModelRegistry", () => {
 			expect(opus?.samplingParams).toBeUndefined();
 		});
 
+		test("cacheRetention applies at provider level with model-level and override precedence", async () => {
+			writeRawModelsJson({
+				"custom-anthropic": {
+					baseUrl: "https://my-proxy.example.com",
+					api: "anthropic-messages",
+					apiKey: "test-key",
+					cacheRetention: "long",
+					models: [
+						{ id: "claude-inherits" },
+						{ id: "claude-short", cacheRetention: "short" },
+						{ id: "claude-overridden" },
+					],
+					modelOverrides: {
+						"claude-overridden": { cacheRetention: "none" },
+					},
+				},
+				"plain-provider": {
+					baseUrl: "https://other.example.com/v1",
+					api: "openai-completions",
+					apiKey: "test-key",
+					models: [{ id: "plain-model" }],
+				},
+			});
+
+			const registry = await createModelRegistry(authStorage, modelsJsonPath);
+			const models = getModelsForProvider(registry, "custom-anthropic");
+			expect(models.find((m) => m.id === "claude-inherits")?.cacheRetention).toBe("long");
+			expect(models.find((m) => m.id === "claude-short")?.cacheRetention).toBe("short");
+			expect(models.find((m) => m.id === "claude-overridden")?.cacheRetention).toBe("none");
+			expect(getModelsForProvider(registry, "plain-provider")[0]?.cacheRetention).toBeUndefined();
+		});
+
+		test("rejects an unknown cacheRetention value", async () => {
+			writeRawModelsJson({
+				"custom-anthropic": {
+					baseUrl: "https://my-proxy.example.com",
+					api: "anthropic-messages",
+					apiKey: "test-key",
+					cacheRetention: "forever",
+					models: [{ id: "claude-x" }],
+				},
+			});
+
+			const registry = await createModelRegistry(authStorage, modelsJsonPath);
+			expect(registry.getError()).toContain("cacheRetention");
+		});
+
 		test("model override with compat.openRouterRouting", async () => {
 			writeRawModelsJson({
 				openai: {

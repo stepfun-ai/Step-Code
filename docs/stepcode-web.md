@@ -868,10 +868,17 @@ The model settings page declares providers and keys through
 shows the address, protocol, name and, per model, the id, context window, max
 output, input kinds, reasoning flag and thinking-level map; a save rebuilds
 exactly those. Everything it cannot show is kept from the stored declaration:
-provider-level `headers`, `compat`, `authHeader` and `modelOverrides`, and
-per-model `api`, `baseUrl`, `cost`, `samplingParams`, `headers` and `compat`. A
+provider-level `headers`, `compat`, `cacheRetention`, `authHeader` and `modelOverrides`, and
+per-model `api`, `baseUrl`, `cost`, `samplingParams`, `cacheRetention`, `headers` and `compat`. A
 model row the form no longer sends is removed, because deleting a model is an
 edit too.
+
+For those fields the page header has an "打开配置文件" (Open config file) button:
+`POST /api/v1/settings/models/open-config` opens the `models.json` the kernel
+reads in the application the system associates with it (on macOS, the default
+text editor when none is), creating an empty `{ "providers": {} }` file first if
+there is none. The provider list reloads when the window regains focus, and
+like form edits, hand edits apply to sessions started afterwards.
 
 That rule is not cosmetic: `compat.forceAdaptiveThinking`
 ([models](../packages/coding-agent/docs/models.md#anthropic-messages-compatibility))

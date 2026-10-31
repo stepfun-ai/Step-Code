@@ -904,6 +904,8 @@ const zhCN = {
 	settingsModels: "模型",
 	modelConfigurationNeeded: "发起对话前，请配置并选择一个可用模型。输入与附件已保留；也可以在账号设置中登录。",
 	settingsModelsDesc: "填入各提供商的 API 密钥即可使用其模型。",
+	settingsModelsOpenConfig: "打开配置文件",
+	settingsModelsOpenConfigHint: "在编辑器中打开 models.json，可配置表单未提供的选项（如 cacheRetention、compat）",
 	settingsModelsMine: "模型提供商",
 	settingsModelsCustom: "自定义",
 	settingsModelsCount: "{count} 个模型",
@@ -1988,6 +1990,9 @@ const enUS: Record<MessageKey, string> = {
 	modelConfigurationNeeded:
 		"Configure and select an available model before sending. Your input and attachments are kept; you can also sign in from Account settings.",
 	settingsModelsDesc: "Fill in each provider's API key to use its models.",
+	settingsModelsOpenConfig: "Open config file",
+	settingsModelsOpenConfigHint:
+		"Open models.json in your editor to set options the form does not show (such as cacheRetention or compat)",
 	settingsModelsMine: "Model providers",
 	settingsModelsCustom: "Custom",
 	settingsModelsCount: "{count} models",

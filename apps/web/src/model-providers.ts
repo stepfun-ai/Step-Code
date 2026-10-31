@@ -9,7 +9,8 @@
  * that gets shared.
  */
 
-import { join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
 	AuthStorage,
 	createStepSettingsManager,
@@ -29,6 +30,7 @@ import {
 	resolveStepHomeDir,
 	updateModelsJsonProvider,
 } from "@step-harness/coding-agent";
+import { openFileWithDefaultApp } from "./open-folder.ts";
 import { SettingsError } from "./settings.ts";
 import { importStepgoModels, type StepgoModelImportResult } from "./stepgo-import.ts";
 
@@ -394,12 +396,20 @@ function parseCompactionThresholds(input: unknown): Map<string, number> {
  * They are not decoration: a model's `compat` decides the request shape (for an
  * Anthropic-compatible endpoint, `compat.forceAdaptiveThinking` is the
  * difference between adaptive thinking and the legacy budget payload a newer
- * model rejects), while `cost`, `samplingParams` and `headers` are values the
+ * model rejects), while `cost`, `samplingParams`, `cacheRetention` and `headers` are values the
  * user wrote by hand. Rebuilding the declaration from the form alone would
  * silently change how requests are made — the reason these lists exist.
  */
-const MODEL_FIELDS_KEPT_ON_SAVE = ["api", "baseUrl", "cost", "samplingParams", "headers", "compat"] as const;
-const PROVIDER_FIELDS_KEPT_ON_SAVE = ["headers", "compat", "authHeader", "modelOverrides"] as const;
+const MODEL_FIELDS_KEPT_ON_SAVE = [
+	"api",
+	"baseUrl",
+	"cost",
+	"samplingParams",
+	"cacheRetention",
+	"headers",
+	"compat",
+] as const;
+const PROVIDER_FIELDS_KEPT_ON_SAVE = ["headers", "compat", "cacheRetention", "authHeader", "modelOverrides"] as const;
 
 function fieldsKept(
 	declaration: Record<string, unknown> | undefined,
@@ -556,6 +566,26 @@ export async function saveModelProvider(
 	// unreachable, while a provider whose threshold failed to save still runs
 	// at the default and the error says so.
 	await replaceProviderTriggerRatios(id, thresholds, `Provider '${id}' was saved`);
+}
+
+/**
+ * Open the `models.json` the kernel reads in the system's editor, for settings
+ * the form does not show (such as `cacheRetention` or `compat`).
+ *
+ * A missing file is created with an empty provider table first, so there is
+ * something to edit; `wx` never replaces a file written meanwhile. Edits made
+ * there apply to sessions started afterwards, like the form's.
+ */
+export async function openModelsJson(open: (file: string) => Promise<void> = openFileWithDefaultApp): Promise<string> {
+	const file = modelsJsonPath();
+	await mkdir(dirname(file), { recursive: true });
+	try {
+		await writeFile(file, `${JSON.stringify({ providers: {} }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+	} catch (caught) {
+		if ((caught as NodeJS.ErrnoException).code !== "EEXIST") throw caught;
+	}
+	await open(file);
+	return file;
 }
 
 /** Remove one provider and the key this page stored for it. */

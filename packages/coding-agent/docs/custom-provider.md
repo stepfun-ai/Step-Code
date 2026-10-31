@@ -732,6 +732,9 @@ interface ProviderModelConfig {
   /** Maximum output tokens. */
   maxTokens: number;
 
+  /** Default prompt-cache retention; a request's own cacheRetention wins. Defaults to "short". */
+  cacheRetention?: "none" | "short" | "long";
+
   /** Custom headers for this specific model. */
   headers?: Record<string, string>;
 

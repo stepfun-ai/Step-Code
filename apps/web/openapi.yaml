@@ -2054,6 +2054,23 @@ paths:
         "400": { description: Missing fields or the model id is not usable }
         "502": { description: "The provider rejected the request or reported an error" }
         "504": { description: No answer within the test timeout }
+  /api/v1/settings/models/open-config:
+    post:
+      description: >-
+        Open the models.json the kernel reads in the application the system associates with it (on macOS,
+        the default text editor when no application is associated). A missing file is first created with an
+        empty provider table. Edits apply to sessions started afterwards.
+      responses:
+        "200":
+          description: The editor was launched
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [path]
+                properties:
+                  path: { type: string, description: Absolute path of the opened models.json }
+        "500": { description: The file could not be created or no application could open it }
   /api/v1/settings/models/{id}:
     parameters:
       - { name: id, in: path, required: true, schema: { type: string } }
