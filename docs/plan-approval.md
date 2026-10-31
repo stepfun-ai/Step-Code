@@ -3,20 +3,42 @@
 `exit_plan_mode` submits a written proposal for review. Leaving plan mode and
 approving the proposal are separate events.
 
-Where a real user can decide, the tool blocks on that decision: the TUI renders
-the review dialog, and an RPC host whose UI bridge reaches a real user (Step's
-sdk-stdio host, which forwards the review to the desktop app through the optional
-`ctx.ui.reviewPlan` capability) waits for the reviewer's answer. Only when nobody
-can decide — a headless session, or an RPC host without a bridged review such as
-a subagent lane — does a valid proposal exit plan mode while the caller remains
-responsible for obtaining approval before execution. A bridged review that times
-out, is aborted, errors, or answers with something unparseable is **not** an
-approval: plan mode stays on and the turn ends (`terminate: true`).
+Where a real user can decide, the tool waits for that decision: the TUI renders
+its native review, and an embedded host can provide `ctx.ui.reviewPlan` or
+`ctx.ui.clarify`. Structured clarification carries the full proposal in `reason`
+plus a `plan_review` presentation intent. The decision is tied to this request,
+not inferred from an ordinary user message. SDK stdio peers enable their native
+review bridge with `capabilities.planReview: true` at initialization.
+
+A headless session or RPC host without either capability retains an external
+approval handoff. The tool exits plan mode but **ends this turn**; leaving the
+mode does not authorize execution. A bridged review that times out, is aborted,
+errors, or receives an invalid response keeps planning active and ends the turn.
+The tool enforces a ten-minute deadline even if the host ignores cancellation.
 
 Plan mode does not hide tools: it denies mutating calls outside the plan file
 through the `tool_call` policy, so the request's tool block stays byte-identical
 and the provider's prompt cache keeps its prefix. Only a profile that lacks a
 plan tool has it appended on entry, and that addition alone is reverted on exit.
+
+## Submission and approval state
+
+Submission is a separate fact from leaving plan mode. A `step-plan` entry records
+`review: { id, planHash, outcome }`, with `pending` written before showing the
+review and the final decision written afterwards. `getStepPlanState` exposes this
+branch-local view. A hash identifies content, never approval: the same snapshot
+may be reviewed again when the user requests it.
+
+Only one review may be pending. Changing modes, requesting a new `/plan` task,
+navigating branches, or shutting down invalidates its signal; a late approval
+cannot unlock a new plan round.
+Restoring a pending review records it as unanswered and keeps planning active.
+Before accepting execution, the tool rereads the plan and verifies its hash.
+A changed, missing, or unreadable proposal requires a fresh review.
+
+The plan file boundary is evaluated before ordinary permission prompts, using
+one shared decision. A forbidden edit is refused without asking the user to
+approve it; an edit to the plan file still uses the normal permission policy.
 
 ## Mode announcements
 
@@ -47,8 +69,9 @@ the compaction summary can carry its rules.
 
 ## Handoff details
 
-Successful headless and RPC exits return the existing model-facing text plus
-structured `details`, for example:
+In-process tool results carry model-facing text plus structured `details`, for
+example. SDK stdio tool-result messages carry text, not these details; opted-in
+SDK reviewers receive the complete snapshot and hash in the reverse request.
 
 ```json
 {
@@ -63,16 +86,20 @@ structured `details`, for example:
 
 `outcome: "external_approval_required"` identifies a handoff awaiting the caller's
 decision. `planModeExited: true` describes the resulting mode state; it does not
-mean approval was granted. The result still has `terminate: false`, so the host
-must gate execution through its own approval flow. These details do not add an
-approval command or enforce an execution barrier.
+mean approval was granted. External handoffs and declined or unanswered reviews
+set `stopTurn: true` in addition to `terminate: true`. The plan tool is sequential:
+later calls in the same batch receive skipped results instead of executing, and
+ordinary sibling results cannot cancel the stop. Earlier calls cannot be undone.
+The caller must approve the snapshot before starting an implementation turn;
+changing details alone is not an approval.
 
 `approvalSource` identifies who owns the decision: `"user"` for interactive
 review — in the TUI or over a bridged RPC review — including feedback and
 dismissal, and `"external"` for the headless / unbridged-RPC caller's approval
 flow. A bridged review that never reached a decision (`bridgeFailed`) also
-records `"external"`: nobody decided, so the host must resolve it. It does not indicate that approval has occurred. Source and outcome are
-independent: a future caller-owned `"approved"` outcome can keep
+records `"external"`: nobody decided, so the host must resolve it. This does not
+indicate that approval occurred. Source and outcome are independent: a future
+caller-owned `"approved"` outcome can keep
 `approvalSource: "external"` without claiming the user clicked the TUI. Native
 headless/unbridged-RPC exits currently emit `"external_approval_required"` only.
 
@@ -80,7 +107,8 @@ headless/unbridged-RPC exits currently emit `"external_approval_required"` only.
 timed out, was aborted, errored, or answered with an unparseable or empty payload.
 It is set on a `dismissed` result whose `planModeExited` is `false`; a user who
 actively dismissed the review does not set it, because someone decided — they
-simply did not approve. In-process dialogs never set it.
+simply did not approve. Native TUI implementation errors remain tool errors;
+embedded review bridges can produce this failure state.
 
 `planHash` is the lowercase hexadecimal SHA-256 digest of `planContents` encoded
 as UTF-8. It covers the complete snapshot read from the file, including any BOM,
@@ -128,25 +156,29 @@ Native outcomes keep their existing behavior:
 | --- | --- | --- | --- |
 | `approved` | `user` | `true` | The user selected execution; restore tools and continue. |
 | `feedback` | `user` | `false` | Keep planning and steer the user's notes into the next response. |
-| `dismissed` | `user` | `false` | Keep planning and terminate the turn to wait for the user. |
-| `external_approval_required` | `external` | `true` | Headless / unbridged-RPC handoff; the caller must gate execution. |
+| `dismissed` | `user` | `false` | Keep planning and stop the turn to wait for the user. |
+| `dismissed` + `bridgeFailed` | `external` | `false` | Review unanswered; keep planning and stop the turn. |
+| `external_approval_required` | `external` | `true` | External handoff; stop this turn and let the caller gate execution. |
 
-A bridged RPC review (sdk-stdio to the desktop app) produces the same three
-interactive outcomes as the TUI. When the bridge produces no decision, the result
-is `dismissed` with `bridgeFailed: true`: plan mode stays on, the turn ends, and
-no `plan_mode_exited` telemetry is recorded, because the session never left plan
-mode.
+Native plan-review and structured clarification hosts produce the three
+interactive outcomes. When a bridge produces no decision, the result is
+`dismissed` with `bridgeFailed: true`: plan mode stays on, the turn ends, and
+no `plan_mode_exited` telemetry is recorded. Transcripts distinguish this case
+as **Review unanswered** rather than a user dismissal.
 
 The TUI still selects execution by default, and Enter confirms that selection.
 Interactive result details also include the hash of the reviewed snapshot.
 Transcripts display external handoffs as **External approval required**, with the
 complete plan, rather than displaying an approved result.
 
-Missing, empty, whitespace-only, unreadable, and non-regular plan files retain
-their existing explanatory text and leave plan mode active. Their `details` are
-`undefined`; they never receive a successful handoff outcome or hash. Calling
-`exit_plan_mode` outside plan mode likewise returns no handoff details. A
-non-error tool result alone is therefore insufficient to recognize a handoff.
+Missing, empty, whitespace-only, unreadable, and non-regular plan files leave
+plan mode active. A request that needs no proposal may be answered read-only;
+file absence or unchanged content never authorizes the model to disable planning.
+Only the user can leave that mode with `/plan`. These guard results have no
+handoff details or approval hash. Calling `exit_plan_mode` outside plan mode
+likewise returns no handoff details. A non-error result is not itself approval.
+An oversized SDK proposal returns an actionable request to shorten it, rather
+than pretending that the user dismissed a review.
 
 `approvalSource`, `planHash`, and `planModeExited` are optional in `PlanReviewDetails`
 for compatibility with existing producers and older transcripts. Native results

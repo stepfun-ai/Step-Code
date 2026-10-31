@@ -3,6 +3,7 @@
 import type { AgentToolResult } from "@step-harness/agent-core";
 import { Editor, type EditorTheme, Key, matchesKey, Text, visibleWidth, wrapTextWithAnsi } from "@step-harness/pi-tui";
 import { type Static, Type } from "typebox";
+import type { ClarificationAnswer, ClarificationQuestion } from "../core/extensions/clarification.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 
@@ -72,24 +73,11 @@ const ClarifyUserSchema = Type.Object(
 type ClarifyUserParams = Static<typeof ClarifyUserSchema>;
 type ClarificationOption = Static<typeof ClarificationOptionSchema>;
 
-interface NormalizedQuestion {
-	id: string;
-	label: string;
-	question: string;
-	reason?: string;
-	options: ClarificationOption[];
-	allowFreeform: boolean;
-}
+type NormalizedQuestion = ClarificationQuestion;
 
 type RenderOption = ClarificationOption & { isOther?: boolean };
 
-export interface StepQuestionnaireAnswer {
-	id: string;
-	value: string;
-	label: string;
-	wasCustom: boolean;
-	index?: number;
-}
+export type StepQuestionnaireAnswer = ClarificationAnswer;
 
 export interface StepQuestionnaireDetails {
 	questions: NormalizedQuestion[];
@@ -196,13 +184,13 @@ function answerText(questions: readonly NormalizedQuestion[], answers: readonly 
 	return answers
 		.map((answer) => {
 			const question = questions.find((candidate) => candidate.id === answer.id);
-			const source = answer.wasCustom ? "freeform" : "option";
+			const source = answer.skipped ? "skipped" : answer.wasCustom ? "freeform" : "option";
 			return [
 				`question: ${question?.question ?? answer.id}`,
 				`answer: ${answer.value}`,
 				`source: ${source}`,
 				...(question?.reason ? [`reason: ${question.reason}`] : []),
-				...(!answer.wasCustom ? [`matched_option: ${answer.label}`] : []),
+				...(!answer.wasCustom && !answer.skipped ? [`matched_option: ${answer.label}`] : []),
 			].join("\n");
 		})
 		.join("\n\n");
@@ -521,9 +509,10 @@ async function executeQuestionnaire(
 	params: ClarifyUserParams,
 	ctx: ExtensionContext,
 	telemetry?: StepTelemetryReporter,
+	signal?: AbortSignal,
 ): Promise<AgentToolResult<StepQuestionnaireDetails>> {
 	const questions = normalizeQuestions(params);
-	if (!ctx.hasUI || ctx.mode !== "tui") {
+	if (!ctx.hasUI || (ctx.mode !== "tui" && !ctx.ui.clarify)) {
 		return response({ questions, answers: [], cancelled: true }, "Error: clarify_user requires an interactive UI");
 	}
 	if (questions.length === 0 || questions.some((item) => !item.question)) {
@@ -537,8 +526,9 @@ async function executeQuestionnaire(
 	}
 
 	const askedAt = Date.now();
-	const details =
-		typeof ctx.ui.custom === "function"
+	const details: StepQuestionnaireDetails = ctx.ui.clarify
+		? { questions, ...(await ctx.ui.clarify(questions, signal ?? ctx.signal)) }
+		: typeof ctx.ui.custom === "function"
 			? await executeNativeDialog(questions, ctx)
 			: await executeFallback(questions, ctx);
 	const outcome = details.cancelled
@@ -568,7 +558,8 @@ export function registerStepClarifyUserExtension(pi: ExtensionAPI, telemetry?: S
 		parameters: ClarifyUserSchema,
 		prepareArguments: prepareClarifyArguments,
 		executionMode: "sequential",
-		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => executeQuestionnaire(params, ctx, telemetry),
+		execute: async (_toolCallId, params, signal, _onUpdate, ctx) =>
+			executeQuestionnaire(params, ctx, telemetry, signal),
 		renderCall: (params, theme) => {
 			const count = params.questions?.length ?? (params.question ? 1 : 0);
 			return new Text(

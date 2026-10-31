@@ -21,7 +21,8 @@ import { wrapRegisteredTools } from "../src/core/extensions/wrapper.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { getPlanFilePath } from "../src/features/plan-mode-tools.ts";
-import { createStepPlanExtension } from "../src/features/step-plan.ts";
+import { createStepExtension } from "../src/features/step.ts";
+import { createStepPlanExtension, getStepPlanState } from "../src/features/step-plan.ts";
 import { createStepTasksExtension, type StepTask } from "../src/features/step-tasks.ts";
 import { PLAN_REVIEW_PROMPT, type PlanReviewDetails } from "../src/render/plan-review.ts";
 import type { StepTelemetryReporter } from "../src/step/telemetry.ts";
@@ -143,6 +144,7 @@ function createHarness(
 		},
 		registerFlag: () => {},
 		registerShortcut: () => {},
+		registerProvider: () => {},
 		on(event: string, handler: (event: never, ctx: ExtensionContext) => unknown) {
 			const registered = handlers.get(event) ?? [];
 			registered.push(handler);
@@ -258,6 +260,76 @@ async function runTool(
 async function enterPlanMode(harness: Harness, ctx: ExtensionContext): Promise<void> {
 	await harness.commands.get("plan")!.handler("", ctx);
 }
+
+function createPlanAndPermissionHarness(cwd: string) {
+	const harness = createHarness({ cwd });
+	createStepExtension({
+		permission: { env: {}, initialPreset: "ask" },
+		stepSettings: () => ({ getStepSettings: () => ({}), setEffectiveStepSettings: () => {} }),
+	})(harness.api);
+	createStepPlanExtension()(harness.api);
+	const confirm = vi.fn(async () => true);
+	const context = harness.ctx({ ui: { ...harness.ctx().ui, confirm } });
+	return { harness, confirm, context };
+}
+
+test("plan mode refuses forbidden edits before requesting permission", async () => {
+	const { harness, confirm, context } = createPlanAndPermissionHarness(makeWorkspace());
+	await harness.emit({ type: "session_start", reason: "startup" }, context);
+	await enterPlanMode(harness, context);
+	const result = await harness.emit(
+		{ type: "tool_call", toolName: "write_file", toolCallId: "outside", input: { path: "src/app.ts", content: "x" } },
+		context,
+	);
+	expect(result).toMatchObject({ block: true });
+	expect(confirm).not.toHaveBeenCalled();
+});
+
+test("writing the plan still requires the normal permission decision", async () => {
+	const cwd = makeWorkspace();
+	const { harness, confirm, context } = createPlanAndPermissionHarness(cwd);
+	await harness.emit({ type: "session_start", reason: "startup" }, context);
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	const result = await harness.emit(
+		{ type: "tool_call", toolName: "write_file", toolCallId: "plan", input: { path: planPath, content: "# Plan" } },
+		context,
+	);
+	expect(result).toBeUndefined();
+	expect(confirm).toHaveBeenCalledTimes(1);
+});
+
+test("live plan mode still refuses edits when an embedder stores no entries", async () => {
+	const { harness, confirm, context } = createPlanAndPermissionHarness(makeWorkspace());
+	harness.api.appendEntry = vi.fn();
+	await harness.emit({ type: "session_start", reason: "startup" }, context);
+	await enterPlanMode(harness, context);
+	const result = await harness.emit(
+		{ type: "tool_call", toolName: "write_file", toolCallId: "unrecorded", input: { path: "src/app.ts" } },
+		context,
+	);
+	expect(result).toMatchObject({ block: true });
+	expect(confirm).not.toHaveBeenCalled();
+});
+
+test("plan state projection validates unknown source values and keeps branch order", () => {
+	expect(getStepPlanState([])).toBeUndefined();
+	expect(
+		getStepPlanState([
+			{
+				type: "custom",
+				customType: "step-plan",
+				data: { enabled: true, planFilePath: "/plan.md", planSource: "other" },
+			},
+		]),
+	).toEqual({ enabled: true, planFilePath: "/plan.md", planSource: "unknown" });
+	expect(
+		getStepPlanState([
+			{ type: "custom", customType: "step-plan", data: { enabled: true, planSource: "user" } },
+			{ type: "custom", customType: "step-plan", data: { enabled: false } },
+		]),
+	).toEqual({ enabled: false, planSource: "unknown" });
+});
 
 const NOT_IN_PLAN_MODE =
 	"Not in plan mode. Only the user starts plan mode, with /plan or --plan; continue the task in the current mode.";
@@ -567,7 +639,7 @@ test.each([true, false])("rpc-mode exit_plan_mode hands approval to the caller (
 	expect(result.content).toEqual([
 		{
 			type: "text",
-			text: `Cannot gate approval in rpc child context. Plan file at ${planPath}; caller should approve externally. Plan mode exited and file mutations are re-enabled.\n\nPlan contents:\n${planContents}`,
+			text: `Cannot gate approval in this RPC host. Plan file at ${planPath}; caller should approve externally. This turn ends now; do not execute until the caller approves.\n\nPlan contents:\n${planContents}`,
 		},
 	]);
 	expect(result.details).toEqual({
@@ -578,7 +650,7 @@ test.each([true, false])("rpc-mode exit_plan_mode hands approval to the caller (
 		planHash: createHash("sha256").update(planContents, "utf8").digest("hex"),
 		planModeExited: true,
 	});
-	expect(result.terminate).toBe(false);
+	expect(result.terminate).toBe(true);
 	expect(harness.customCalls()).toBe(0);
 	expect(harness.userMessages).toEqual([]);
 
@@ -589,7 +661,7 @@ test.each([true, false])("rpc-mode exit_plan_mode hands approval to the caller (
 	expect(
 		harness.notifications.some(
 			(notification) =>
-				notification.type === "warning" && notification.message.includes("rpc child auto-approved plan mode exit"),
+				notification.type === "warning" && notification.message.includes("has no plan-review bridge"),
 		),
 	).toBe(true);
 	expect(events.at(-1)).toEqual({
@@ -837,9 +909,8 @@ test("bridged rpc exit_plan_mode forwards the run signal so an aborted review an
 		details?: PlanReviewDetails;
 		terminate?: boolean;
 	};
-	// The bridge saw the aborted signal and answered nothing.
-	expect(calls).toHaveLength(1);
-	expect(calls[0]!.opts?.signal?.aborted).toBe(true);
+	// An already-aborted run must not open another dialog.
+	expect(calls).toHaveLength(0);
 	expect(result.terminate).toBe(true);
 	expect(result.details).toMatchObject({
 		approvalSource: "external",
@@ -1006,7 +1077,7 @@ test.each(planEntryCases)(
 		const toolsBefore = harness.activeTools();
 		// `/plan <task>` while planning hands over the task without re-entering.
 		await harness.commands.get("plan")!.handler("refine the proposal", context);
-		expect(harness.userMessages.at(-1)).toEqual(["refine the proposal", {}]);
+		expect(harness.userMessages.at(-1)).toEqual(["refine the proposal", { expandPromptTemplates: true }]);
 		expect(harness.appended).toHaveLength(snapshotsBefore);
 		expect(events).toHaveLength(telemetryBefore);
 		expect(events[0]).toEqual({ event: "plan_mode_entered", properties: { source } });
@@ -1748,7 +1819,8 @@ test.each([
 		});
 	} else {
 		expect(lastPlanEntry(harness).enabled).toBe(true);
-		expect(harness.appended).toHaveLength(1);
+		expect(harness.appended).toHaveLength(3);
+		expect(lastPlanEntry(harness)).toMatchObject({ review: { outcome: "dismissed" } });
 		expect(events).toHaveLength(1);
 	}
 });
@@ -1769,7 +1841,8 @@ test.each(["Cover the migration edge case.", "  padded note  "])(
 
 		const result = await runTool(harness, "exit_plan_mode", {}, harness.ctx());
 		expect(lastPlanEntry(harness).enabled).toBe(true);
-		expect(harness.appended).toHaveLength(1);
+		expect(harness.appended).toHaveLength(3);
+		expect(lastPlanEntry(harness)).toMatchObject({ review: { outcome: "feedback" } });
 		expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
 		// Steering, not follow-up: this tool result keeps the agent running, and the
 		// follow-up queue only drains once it would stop, so the note has to jump the
@@ -1834,7 +1907,7 @@ test("a valid headless proposal exits requiring external approval with the whole
 	expect(result.content).toEqual([
 		{
 			type: "text",
-			text: `Plan mode exited. Plan file kept at ${planPath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show interactive prompt; caller must gate approval externally.`,
+			text: `Plan mode exited. Plan file kept at ${planPath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show interactive prompt; caller must gate approval externally. This turn ends now.`,
 		},
 	]);
 	expect(result.details).toEqual({
@@ -1845,7 +1918,7 @@ test("a valid headless proposal exits requiring external approval with the whole
 		planHash: createHash("sha256").update(planContents, "utf8").digest("hex"),
 		planModeExited: true,
 	});
-	expect(result.terminate).toBe(false);
+	expect(result.terminate).toBe(true);
 	// A caller that has to gate approval externally cannot do it on a clipped plan.
 	expect(result.content[0].text).toContain("tail of the plan");
 	expect(result.content[0].text).not.toContain("truncated");
@@ -1900,12 +1973,13 @@ test("exit_plan_mode describes review and mode-specific approval rather than unc
 	const tool = harness.tools.get("exit_plan_mode")!;
 	expect(tool.description).toMatch(/^Submit .*proposal.*review/);
 	expect(tool.description).toContain("readable, nonempty regular plan file");
-	expect(tool.description).toContain("bridge a review dialog (sdk-stdio)");
+	expect(tool.description).toContain("reviewPlan or clarify UI capability");
 	expect(tool.description).toContain("approval exits planning");
-	expect(tool.description).toContain("refining or dismissing keeps it active");
-	expect(tool.description).toContain("headless runs and RPC hosts without a review bridge");
-	expect(tool.description).toContain("exits without interactive approval");
-	expect(tool.description).toContain("caller must gate approval externally");
+	expect(tool.description).toContain("feedback or dismissal keeps it active");
+	expect(tool.description).toContain("Headless runs and RPC hosts without those capabilities");
+	expect(tool.description).toContain("end this turn");
+	expect(tool.description).toContain("caller must approve before execution");
+	expect(tool.description).toContain("keep plan mode active until the user turns it off");
 	expect(tool.promptSnippet).toMatch(/^Submit .*proposal.*review/);
 });
 
@@ -1922,7 +1996,7 @@ test("/plan with a task enables plan mode and sends the task as a user turn", as
 	await harness.commands.get("plan")!.handler("实现一个俄罗斯方块,简单版", context);
 
 	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
-	expect(harness.userMessages).toEqual([["实现一个俄罗斯方块,简单版", {}]]);
+	expect(harness.userMessages).toEqual([["实现一个俄罗斯方块,简单版", { expandPromptTemplates: true }]]);
 	// The turn must start under the plan-mode tool set, not the unrestricted one.
 	expect(harness.activeTools()).not.toContain("edit_file_unrestricted");
 	expect(harness.activeTools()).toContain("read_file");
@@ -1948,7 +2022,7 @@ test("/plan with a task queues as a follow-up while the agent is streaming", asy
 
 	await harness.commands.get("plan")!.handler("plan this too", harness.ctx({ isIdle: () => false }));
 
-	expect(harness.userMessages).toEqual([["plan this too", { deliverAs: "followUp" }]]);
+	expect(harness.userMessages).toEqual([["plan this too", { expandPromptTemplates: true, deliverAs: "followUp" }]]);
 });
 
 test("bare /plan still toggles plan mode and sends nothing", async () => {
@@ -2035,7 +2109,7 @@ test("/plan <task> announces plan mode on the turn that carries the task", async
 	const harness = createHarness({ cwd: makeWorkspace() });
 	createStepPlanExtension()(harness.api);
 	await harness.commands.get("plan")!.handler("plan the parser rewrite", harness.ctx());
-	expect(harness.userMessages).toEqual([["plan the parser rewrite", {}]]);
+	expect(harness.userMessages).toEqual([["plan the parser rewrite", { expandPromptTemplates: true }]]);
 	expect((await startTurn(harness))?.details.mode).toBe("plan");
 });
 
@@ -2167,6 +2241,235 @@ test.each(["session_start", "session_tree"] as const)(
 // ---------------------------------------------------------------------------
 // Runner-wired exit gating
 //
+test("an in-process rpc host uses its structured clarification bridge for plan approval", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const clarify = vi.fn(async (_questions: unknown, _signal?: AbortSignal) => ({
+		answers: [{ id: "plan-review", value: "execute", label: "Execute the plan", wasCustom: false }],
+		cancelled: false,
+	}));
+	const context = harness.ctx({ mode: "rpc", ui: { ...harness.ctx().ui, clarify } });
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Plan\n\nThe complete proposal.\n");
+	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as { details?: PlanReviewDetails };
+	expect(clarify).toHaveBeenCalledTimes(1);
+	expect(clarify.mock.calls[0]?.[0]).toMatchObject([{ reason: "# Plan\n\nThe complete proposal.\n" }]);
+	expect(result.details).toMatchObject({ outcome: "approved", approvalSource: "user", planModeExited: true });
+});
+
+test.each([{ action: "launch" }, {}, null])("an unrecognized host answer is unanswered: %j", async (answer) => {
+	const { harness, context } = await setupBridgedRpc({ answer: answer as unknown as PlanReviewResult });
+	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as {
+		details?: PlanReviewDetails;
+		terminate?: boolean;
+	};
+	expect(result.details).toMatchObject({ planModeExited: false, approvalSource: "external", bridgeFailed: true });
+	expect(result.terminate).toBe(true);
+});
+
+test("a changed proposal cannot exit plan mode using an earlier approval", async () => {
+	const cwd = makeWorkspace();
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	const harness = createHarness({
+		cwd,
+		reviewPlan: async () => {
+			writeFileSync(planPath, "# Replaced plan\nDifferent work\n");
+			return { action: "execute" };
+		},
+	});
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx({ mode: "rpc" });
+	await enterPlanMode(harness, context);
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Original plan\nOriginal work\n");
+	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as {
+		content: Array<{ text: string }>;
+		terminate?: boolean;
+	};
+	expect(lastPlanEntry(harness).enabled).toBe(true);
+	expect(result.content[0]?.text).toContain("changed");
+	expect(result.terminate).toBe(true);
+});
+
+test("a host that ignores its timeout cannot keep the plan tool waiting forever", async () => {
+	vi.useFakeTimers();
+	try {
+		const { harness, context } = await setupBridgedRpc({ answer: undefined });
+		context.ui.reviewPlan = () => new Promise(() => {});
+		const pending = runTool(harness, "exit_plan_mode", {}, context);
+		await vi.advanceTimersByTimeAsync(600_001);
+		const settled = await Promise.race([pending, Promise.resolve("still waiting")]);
+		expect(settled).not.toBe("still waiting");
+		expect(settled).toMatchObject({ terminate: true, details: { bridgeFailed: true, planModeExited: false } });
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+test("submission remains pending without exiting and the same snapshot can be reviewed again", async () => {
+	const { harness, context } = await setupBridgedRpc({ answer: undefined });
+	let answer!: (value: PlanReviewResult) => void;
+	context.ui.reviewPlan = () =>
+		new Promise((resolve) => {
+			answer = resolve;
+		});
+	const pending = runTool(harness, "exit_plan_mode", {}, context);
+	expect(getStepPlanState(harness.session.getBranch())).toMatchObject({
+		enabled: true,
+		review: { outcome: "pending" },
+	});
+	answer({ action: "dismissed" });
+	await pending;
+	expect(getStepPlanState(harness.session.getBranch())).toMatchObject({
+		enabled: true,
+		review: { outcome: "dismissed" },
+	});
+	context.ui.reviewPlan = async () => ({ action: "execute" });
+	const repeated = (await runTool(harness, "exit_plan_mode", {}, context)) as { details?: PlanReviewDetails };
+	expect(repeated.details).toMatchObject({ outcome: "approved", planModeExited: true });
+});
+
+test("only one review may be pending for the current plan mode", async () => {
+	const { harness, context } = await setupBridgedRpc({ answer: undefined });
+	let answer!: (value: PlanReviewResult) => void;
+	const review = vi.fn(
+		() =>
+			new Promise<PlanReviewResult>((resolve) => {
+				answer = resolve;
+			}),
+	);
+	context.ui.reviewPlan = review;
+	const first = runTool(harness, "exit_plan_mode", {}, context);
+	const second = (await runTool(harness, "exit_plan_mode", {}, context)) as {
+		terminate?: boolean;
+		content: Array<{ text: string }>;
+	};
+	expect(review).toHaveBeenCalledTimes(1);
+	expect(second.terminate).toBe(true);
+	expect(second.content[0]?.text).toContain("already pending");
+	answer({ action: "dismissed" });
+	await first;
+});
+
+test("an old review cannot unlock a new plan round after the user toggles modes", async () => {
+	const { harness, context } = await setupBridgedRpc({ answer: undefined });
+	let answer!: (value: PlanReviewResult) => void;
+	context.ui.reviewPlan = () =>
+		new Promise((resolve) => {
+			answer = resolve;
+		});
+	const pending = runTool(harness, "exit_plan_mode", {}, context);
+	await harness.commands.get("plan")!.handler("", context);
+	await harness.commands.get("plan")!.handler("", context);
+	const result = (await pending) as { terminate?: boolean; content: Array<{ text: string }> };
+	expect(result.terminate).toBe(true);
+	expect(result.content[0]?.text).toContain("old review cannot authorize");
+	answer({ action: "execute" });
+	await Promise.resolve();
+	expect(getStepPlanState(harness.session.getBranch())).toMatchObject({ enabled: true });
+});
+
+test("restoring an interrupted review keeps planning and records it as unanswered", async () => {
+	const harness = createHarness({
+		cwd: makeWorkspace(),
+		entries: [
+			{
+				type: "custom",
+				customType: "step-plan",
+				data: {
+					enabled: true,
+					planSource: "user",
+					review: { id: "old", planHash: "a".repeat(64), outcome: "pending" },
+				},
+			},
+		],
+	});
+	createStepPlanExtension()(harness.api);
+	await harness.emit({ type: "session_start", reason: "resume" }, harness.ctx());
+	expect(getStepPlanState(harness.session.getBranch())).toMatchObject({
+		enabled: true,
+		review: { outcome: "unanswered" },
+	});
+	expect(harness.customCalls()).toBe(0);
+});
+
+test("a TUI implementation error is not recorded as a user dismissal", async () => {
+	const { harness } = await setupBridgedRpc({ answer: undefined });
+	const tui = harness.ctx({
+		ui: {
+			...harness.ctx().ui,
+			reviewPlan: undefined,
+			custom: async () => {
+				throw new Error("renderer failed");
+			},
+		},
+	});
+	const result = await runTool(harness, "exit_plan_mode", {}, tui);
+	expect(result).toMatchObject({
+		isError: true,
+		stopTurn: true,
+		content: [{ text: expect.stringContaining("renderer failed") }],
+	});
+	expect(getStepPlanState(harness.session.getBranch())).toMatchObject({
+		enabled: true,
+		review: { outcome: "unanswered" },
+	});
+});
+
+test("an unavailable oversized proposal tells the model how to recover without exiting", async () => {
+	const { harness, context } = await setupBridgedRpc({
+		answer: { action: "unavailable", reason: "proposal_too_large" },
+	});
+	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as {
+		content: Array<{ text: string }>;
+		details?: PlanReviewDetails;
+	};
+	expect(result.content[0]?.text).toContain("Shorten the plan");
+	expect(result.details).toBeUndefined();
+	expect(getStepPlanState(harness.session.getBranch())).toMatchObject({ enabled: true });
+});
+
+test("a new /plan task supersedes an open review without disabling planning", async () => {
+	const { harness, context } = await setupBridgedRpc({ answer: undefined });
+	let answer!: (value: PlanReviewResult) => void;
+	let signal: AbortSignal | undefined;
+	context.ui.reviewPlan = (_request, options) =>
+		new Promise((resolve) => {
+			answer = resolve;
+			signal = options?.signal;
+		});
+	const pending = runTool(harness, "exit_plan_mode", {}, context);
+	try {
+		await harness.commands.get("plan")!.handler("a different task", context);
+		expect(signal?.aborted).toBe(true);
+		const result = await pending;
+		expect(result).toMatchObject({ stopTurn: true });
+		expect(getStepPlanState(harness.session.getBranch())).toMatchObject({ enabled: true });
+	} finally {
+		answer({ action: "execute" });
+		await pending;
+	}
+});
+
+test("a failed exit persist does not unlock the session or continue the turn", async () => {
+	const { harness, context } = await setupBridgedRpc({ answer: { action: "execute" } });
+	const append = harness.api.appendEntry;
+	harness.api.appendEntry = (type, data) => {
+		if (type === "step-plan" && data && typeof data === "object" && "enabled" in data && data.enabled === false) {
+			throw new Error("persist failed");
+		}
+		append(type, data);
+	};
+	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as { isError?: boolean; stopTurn?: boolean };
+	expect(result).toMatchObject({ isError: true, stopTurn: true });
+	context.ui.reviewPlan = async () => ({ action: "dismissed" });
+	const retry = (await runTool(harness, "exit_plan_mode", {}, context)) as { details?: PlanReviewDetails };
+	expect(retry.details).toMatchObject({ outcome: "dismissed", planModeExited: false });
+});
+
 // The harness above hand-builds `ctx.ui`, which bypasses ExtensionRunner's
 // wrapper layer. These cases drive the tool through a real runner, so the
 // capability probe (`ctx.ui.reviewPlan`) sees exactly what a production host
@@ -2326,7 +2629,7 @@ describe("exit_plan_mode through a real ExtensionRunner", () => {
 		};
 		expect(customCalls).toHaveLength(0);
 		expect(result.content[0]!.text).toContain("caller should approve externally");
-		expect(notifications.some((entry) => entry.message.includes("rpc child auto-approved"))).toBe(true);
+		expect(notifications.some((entry) => entry.message.includes("RPC host has no plan-review bridge"))).toBe(true);
 		expect(result.details).toMatchObject({
 			outcome: "external_approval_required",
 			approvalSource: "external",

@@ -33,6 +33,7 @@ import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetr
 import type { TraceHeaderPolicy } from "../step/telemetry-contract.ts";
 import { getThenRunCommand } from "../step/then-run.ts";
 import { applyStepTraceHeaders } from "../step/trace-headers.ts";
+import { planModeToolCallDecision } from "./step-plan.ts";
 import {
 	fetchStepModelEfforts,
 	registerStepProvider,
@@ -367,6 +368,14 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 					reason: "then_run requires run_command, which is not available in this session; retry without then_run",
 				};
 			}
+			// A user permission grant cannot override the plan-file restriction.
+			const planDecision = planModeToolCallDecision({
+				manager: ctx.sessionManager,
+				cwd: ctx.cwd,
+				toolName: event.toolName,
+				input: event.input,
+			});
+			if (planDecision?.block) return planDecision.block;
 			return await permissions.handleToolCall(event, ctx);
 		});
 

@@ -533,7 +533,14 @@ describe("StepStdioHost plan review bridge", () => {
 			payload,
 		});
 
-	async function setup(options: { planReviewGraceMs?: number; diagnostics?: (line: string) => void } = {}): Promise<{
+	async function setup(
+		options: {
+			planReviewGraceMs?: number;
+			diagnostics?: (line: string) => void;
+			planReview?: boolean;
+			failDialogWrite?: boolean;
+		} = {},
+	): Promise<{
 		input: PassThrough;
 		output: PassThrough;
 		frames: StepFrame[];
@@ -557,9 +564,23 @@ describe("StepStdioHost plan review bridge", () => {
 			output,
 			...(options.planReviewGraceMs === undefined ? {} : { planReviewGraceMs: options.planReviewGraceMs }),
 			...(options.diagnostics ? { diagnostics: options.diagnostics } : {}),
+			...(options.failDialogWrite
+				? {
+						writeFrame: (chunk: Buffer) => {
+							if (new StepStdioFrameDecoder().push(chunk)[0]?.method === "user_dialog.request")
+								throw new Error("write failed");
+							return output.write(chunk);
+						},
+					}
+				: {}),
 		});
 		const running = host.run();
-		input.write(envelope("init", "initialize", { protocolRange: { min: 1, max: 1 } }));
+		input.write(
+			envelope("init", "initialize", {
+				protocolRange: { min: 1, max: 1 },
+				capabilities: { planReview: options.planReview ?? true },
+			}),
+		);
 		// The UI context is bound with the session, on the host's bind queue.
 		await vi.waitFor(() => expect(session.bindExtensions).toHaveBeenCalledTimes(1));
 		const uiContext = vi.mocked(session.bindExtensions).mock.calls[0]![0].uiContext!;
@@ -572,6 +593,36 @@ describe("StepStdioHost plan review bridge", () => {
 		planHash: "a".repeat(64),
 		title: "Step has written up a plan and is ready to execute. Would you like to proceed?",
 	};
+
+	test("an unsupported peer never gains a blocking plan-review capability", async () => {
+		const { uiContext, host, running, waitFor } = await setup({ planReview: false });
+		await waitFor(1);
+		expect(uiContext.reviewPlan).toBeUndefined();
+		await host.close();
+		await running;
+	});
+
+	test("a failed request write settles the review immediately", async () => {
+		const diagnostics: string[] = [];
+		const { uiContext, host, running, waitFor } = await setup({
+			failDialogWrite: true,
+			diagnostics: (line) => diagnostics.push(line),
+		});
+		await waitFor(1);
+		expect(await uiContext.reviewPlan!(reviewRequest, { timeout: 600_000 })).toBeUndefined();
+		expect(diagnostics.some((line) => line.includes("write failed"))).toBe(true);
+		await host.close();
+		await running;
+	});
+
+	test("a closed host rejects a new review without creating a pending timeout", async () => {
+		const { uiContext, host, running, waitFor, frames } = await setup();
+		await waitFor(1);
+		await host.close();
+		await running;
+		expect(await uiContext.reviewPlan!(reviewRequest, { timeout: 600_000 })).toBeUndefined();
+		expect(frames).toHaveLength(1);
+	});
 
 	test("bridges the plan review with the snapshot and hash over user_dialog.request", async () => {
 		const { input, frames, host, running, uiContext, waitFor } = await setup();
@@ -663,26 +714,65 @@ describe("StepStdioHost plan review bridge", () => {
 	test("an unanswered review times out as no decision, and a late answer is dropped", async () => {
 		const { input, frames, host, running, uiContext, waitFor } = await setup({ planReviewGraceMs: 50 });
 		await waitFor(1);
-		const review = uiContext.reviewPlan!(reviewRequest, { timeout: 30 });
-		await waitFor(2);
-		expect(await review).toBeUndefined();
-		// The peer answers after the grace window: the pending entry is gone, so the
-		// late frame cannot overturn a decision the model already received.
-		input.write(
-			encodeStepStdioFrame({
-				protocol: "step-agent-sdk",
-				version: 1,
-				kind: "response",
-				id: "res-late",
-				replyTo: frames[1]!.id,
-				sessionId: "session-1",
-				payload: { action: "execute" },
-			}),
-		);
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		expect(await review).toBeUndefined();
-		await host.close();
-		await running;
+		vi.useFakeTimers();
+		try {
+			const review = uiContext.reviewPlan!(reviewRequest, { timeout: 30 });
+			await Promise.resolve();
+			expect(frames).toHaveLength(2);
+			await vi.advanceTimersByTimeAsync(81);
+			expect(await review).toBeUndefined();
+			expect(frames[2]).toMatchObject({
+				method: "user_dialog.cancelled",
+				payload: { requestId: frames[1]!.id, reason: "timeout" },
+			});
+			input.write(
+				encodeStepStdioFrame({
+					protocol: "step-agent-sdk",
+					version: 1,
+					kind: "response",
+					id: "late",
+					replyTo: frames[1]!.id,
+					payload: { action: "execute" },
+				}),
+			);
+			await Promise.resolve();
+			expect(await review).toBeUndefined();
+		} finally {
+			await host.close();
+			await running;
+			vi.useRealTimers();
+		}
+	});
+
+	test("the host accepts an answer inside its response grace window", async () => {
+		const { input, frames, host, running, uiContext, waitFor } = await setup({ planReviewGraceMs: 50 });
+		await waitFor(1);
+		vi.useFakeTimers();
+		try {
+			let settled = false;
+			const review = uiContext.reviewPlan!(reviewRequest, { timeout: 30 }).then((result) => {
+				settled = true;
+				return result;
+			});
+			await Promise.resolve();
+			await vi.advanceTimersByTimeAsync(40);
+			expect(settled).toBe(false);
+			input.write(
+				encodeStepStdioFrame({
+					protocol: "step-agent-sdk",
+					version: 1,
+					kind: "response",
+					id: "answer",
+					replyTo: frames[1]!.id,
+					payload: { action: "execute" },
+				}),
+			);
+			expect(await review).toEqual({ action: "execute" });
+		} finally {
+			await host.close();
+			await running;
+			vi.useRealTimers();
+		}
 	});
 
 	test("an aborted run cancels the review immediately", async () => {
@@ -726,11 +816,15 @@ describe("StepStdioHost plan review bridge", () => {
 				payload: { action: "execute" },
 			}),
 		);
-		await new Promise((resolve) => setTimeout(resolve, 20));
+		await Promise.resolve();
 		expect(await review).toBeUndefined();
 		// The host is still healthy: the unknown reply was ignored, nothing was
 		// written back, and the run closes cleanly.
-		expect(frames).toHaveLength(2);
+		expect(frames).toHaveLength(3);
+		expect(frames[2]).toMatchObject({
+			method: "user_dialog.cancelled",
+			payload: { requestId: frames[1]!.id, reason: "aborted" },
+		});
 		await host.close();
 		await running;
 	});
@@ -747,7 +841,10 @@ describe("StepStdioHost plan review bridge", () => {
 		};
 		// No request frame is written: the review resolves as no decision at once,
 		// and the peer is told why through a warning notification.
-		expect(await uiContext.reviewPlan!(oversized, { timeout: 600_000 })).toBeUndefined();
+		expect(await uiContext.reviewPlan!(oversized, { timeout: 600_000 })).toEqual({
+			action: "unavailable",
+			reason: "proposal_too_large",
+		});
 		await waitFor(2);
 		expect(frames[1]).toMatchObject({
 			kind: "event",

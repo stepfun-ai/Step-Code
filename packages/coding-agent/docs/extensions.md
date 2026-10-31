@@ -977,8 +977,18 @@ Current run mode: `"tui"`, `"rpc"`, `"json"`, or `"print"`. Use `ctx.mode === "t
 plan review to a real user. It carries the plan snapshot (`planFilePath`,
 `planContents`, `planHash`, `title`) and resolves the reviewer's decision, or
 `undefined` when no decision was reached — a host that cannot obtain one must
-leave the method undefined rather than auto-approve. Step's sdk-stdio host
-implements it; see [step-integration.md](step-integration.md#reverse-ui-requests-user_dialogrequest).
+leave the method undefined rather than auto-approve. The sdk-stdio host exposes
+it only after the peer opts in at initialization; see
+[step-integration.md](step-integration.md#reverse-ui-requests-user_dialogrequest).
+
+`ctx.ui.clarify` is the optional structured-question capability for embedded
+hosts. It receives normalized questions and an abort signal, and returns
+`{ answers, cancelled }`. The `clarify_user` tool uses this capability outside
+the TUI; without it a non-TUI host cannot collect answers. Plan review can reuse
+this channel with `intent.kind: "plan_review"`, the complete proposal in `reason`,
+and an explicit execute/keep-planning choice. Free-text answers are feedback,
+never execution approval. Both capabilities participate in user-wait lifecycle
+and settle promptly when their signal is aborted.
 
 ### ctx.cwd
 

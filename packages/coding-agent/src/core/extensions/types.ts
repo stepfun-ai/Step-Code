@@ -84,6 +84,7 @@ import type {
 	ReadToolInput,
 	WriteToolInput,
 } from "../tools/index.ts";
+import type { ClarificationQuestion, ClarificationResult } from "./clarification.ts";
 import type { UIDecisionRequest } from "./ui-decisions.ts";
 
 export type { ExecOptions, ExecResult } from "../exec.ts";
@@ -112,7 +113,9 @@ export type PlanReviewResult =
 	| { action: "execute" }
 	| { action: "feedback"; text: string }
 	/** Escaped or dismissed; plan mode stays on and the model gets no notes. */
-	| { action: "dismissed" };
+	| { action: "dismissed" }
+	/** The host rejected the proposal before displaying a review. */
+	| { action: "unavailable"; reason: "proposal_too_large" };
 
 // ============================================================================
 // UI Context
@@ -199,6 +202,8 @@ export type EditorFactory = (tui: TUI, theme: EditorTheme, keybindings: Keybindi
  * Each mode (interactive, RPC, print) provides its own implementation.
  */
 export interface ExtensionUIContext {
+	/** Collect a complete question set using a host-native UI, with cancellation support. */
+	clarify?(questions: ClarificationQuestion[], signal?: AbortSignal): Promise<ClarificationResult>;
 	/** Observe explicitly mirrorable decisions; unsubscribe does not dismiss the local dialog. */
 	onDecision?(listener: (request: UIDecisionRequest) => void): () => void;
 	/** Show a selector and return the user's choice. */
@@ -300,16 +305,14 @@ export interface ExtensionUIContext {
 	/**
 	 * Show a blocking plan review and return the reviewer's decision.
 	 *
-	 * The dedicated surface exists because the generic selector cannot carry a
-	 * proposal: a review must render the complete plan and bind the decision to
-	 * its hash. Hosts with a real user behind their UI bridge (Step's sdk-stdio
-	 * host, which forwards the review to the desktop app) implement this so the
-	 * tool waits for an actual decision; hosts that cannot obtain one leave it
-	 * undefined and the plan-mode tools keep their external handoff.
+	 * A native reviewer renders the complete snapshot. Hosts may instead provide
+	 * `clarify`, which receives the full plan as a structured question's reason
+	 * and plan-review presentation intent. A host with neither capability keeps
+	 * the external handoff; SDK peers explicitly opt in at initialization.
 	 *
-	 * Resolve `undefined` when no decision was reached — a cancelled or timed-out
-	 * bridge must never read as approval. The host owns its timeout; the caller
-	 * passes the budget through `opts.timeout` and may cancel via `opts.signal`.
+	 * Resolve `undefined` when no decision was reached. Honor `opts.signal` to
+	 * tear down the UI. The plan tool enforces its deadline independently of the
+	 * host's timeout, and an unavailable proposal is never an approval.
 	 */
 	reviewPlan?(request: PlanReviewRequest, opts?: ExtensionUIDialogOptions): Promise<PlanReviewResult | undefined>;
 

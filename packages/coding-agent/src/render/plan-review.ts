@@ -55,7 +55,7 @@ export interface PlanReviewDetails {
 	 * Set when a bridged review never reached a decision — the bridge timed out,
 	 * was aborted, errored, or answered with something unparseable. A user who
 	 * actively dismissed the review does not set it: someone decided, they just
-	 * did not approve. In-process dialogs never set it.
+	 * did not approve. Native TUI components never set it.
 	 */
 	bridgeFailed?: boolean;
 }
@@ -73,6 +73,8 @@ export interface PlanReviewOptions {
 	planContents: string;
 	theme: Theme;
 	onResult: (result: PlanReviewResult) => void;
+	/** Cancel the native review when its originating run or mode is invalidated. */
+	signal?: AbortSignal;
 	/** Called whenever the rendered content changes so the host can repaint. */
 	onChange?: () => void;
 }
@@ -87,6 +89,8 @@ export class PlanReviewComponent implements Component, Focusable {
 	private readonly planContents: string;
 	private readonly theme: Theme;
 	private readonly onResult: (result: PlanReviewResult) => void;
+	private readonly signal: AbortSignal | undefined;
+	private readonly onAbort = () => this.onResult({ action: "dismissed" });
 	private readonly onChange: (() => void) | undefined;
 	private readonly input: Input;
 	/** The plan, rendered as markdown rather than a flat wall of muted text. */
@@ -105,6 +109,13 @@ export class PlanReviewComponent implements Component, Focusable {
 		// The row's numbered head is drawn by renderOptionRow; the label is a
 		// placeholder that disappears once the user types, not part of the value.
 		this.input = new Input({ prompt: "" });
+		this.signal = options.signal;
+		if (this.signal?.aborted) this.onAbort();
+		else this.signal?.addEventListener("abort", this.onAbort, { once: true });
+	}
+
+	dispose(): void {
+		this.signal?.removeEventListener("abort", this.onAbort);
 	}
 
 	get focused(): boolean {
@@ -318,7 +329,9 @@ class PlanReviewCard implements Component {
 	}
 
 	render(width: number): string[] {
-		const summary = OUTCOME_SUMMARIES[this.details.outcome];
+		const summary = this.details.bridgeFailed
+			? { marker: "!", color: "warning" as const, text: "Review unanswered — still planning" }
+			: OUTCOME_SUMMARIES[this.details.outcome];
 		const rows = [
 			`${this.theme.fg(summary.color, `${summary.marker} ${summary.text}`)} ${this.theme.fg("dim", this.details.planFilePath)}`,
 		];

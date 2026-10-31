@@ -21,6 +21,7 @@ import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
+	PlanReviewRequest,
 	PlanReviewResult,
 	WorkingIndicatorOptions,
 } from "../core/extensions/types.ts";
@@ -149,6 +150,7 @@ export class StepStdioHost {
 	#nextId = 0;
 	#sequence = 0;
 	#closed = false;
+	#planReviewEnabled = false;
 	#closePromise: Promise<void> | undefined;
 	#resolveClosed!: () => void;
 	readonly #closedPromise = new Promise<void>((resolve) => {
@@ -403,6 +405,11 @@ export class StepStdioHost {
 	#initialized = false;
 	#initialize(frame: StepFrame): void {
 		const payload = asRecord(frame.payload);
+		const capabilities = asRecord(payload.capabilities);
+		if (capabilities.planReview !== undefined && typeof capabilities.planReview !== "boolean") {
+			this.#respondError(frame, "CONFIG_INVALID", new Error("capabilities.planReview must be a boolean"));
+			return;
+		}
 		const range = asRecord(payload.protocolRange);
 		const min = numberOr(range.min, 1);
 		const max = numberOr(range.max, 1);
@@ -415,6 +422,7 @@ export class StepStdioHost {
 			void this.close(1);
 			return;
 		}
+		this.#planReviewEnabled = capabilities.planReview === true;
 		this.#initialized = true;
 		this.#respond(frame, {
 			runtimeVersion: this.#options.runtimeVersion ?? "step",
@@ -1121,7 +1129,7 @@ export class StepStdioHost {
 		});
 	}
 
-	#emitEvent(method: string, payload: unknown): void {
+	#emitEvent(method: string, payload: unknown, sessionId?: string): void {
 		const query = this.#activeQuery;
 		this.#write({
 			protocol: STEP_PROTOCOL_NAME,
@@ -1129,7 +1137,7 @@ export class StepStdioHost {
 			kind: "event",
 			id: `evt_${++this.#nextId}`,
 			method,
-			...(query ? { sessionId: query.sessionId } : {}),
+			...(sessionId || query ? { sessionId: sessionId ?? query!.sessionId } : {}),
 			sequence: ++this.#sequence,
 			payload: jsonSafe(payload),
 		});
@@ -1230,46 +1238,40 @@ export class StepStdioHost {
 			setHeader: () => {},
 			setTitle: (title) => this.#emitEvent("ui.title", { title }),
 			custom: async () => undefined as never,
-			// A plan review is the one dialog that carries a proposal: the peer must
-			// render the complete plan and bind its decision to the hash, so it needs
-			// its own request shape rather than the select/confirm/input kinds. The
-			// desktop app answers it; a peer that cannot decide must let it time out,
-			// which the tools treat as "stay in plan mode", never as approval.
-			reviewPlan: async (request, opts) => {
-				const budget = opts?.timeout ?? 60_000;
-				// A plan that cannot fit a frame cannot be reviewed: fail now instead of
-				// holding the turn until the budget expires. The margin covers the
-				// frame envelope around the payload.
-				if (Buffer.byteLength(JSON.stringify(request), "utf8") > STEP_MAX_FRAME_BYTES - 4096) {
-					this.#diagnostics(
-						`[sdk-stdio] plan review for ${request.planFilePath} exceeds the ${STEP_MAX_FRAME_BYTES}-byte frame limit`,
-					);
-					this.#emitEvent("user_notification", {
-						message: "The plan is too large to send for review; shorten it and call exit_plan_mode again.",
-						type: "warning",
-					});
-					return undefined;
-				}
-				const frame = await this.#reverseRequest(
-					"user_dialog.request",
-					{
-						kind: "plan_review",
-						title: request.title,
-						planFilePath: request.planFilePath,
-						planContents: request.planContents,
-						planHash: request.planHash,
-						timeoutMs: budget,
-					},
-					budget + this.#planReviewGraceMs,
-					sessionId,
-					opts?.signal,
-				);
-				if (frame === undefined) {
-					this.#diagnostics(
-						`[sdk-stdio] plan review for ${request.planFilePath} was not answered (cancelled or timed out after ${budget}ms); staying in plan mode`,
-					);
-				}
-				return parsePlanReviewResponse(frame);
+			// Only peers that explicitly advertise a plan reviewer expose this capability.
+			get reviewPlan() {
+				return host.#planReviewEnabled
+					? async (
+							request: PlanReviewRequest,
+							opts?: ExtensionUIDialogOptions,
+						): Promise<PlanReviewResult | undefined> => {
+							const budget = opts?.timeout ?? 60_000;
+							if (Buffer.byteLength(JSON.stringify(request), "utf8") > STEP_MAX_FRAME_BYTES - 4096) {
+								host.#diagnostics(
+									`[sdk-stdio] plan review for ${request.planFilePath} exceeds the ${STEP_MAX_FRAME_BYTES}-byte frame limit`,
+								);
+								host.#emitEvent("user_notification", {
+									message: "The proposal is too large for the review channel. Planning remains active.",
+									type: "warning",
+								});
+								return { action: "unavailable", reason: "proposal_too_large" };
+							}
+							const frame = await host.#reverseRequest(
+								"user_dialog.request",
+								{ kind: "plan_review", ...request, timeoutMs: budget },
+								budget + host.#planReviewGraceMs,
+								sessionId,
+								opts?.signal,
+							);
+							const result = parsePlanReviewResponse(frame);
+							if (result === undefined) {
+								host.#diagnostics(
+									`[sdk-stdio] plan review for ${request.planFilePath} was not answered (abort, timeout, transport failure, or invalid response); staying in plan mode`,
+								);
+							}
+							return result;
+						}
+					: undefined;
 			},
 			pasteToEditor: (text) => this.#emitEvent("ui.editor_text", { text }),
 			setEditorText: (text) => this.#emitEvent("ui.editor_text", { text }),
@@ -1296,6 +1298,7 @@ export class StepStdioHost {
 		sessionId = this.#session.sessionId,
 		signal?: AbortSignal,
 	): Promise<StepFrame | undefined> {
+		if (this.#closed) return Promise.resolve(undefined);
 		const id = `req_${++this.#nextId}`;
 		return new Promise((resolve) => {
 			// An already-aborted signal never fires "abort" again, so a listener
@@ -1315,19 +1318,28 @@ export class StepStdioHost {
 				signal?.removeEventListener("abort", onAbort);
 				resolve(frame);
 			};
-			const onAbort = () => settle(undefined);
-			const timer = setTimeout(() => settle(undefined), Math.max(1, timeoutMs));
+			const abandon = (reason: "aborted" | "timeout"): void => {
+				if (settled) return;
+				settle(undefined);
+				if (method === "user_dialog.request")
+					this.#emitEvent("user_dialog.cancelled", { requestId: id, reason }, sessionId);
+			};
+			const onAbort = () => abandon("aborted");
+			const timer = setTimeout(() => abandon("timeout"), Math.max(1, timeoutMs));
 			this.#pendingRequests.set(id, { resolve: settle, timer });
 			signal?.addEventListener("abort", onAbort, { once: true });
-			this.#write({
-				protocol: STEP_PROTOCOL_NAME,
-				version: STEP_PROTOCOL_VERSION,
-				kind: "request",
-				id,
-				method,
-				sessionId,
-				payload: jsonSafe(payload),
-			});
+			if (
+				!this.#write({
+					protocol: STEP_PROTOCOL_NAME,
+					version: STEP_PROTOCOL_VERSION,
+					kind: "request",
+					id,
+					method,
+					sessionId,
+					payload: jsonSafe(payload),
+				})
+			)
+				settle(undefined);
 		});
 	}
 
@@ -1355,24 +1367,29 @@ export class StepStdioHost {
 		});
 	}
 
-	#write(frame: StepFrame): void {
-		if (this.#closed) return;
+	#write(frame: StepFrame): boolean {
+		if (this.#closed) return false;
 		let encoded: Buffer;
 		try {
 			encoded = encodeStepStdioFrame(frame, STEP_MAX_FRAME_BYTES);
 		} catch (error) {
 			this.#report(error);
-			return;
+			return false;
 		}
 		const output = this.#options.output ?? process.stdout;
 		const writer = this.#options.writeFrame ?? ((chunk: Buffer) => output.write(chunk));
-		this.#writeTail = this.#writeTail.then(async () => {
-			const accepted = writer(encoded);
-			if (accepted === false) {
-				await once(output as NodeJS.EventEmitter, "drain");
-			}
-		});
-		void this.#writeTail.catch((error) => this.#report(error));
+		this.#writeTail = this.#writeTail
+			.then(async () => {
+				const accepted = writer(encoded);
+				if (accepted === false) {
+					await once(output as NodeJS.EventEmitter, "drain");
+				}
+			})
+			.catch((error) => {
+				this.#report(error);
+				if (frame.kind === "request") this.#pendingRequests.get(frame.id)?.resolve(undefined);
+			});
+		return true;
 	}
 
 	async #shutdown(code: number): Promise<void> {
@@ -1558,7 +1575,9 @@ function requiresSdkApproval(toolName: string): boolean {
 }
 
 function isReadOnlyTool(toolName: string): boolean {
-	return new Set(["read", "grep", "find", "ls", "get_file", "search_files"]).has(toolName);
+	return new Set(["read", "grep", "find", "ls", "get_file", "search_files", "clarify_user", "exit_plan_mode"]).has(
+		toolName,
+	);
 }
 
 function isEditTool(toolName: string): boolean {
@@ -1601,11 +1620,10 @@ function modelReference(model: Model<any> | undefined): string {
 /**
  * Read a plan-review answer.
  *
- * Only an explicit `execute` or a non-empty `feedback` counts as a decision.
- * Everything else — `dismissed`, `cancelled`, an empty note, a malformed payload,
- * or no response frame at all (timeout or abort) — resolves `undefined`, which the
- * plan-mode tools treat as "no decision": plan mode stays on and the turn ends.
- * Approval is never inferred from an ambiguous answer.
+ * `execute`, non-empty `feedback`, and an explicit `dismissed` are decisions.
+ * A `cancelled` frame, an empty note, a malformed payload, an error frame, or no
+ * frame at all (timeout or abort) resolves `undefined`: the tools keep plan mode
+ * on, record the bridge failure, and end the turn. Approval is never inferred.
  */
 function parsePlanReviewResponse(frame: StepFrame | undefined): PlanReviewResult | undefined {
 	if (frame?.error !== undefined) return undefined;
@@ -1618,6 +1636,11 @@ function parsePlanReviewResponse(frame: StepFrame | undefined): PlanReviewResult
 	// empty answer: the tools keep the two apart so an active "no" is not recorded
 	// as a bridge that never reached anyone.
 	if (value.action === "dismissed") return { action: "dismissed" };
+	// The host answers this itself for an oversized proposal, but a peer may also
+	// report that it cannot display the snapshot; keep that actionable.
+	if (value.action === "unavailable" && value.reason === "proposal_too_large") {
+		return { action: "unavailable", reason: "proposal_too_large" };
+	}
 	return undefined;
 }
 

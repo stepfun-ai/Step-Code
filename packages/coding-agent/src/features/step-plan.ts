@@ -14,7 +14,12 @@
 import { existsSync } from "node:fs";
 import type { AgentMessage } from "@step-harness/agent-core";
 import type { EventBus } from "../core/event-bus.ts";
-import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ExtensionFactory,
+	ToolCallEventResult,
+} from "../core/extensions/types.ts";
 import { resolveToCwd } from "../core/tools/path-utils.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 import { type LegacyPlanTodoFields, migrateLegacyPlanTodos } from "./plan-mode-migration.ts";
@@ -24,6 +29,7 @@ import {
 	registerPlanModeTools,
 	type StepPlanExitOutcome,
 	type StepPlanModeController,
+	type StepPlanReviewState,
 } from "./plan-mode-tools.ts";
 
 const PLAN_TOOLS = [
@@ -60,6 +66,7 @@ interface PlanState {
 	planFilePath?: string;
 	/** "user" for /plan or --plan; "agent" only in sessions from the enter_plan_mode era. */
 	planSource?: StepPlanSource;
+	review?: StepPlanReviewState;
 }
 
 /** The mode a collaboration-mode block told the model about. */
@@ -116,7 +123,7 @@ function announcementFor(
 			details,
 		};
 	}
-	if (recorded?.mode !== "plan") return undefined;
+	if (recorded?.mode !== "plan" || visible?.mode === "default") return undefined;
 	const details: PlanModeAnnouncement = { mode: "default" };
 	return { customType: PLAN_MODE_MESSAGE_TYPE, content: buildDefaultModePrompt(), display: false, details };
 }
@@ -136,6 +143,103 @@ export function getStepPlanMode(manager: object): string {
 	return value === undefined ? "Unknown" : value ? "Plan" : "Default";
 }
 
+/** Plan state read from the selected branch, including before the extension restores. */
+export interface StepPlanState {
+	enabled: boolean;
+	planFilePath?: string;
+	planSource: StepPlanSource;
+	review?: StepPlanReviewState;
+}
+
+function readPlanReviewState(value: unknown): StepPlanReviewState | undefined {
+	if (
+		!value ||
+		typeof value !== "object" ||
+		!("id" in value) ||
+		typeof value.id !== "string" ||
+		!("planHash" in value) ||
+		typeof value.planHash !== "string" ||
+		!("outcome" in value)
+	)
+		return undefined;
+	const outcome = value.outcome;
+	if (
+		outcome !== "pending" &&
+		outcome !== "approved" &&
+		outcome !== "feedback" &&
+		outcome !== "dismissed" &&
+		outcome !== "external_approval_required" &&
+		outcome !== "unanswered" &&
+		outcome !== "superseded"
+	)
+		return undefined;
+	return { id: value.id, planHash: value.planHash, outcome };
+}
+
+export function getStepPlanState(
+	entries: readonly { type: string; customType?: string; data?: unknown }[],
+): StepPlanState | undefined {
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index]!;
+		if (entry.type !== "custom" || entry.customType !== "step-plan") continue;
+		const data = entry.data;
+		if (!data || typeof data !== "object" || !("enabled" in data) || typeof data.enabled !== "boolean") continue;
+		const source = "planSource" in data ? data.planSource : undefined;
+		const review = readPlanReviewState("review" in data ? data.review : undefined);
+		return {
+			enabled: data.enabled,
+			...(review ? { review } : {}),
+			planSource: source === "user" || source === "agent" ? source : "unknown",
+			...("planFilePath" in data && typeof data.planFilePath === "string"
+				? { planFilePath: data.planFilePath }
+				: {}),
+		};
+	}
+	return undefined;
+}
+
+export interface PlanModeToolCallDecision {
+	planFilePath: string;
+	targetPath: string;
+	targetsPlanFile: boolean;
+	block?: ToolCallEventResult;
+}
+
+/** One plan-file boundary, shared by permission preflight and the plan guard. */
+export function planModeToolCallDecision(options: {
+	manager: { getBranch(): readonly { type: string; customType?: string; data?: unknown }[]; getSessionId(): string };
+	cwd: string;
+	toolName: string;
+	input: unknown;
+}): PlanModeToolCallDecision | undefined {
+	if (!MUTATING_TOOLS.has(options.toolName)) return undefined;
+	const state = getStepPlanState(options.manager.getBranch());
+	// A failed persist or a non-recording embedder must not remove a live restriction.
+	if (!state?.enabled && publishedPlanModes.get(options.manager) !== true) return undefined;
+	const planFilePath = state?.planFilePath ?? getPlanFilePath(options.manager.getSessionId(), options.cwd);
+	const input = options.input;
+	const targetPath =
+		input && typeof input === "object" && "path" in input && typeof input.path === "string" ? input.path : "";
+	if (targetPath && resolveToCwd(targetPath, options.cwd) === resolveToCwd(planFilePath, options.cwd)) {
+		return { planFilePath, targetPath, targetsPlanFile: true };
+	}
+	return {
+		planFilePath,
+		targetPath,
+		targetsPlanFile: false,
+		block: {
+			block: true,
+			reason: [
+				`Plan mode is active, so this file mutation was blocked. Only the plan file may be written: ${planFilePath}`,
+				`Target: ${targetPath || "(no path provided)"}`,
+				"Plan mode is a permission restriction, not a missing tool: do not retry this edit or rephrase the path.",
+				"run_command keeps its normal permissions, but stay read-only while planning: do not use it to write or patch files.",
+				"Write the implementation proposal to the plan file with write_file, then call exit_plan_mode to submit it for review.",
+			].join("\n"),
+		},
+	};
+}
+
 /**
  * Status-bar chip: "Planning (user|agent|unknown)" while plan mode is on,
  * cleared (normal) otherwise.
@@ -143,7 +247,8 @@ export function getStepPlanMode(manager: object): string {
 function updateStatus(ctx: ExtensionContext, enabled: boolean, planSource: StepPlanSource | undefined): void {
 	publishedPlanModes.set(ctx.sessionManager, enabled);
 	if (enabled) {
-		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", `Planning (${planSource ?? "unknown"})`));
+		const label = `Planning (${planSource ?? "unknown"})`;
+		ctx.ui.setStatus("plan-mode", ctx.ui.theme ? ctx.ui.theme.fg("warning", label) : label);
 	} else {
 		ctx.ui.setStatus("plan-mode", undefined);
 	}
@@ -181,6 +286,14 @@ export const createStepPlanExtension =
 		let planModeAddedTools: string[] | undefined;
 		let planFilePath: string | undefined;
 		let planSource: StepPlanSource | undefined;
+		let review: StepPlanReviewState | undefined;
+		let reviewController: AbortController | undefined;
+		const invalidateReview = (): void => {
+			const controller = reviewController;
+			reviewController = undefined;
+			if (controller && review?.outcome === "pending") review = { ...review, outcome: "superseded" };
+			controller?.abort();
+		};
 		// The event bus is optional so minimal embedder/test harnesses that stub
 		// ExtensionAPI keep working without one.
 		const events = (pi as { events?: EventBus }).events;
@@ -194,12 +307,16 @@ export const createStepPlanExtension =
 		 * Ordinary entries never carry a snapshot — this build appends tools
 		 * instead of replacing the list.
 		 */
-		const persistPlanState = (carriesLegacyTools?: string[]): void => {
+		const persistPlanState = (
+			carriesLegacyTools?: string[],
+			nextState?: Pick<PlanState, "enabled" | "planSource">,
+		): void => {
 			pi.appendEntry("step-plan", {
 				version: 2,
-				enabled,
+				enabled: nextState?.enabled ?? enabled,
 				planFilePath,
-				planSource,
+				planSource: nextState ? nextState.planSource : planSource,
+				...(review ? { review } : {}),
 				...(carriesLegacyTools ? { toolsBeforePlanMode: carriesLegacyTools } : {}),
 			});
 		};
@@ -240,7 +357,10 @@ export const createStepPlanExtension =
 		const resolvePlanFilePath = (ctx: ExtensionContext): string =>
 			planFilePath ?? getPlanFilePath(ctx.sessionManager.getSessionId(), ctx.cwd);
 		const enter = (ctx: ExtensionContext): void => {
+			invalidateReview();
+			review = undefined;
 			enabled = true;
+			publishedPlanModes.set(ctx.sessionManager, true);
 			planSource = "user";
 			planFilePath = resolvePlanFilePath(ctx);
 			enable();
@@ -253,15 +373,40 @@ export const createStepPlanExtension =
 			);
 		};
 		const exit = (outcome: StepPlanExitOutcome, ctx: ExtensionContext): void => {
+			if (!enabled) return;
+			invalidateReview();
+			// Commit the mode change before removing the live restriction.
+			persistPlanState(undefined, { enabled: false });
 			recordPlanExit(options.telemetry, planSource, outcome);
 			enabled = false;
 			planSource = undefined;
 			restoreTools();
-			persistPlanState();
 			updateStatus(ctx, enabled, planSource);
 		};
 		const planModeController: StepPlanModeController = {
 			isPlanModeActive: () => enabled,
+			beginReview: (id, planHash) => {
+				if (!enabled || reviewController) return undefined;
+				const controller = new AbortController();
+				reviewController = controller;
+				review = { id, planHash, outcome: "pending" };
+				try {
+					persistPlanState();
+				} catch (error) {
+					invalidateReview();
+					throw error;
+				}
+				return {
+					signal: controller.signal,
+					settle: (outcome) => {
+						if (!enabled || reviewController !== controller) return false;
+						reviewController = undefined;
+						review = { id, planHash, outcome };
+						persistPlanState();
+						return true;
+					},
+				};
+			},
 			exitPlanMode: exit,
 			resolvePlanFilePath,
 		};
@@ -289,34 +434,29 @@ export const createStepPlanExtension =
 				// restriction has already been applied by enter(), so the turn starts
 				// with the plan-mode tool set. Slash commands run even mid-stream; queue
 				// the task behind the current turn in that case instead of throwing.
+				if (enabled && reviewController) {
+					invalidateReview();
+					persistPlanState();
+				}
 				if (!enabled) enter(ctx);
-				pi.sendUserMessage(prompt, ctx.isIdle() ? {} : { deliverAs: "followUp" });
+				pi.sendUserMessage(prompt, {
+					expandPromptTemplates: true,
+					...(ctx.isIdle() ? {} : { deliverAs: "followUp" as const }),
+				});
 			},
 		});
 		registerPlanModeTools(pi, planModeController);
 		pi.on("tool_call", async (event, ctx) => {
-			if (!enabled || !MUTATING_TOOLS.has(event.toolName)) return;
-			const planPath = resolvePlanFilePath(ctx);
-			const toolInput = (event.input ?? {}) as Record<string, unknown>;
-			const targetPath = typeof toolInput.path === "string" ? toolInput.path : "";
-			// Resolve exactly as the file tools do (`~`, `@`, unicode spaces), so an
-			// allowed target cannot land somewhere else than the guard checked.
-			if (targetPath && resolveToCwd(targetPath, ctx.cwd) === resolveToCwd(planPath, ctx.cwd)) {
-				// Allowed: the mutation targets the plan file itself. This runs
-				// before the write lands, so a missing file marks the plan's creation.
-				recordPlanUpdate(options.telemetry, planSource, !existsSync(planPath));
-				return;
+			const decision = planModeToolCallDecision({
+				manager: ctx.sessionManager,
+				cwd: ctx.cwd,
+				toolName: event.toolName,
+				input: event.input,
+			});
+			if (decision?.targetsPlanFile) {
+				recordPlanUpdate(options.telemetry, planSource, !existsSync(decision.planFilePath));
 			}
-			return {
-				block: true,
-				reason: [
-					`Plan mode is active, so this file mutation was blocked. Only the plan file may be written: ${planPath}`,
-					`Target: ${targetPath || "(no path provided)"}`,
-					"Plan mode is a permission restriction, not a missing tool: do not retry this edit or rephrase the path.",
-					"run_command keeps its normal permissions, but stay read-only while planning: do not use it to write or patch files.",
-					`Write the implementation proposal to the plan file with write_file, then call exit_plan_mode to submit it for review.`,
-				].join("\n"),
-			};
+			return decision?.block;
 		});
 
 		// Announce mode changes by appending a collaboration-mode block, never by
@@ -359,6 +499,7 @@ export const createStepPlanExtension =
 		});
 
 		const restorePlanState = (ctx: ExtensionContext, startWithPlan = false): void => {
+			invalidateReview();
 			// Legacy tool lists predate these capabilities. Preserve only the ones
 			// already active; ordinary tools still follow the saved branch selection.
 			const activePlanTaskTools = pi.getActiveTools().filter((name) => PLAN_TASK_TOOLS.has(name));
@@ -379,9 +520,13 @@ export const createStepPlanExtension =
 			// own entries only reach here after carrying a legacy list forward.
 			const governingEntry = planStates.find((state) => state?.enabled || state?.toolsBeforePlanMode !== undefined);
 			const legacyBaseline = governingEntry?.toolsBeforePlanMode;
-			enabled = restoredPlanState?.enabled ?? false;
-			planFilePath = restoredPlanState?.planFilePath;
-			planSource = enabled ? (restoredPlanState?.planSource ?? "unknown") : undefined;
+			const state = getStepPlanState(ctx.sessionManager.getBranch());
+			enabled = state?.enabled ?? false;
+			planFilePath = state?.planFilePath;
+			planSource = enabled ? (state?.planSource ?? "unknown") : undefined;
+			review = state?.review;
+			const recoveredReview = review?.outcome === "pending";
+			if (review && recoveredReview) review = { ...review, outcome: "unanswered" };
 			if (legacyBaseline) {
 				const baseline = unique([...legacyBaseline, ...activePlanTaskTools]);
 				if (!sameToolOrder(pi.getActiveTools(), baseline)) pi.setActiveTools(baseline);
@@ -398,6 +543,7 @@ export const createStepPlanExtension =
 					persistMigratedPlanState: () => persistPlanState(legacyBaseline),
 				});
 			}
+			if (recoveredReview) persistPlanState(legacyBaseline);
 			if (startWithPlan && !enabled) {
 				enter(ctx);
 				return;
@@ -408,6 +554,7 @@ export const createStepPlanExtension =
 			restorePlanState(ctx, event.reason === "startup" && pi.getFlag("plan") === true);
 		});
 		pi.on("session_tree", async (_event, ctx) => restorePlanState(ctx));
+		pi.on("session_shutdown", () => invalidateReview());
 	};
 
 export const stepPlanExtension = createStepPlanExtension();

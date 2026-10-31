@@ -67,6 +67,14 @@ it("keeps the request tool block and system prompt byte-identical across a plan-
 	workspace = harness.tempDir;
 
 	try {
+		// Continuation here follows an actual approval, not an external handoff.
+		await harness.session.bindExtensions({
+			mode: "rpc",
+			uiContext: {
+				...harness.session.extensionRunner.getUIContext(),
+				reviewPlan: async () => ({ action: "execute" }),
+			},
+		});
 		// The shape of an ordinary Step profile: every plan tool is already active,
 		// so plan mode has nothing to add.
 		harness.session.setActiveToolsByName([...PLAN_TOOLS, "find_tools", "exit_plan_mode"]);

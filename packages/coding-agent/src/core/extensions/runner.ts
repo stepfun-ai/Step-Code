@@ -6,6 +6,7 @@ import type { AgentMessage } from "@step-harness/agent-core";
 import type { KeyId } from "@step-harness/pi-tui";
 import type { ImageContent, Model, Provider, ProviderHeaders } from "@step-harness/providers";
 import { type Theme, theme } from "../../theme/theme.ts";
+import { raceWithAbortSignal } from "../../utils/abort.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
 import type { KeybindingsConfig } from "../keybindings.ts";
 import type { ModelRegistry } from "../model-registry.ts";
@@ -447,8 +448,18 @@ export class ExtensionRunner {
 	}
 
 	private wrapUIPromptContext(ui: ExtensionUIContext): ExtensionUIContext {
+		const runner = this;
+		const clarify = ui.clarify;
 		return {
 			...ui,
+			...(clarify
+				? {
+						clarify: (questions: Parameters<typeof clarify>[0], signal?: AbortSignal) =>
+							this.withUIPrompt("custom", undefined, () =>
+								raceWithAbortSignal(clarify.call(ui, questions, signal), signal),
+							),
+					}
+				: {}),
 			onDecision: (listener) => this.uiDecisions.subscribe(listener),
 			select: (title, options, opts) =>
 				this.withUIPrompt("select", title, () =>
@@ -474,18 +485,17 @@ export class ExtensionRunner {
 				this.withUIPrompt("input", title, () => ui.input(title, placeholder, opts)),
 			editor: (title, prefill) => this.withUIPrompt("editor", title, () => ui.editor(title, prefill)),
 			custom: (factory, options) => this.withUIPrompt("custom", undefined, () => ui.custom(factory, options)),
-			// Wrapped explicitly rather than inherited through the spread: every
-			// blocking user-facing prompt fires the same lifecycle events, and a
-			// future field-by-field rebuild must not silently drop this one. The
-			// conditional spread keeps the wrapper a true capability signal: tools
-			// probe `ui.reviewPlan` to tell a bridged host from an in-process one, so
-			// a host without a bridge must not gain a stub that resolves undefined.
-			...(ui.reviewPlan
-				? {
-						reviewPlan: (request: PlanReviewRequest, opts?: ExtensionUIDialogOptions) =>
-							this.withUIPrompt("plan_review", request.title, () => ui.reviewPlan!(request, opts)),
-					}
-				: {}),
+			// SDK capabilities may be negotiated after initial session binding.
+			// Preserve the host's current value instead of snapshotting it in a spread.
+			get reviewPlan() {
+				const reviewPlan = ui.reviewPlan;
+				return reviewPlan
+					? (request: PlanReviewRequest, opts?: ExtensionUIDialogOptions) =>
+							runner.withUIPrompt("plan_review", request.title, () =>
+								raceWithAbortSignal(reviewPlan.call(ui, request, opts), opts?.signal),
+							)
+					: undefined;
+			},
 		};
 	}
 

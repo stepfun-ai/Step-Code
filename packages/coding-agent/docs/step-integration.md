@@ -326,10 +326,17 @@ An unanswered or malformed request resolves to the kind's default value
 
 ### `kind: "plan_review"`
 
-The plan review is the one dialog that carries a proposal, so it has its own
-kind. The host sends it when `exit_plan_mode` runs in an RPC session whose UI
-bridge reaches a real user (the desktop app); the handshake advertises the
-`plan-review` capability so the peer knows the host can send it.
+The host advertises `plan-review`; a peer opts into receiving these requests in
+its **initialize request**:
+
+```json
+{ "protocolRange": { "min": 1, "max": 1 }, "capabilities": { "planReview": true } }
+```
+
+Without this opt-in, `ctx.ui.reviewPlan` remains undefined. Older peers get an
+external handoff that ends the turn immediately, not a ten-minute wait for an
+unsupported request. Embedded library hosts are separate from SDK stdio: they
+can implement `ctx.ui.reviewPlan` or reuse `ctx.ui.clarify` directly.
 
 Request payload:
 
@@ -345,10 +352,10 @@ Request payload:
 ```
 
 `planHash` is the SHA-256 digest of `planContents` encoded as UTF-8; the peer
-renders `planContents` and binds its decision to the hash, so a plan edited while
-the review is open cannot be approved by a stale click. `timeoutMs` is the
-decision budget; the host waits a further 10 seconds of grace before declaring
-the request unanswered.
+renders the exact snapshot. The tool rereads the file before accepting execution;
+a changed or unreadable proposal cannot be approved by a stale click. `timeoutMs`
+is the decision budget enforced by the tool. The raw host API adds ten seconds
+of response grace as a backstop, but that does not extend the tool's deadline.
 
 Response payload — one of:
 
@@ -358,11 +365,20 @@ Response payload — one of:
 { "action": "dismissed" }
 ```
 
-Only `execute` and a non-empty `feedback` count as decisions. `dismissed`,
-`{ "cancelled": true }`, an empty or malformed payload, and an unanswered request
-all resolve to "no decision": the session stays in plan mode, the tool batch
-terminates, and execution does not start. A peer that cannot show the review
-should let it time out; the host logs the outcome to its diagnostics stream.
+`execute`, non-empty `feedback`, and explicit `dismissed` are user decisions.
+`dismissed` keeps planning active without `bridgeFailed`. `{ "cancelled": true }`,
+empty or malformed payloads, transport errors, and unanswered requests are not
+decisions: the tool keeps planning active, records `bridgeFailed`, and stops the
+turn. The host logs failed parsing as well as timeout and abort diagnostics.
+A peer unable to display a requested review should respond with an error or
+`{ "cancelled": true }` promptly rather than waiting for the deadline.
+
+Timeout or abort emits `user_dialog.cancelled` with `{ requestId, reason }`, where
+`requestId` is the original request frame id and `reason` is `timeout` or
+`aborted`. The peer should close that dialog; late responses are ignored.
+Oversized proposals fail before a request is sent and tell the model to shorten
+the plan while staying in plan mode. SDK tool-result messages contain text;
+structured `PlanReviewDetails` are an in-process API, not a wire result field.
 
 ## Plans and tasks
 
@@ -405,13 +421,12 @@ for path rules and retention responsibilities.
 - `exit_plan_mode` submits the written proposal for review, requiring a readable,
   nonempty regular plan file. In the TUI, the user can approve execution, stay in
   plan mode, or provide refinement notes. Cancel
-  leaves planning active. The same review runs over the sdk-stdio bridge: an RPC
-  host that exposes the plan-review capability (`plan-review` in the handshake)
-  blocks until the reviewer answers, and only a host that cannot bridge a review
-  — headless runs, or RPC hosts such as subagent lanes — retains the automatic
-  exit behavior after validation, with the caller gating approval externally
-  before allowing execution. A bridged review that goes unanswered keeps planning
-  active and ends the turn. `/plan` can still explicitly toggle planning off.
+  leaves planning active. Native review or structured clarification hosts wait
+  for a decision; SDK peers enable native review through their initialize
+  capability. Headless and unbridged RPC handoffs exit after validation and end
+  the turn, leaving approval to the caller. Unanswered reviews keep planning on
+  and stop the turn. Missing proposals also keep planning on: the model may
+  answer read-only questions, but only the user can turn the mode off with `/plan`.
   See [plan approval](../../../docs/plan-approval.md) for the handoff contract.
 - `task_create`, `task_update`, `task_get`, and `task_list` are the only task
   tools and work with or without plan mode. Each execution checklist is a

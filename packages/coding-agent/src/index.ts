@@ -86,6 +86,11 @@ export {
 	type EventBus,
 	type EventBusController,
 } from "./core/event-bus.ts";
+export type {
+	ClarificationAnswer,
+	ClarificationQuestion,
+	ClarificationResult,
+} from "./core/extensions/clarification.ts";
 // Extension system
 export type {
 	AgentEndEvent,
@@ -467,6 +472,7 @@ export {
 	createUsageTotals,
 	getUsageCostBreakdown,
 } from "./core/usage-totals.ts";
+export type { StepPlanReviewState } from "./features/plan-mode-tools.ts";
 export {
 	createStepExtension,
 	createStepExtensionInline,
@@ -488,6 +494,12 @@ export {
 	type StepCronRuntimeOptions,
 	stepCronExtensionInline,
 } from "./features/step-cron.ts";
+export {
+	createStepPlanExtension,
+	getStepPlanState,
+	type StepPlanState,
+	stepPlanExtension,
+} from "./features/step-plan.ts";
 export { createStepProviderConfig, STEP_PROVIDER_ID } from "./features/step-provider/index.ts";
 export {
 	CreateGoalParams,
@@ -563,6 +575,7 @@ export type {
 export { type RenderDiffOptions, renderDiff } from "./render/diff.ts";
 export { DynamicBorder } from "./render/dynamic-border.ts";
 export { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./render/keybinding-hints.ts";
+export type { PlanReviewDetails, PlanReviewOutcome } from "./render/plan-review.ts";
 export { truncateToVisualLines, type VisualTruncateResult } from "./render/visual-truncate.ts";
 export {
 	createSessionSearchService,
