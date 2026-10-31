@@ -18,7 +18,10 @@ import {
 export interface WebUsageTelemetry {
 	readonly reporter: StepTelemetryReporter;
 	readonly modelRequestObserver: ModelRequestObserver | undefined;
-	/** Trace callbacks for a one-off model call made outside the session's agent loop. */
+	/**
+	 * Response callbacks for a one-off model call made outside the session's agent
+	 * loop (session titles); they feed both daily activity and trace records.
+	 */
 	traceCapture(sessionId: string): ModelRequestTraceCapture | undefined;
 	/** Re-read the account uid after a sign-in. */
 	refreshIdentity(): void;

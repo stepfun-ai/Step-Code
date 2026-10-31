@@ -10,7 +10,12 @@ import {
 } from "@step-harness/providers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import type { ModelRequestCompleted, ModelRequestStarted } from "../src/core/model-request-observer.ts";
+import type {
+	ModelRequestCompleted,
+	ModelRequestResponse,
+	ModelRequestStarted,
+	ModelRequestTrace,
+} from "../src/core/model-request-observer.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { type Settings, SettingsManager } from "../src/core/settings-manager.ts";
@@ -236,6 +241,61 @@ describe("createAgentSession stream options", () => {
 				outcome: "ok",
 				statusCode: 0,
 			});
+		} finally {
+			session.dispose();
+			modelRegistry.unregisterProvider(model.provider);
+		}
+	});
+
+	it("reports every provider response to the observer, with and without a trace id", async () => {
+		const responses: ModelRequestResponse[] = [];
+		const traces: ModelRequestTrace[] = [];
+		const observer = {
+			onModelResponse: (response: ModelRequestResponse) => void responses.push(response),
+			onTraceId: (trace: ModelRequestTrace) => void traces.push(trace),
+		};
+		const model = createModel("openai-completions");
+		const settingsManager = SettingsManager.inMemory({});
+		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
+		await authStorage.modify(model.provider, async () => ({ type: "api_key", key: "test-api-key" }));
+		const modelRegistry = await createModelRegistry(authStorage, join(agentDir, "models.json"));
+		modelRegistry.registerProvider(model.provider, {
+			api: model.api,
+			// A retried request as provider-retry delivers it: the failed attempt via
+			// onErrorResponse (no trace id, like a third-party API), then the success.
+			streamSimple: (resolved, _context, options) => {
+				void options?.onErrorResponse?.({ status: 500, headers: {} }, resolved);
+				void options?.onResponse?.({ status: 200, headers: { "x-trace-id": "gw-1" } }, resolved);
+				return createDoneStream(model.api);
+			},
+		});
+		const modelRuntime = getModelRuntime(modelRegistry);
+		const sessionManager = SessionManager.inMemory(cwd);
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir,
+			model,
+			modelRuntime,
+			settingsManager,
+			sessionManager,
+			modelRequestObserver: observer,
+		});
+
+		try {
+			const stream = await session.agent.streamFunction(model, { messages: [] }, {});
+			await stream.result();
+			const sessionId = sessionManager.getSessionId();
+			expect(responses).toEqual([
+				expect.objectContaining({
+					sessionId,
+					provider: model.provider,
+					model: model.id,
+					statusCode: 500,
+					attempt: 1,
+				}),
+				expect.objectContaining({ sessionId, statusCode: 200, attempt: 2 }),
+			]);
+			expect(traces).toEqual([expect.objectContaining({ traceId: "gw-1", statusCode: 200, attempt: 2 })]);
 		} finally {
 			session.dispose();
 			modelRegistry.unregisterProvider(model.provider);

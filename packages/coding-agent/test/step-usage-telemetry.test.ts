@@ -257,7 +257,10 @@ describe("usage observability provider", () => {
 		};
 	}
 
-	/** One request through the SDK's real response capture; `traceId: ""` sends no header. */
+	/**
+	 * One request through the SDK's real response capture; `traceId: ""` sends no header.
+	 * Error statuses arrive through `onErrorResponse`, as provider retries deliver them.
+	 */
 	function request(
 		observer: ModelRequestObserver | undefined,
 		overrides: Partial<ModelRequestTrace> = {},
@@ -267,7 +270,10 @@ describe("usage observability provider", () => {
 		const capture = createModelRequestTraceCapture(observer, value.sessionId);
 		const model = { provider: value.provider, id: value.model, baseUrl: value.baseUrl } as Model<Api>;
 		for (const status of statuses) {
-			capture?.onResponse({ status, headers: value.traceId ? { "x-trace-id": value.traceId } : {} }, model);
+			const headers: Record<string, string> = value.traceId ? { "x-trace-id": value.traceId } : {};
+			const response = { status, headers };
+			if (status >= 400) capture?.onErrorResponse(response, model);
+			else capture?.onResponse(response, model);
 		}
 	}
 
@@ -365,7 +371,7 @@ describe("usage observability provider", () => {
 		]);
 	});
 
-	it("treats both internal gateways from the shipped config as internal", async () => {
+	it("treats each configured internal gateway as internal, one record per day", async () => {
 		const { reporter, observer, posted } = await setup({
 			STEPCODE_INTERNAL_PROVIDER_HOSTS: "mp.z01.normandyfunc.com,i-ai-gw.stepx.com",
 		});
@@ -378,7 +384,7 @@ describe("usage observability provider", () => {
 		]);
 	});
 
-	it("dates the day's activity from the process start, not from when the model became usable", async () => {
+	it("dates the day's activity from the process start, not from the first request", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-usage-telemetry-"));
 		directories.push(root);
 		const posted: Posted[] = [];
