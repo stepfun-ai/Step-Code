@@ -720,8 +720,9 @@ paths:
                   migrationSuggested:
                     type: boolean
                     description: >-
-                      Service available and onboarding unseen; existing sessions and hidden workspaces do
-                      not suppress it. The client offers this first-use invitation only in Desktop; this is not
+                      Service available, onboarding unseen, and at least one local Claude Code, Codex,
+                      WorkBuddy or Qoder session (any age, archived excluded) not yet imported; existing
+                      StepCode sessions and hidden workspaces do not suppress it. The client offers this first-use invitation only in Desktop; this is not
                       evidence of external candidates and does not trigger a scan or apply.
                   desktopOnboarding:
                     $ref: "#/components/schemas/DesktopOnboardingState"

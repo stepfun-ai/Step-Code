@@ -381,6 +381,19 @@ const defaultWorkspaceInfo = (): Promise<DefaultWorkspace> =>
 	resolveDefaultWorkspace(workspaces, defaultWorkspace(), homedir());
 
 /**
+ * Whether the first-use invitation has anything to offer: a local Claude Code / Codex / WorkBuddy /
+ * Qoder session, at any age, that StepCode has not imported. A failed probe only withholds the
+ * optional invitation; the Settings migration entry and its explicit scan still report the error.
+ */
+async function hasSessionsToMigrate(service: MigrationService): Promise<boolean> {
+	try {
+		return await service.hasSessionsToMigrate();
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Resolve the `cwd` of a workspace-scoped request, or undefined when the folder
  * is not one this host already works in.
  *
@@ -878,7 +891,9 @@ const server = createServer(async (request, response) => {
 			}
 			// Existing sessions or hidden workspaces do not suppress the invitation: users with
 			// StepCode history may still want to bring Claude Code / Codex resources over once.
-			const migrationSuggested = !!migrations && desktopOnboarding?.status === "unseen";
+			// It does need something to bring: at least one local session not imported yet.
+			const migrationSuggested =
+				!!migrations && desktopOnboarding?.status === "unseen" && (await hasSessionsToMigrate(migrations));
 			// The identity of the running build, so a page (and the person looking at
 			// it) can tell which build it is talking to. `buildTime` is staged beside
 			// the server entry by the installer; a source checkout reports none.

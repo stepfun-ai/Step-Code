@@ -215,3 +215,34 @@ it("creates an explicitly requested missing workspace folder as the session dest
 	expect(existsSync(join(home, "deep"))).toBe(false);
 	expect(refused.blockers).toContainEqual({ code: "session-target-unavailable" });
 });
+
+it("suggests migration only when some local session of any age is not imported yet", async () => {
+	expect(await service.hasSessionsToMigrate(), "no source history at all").toBe(false);
+	mkdirSync(join(home, ".claude", "projects"), { recursive: true });
+	writeFileSync(join(home, ".claude", "projects", "notes.txt"), "not a session");
+	expect(await service.hasSessionsToMigrate(), "a source folder without sessions").toBe(false);
+	const cwd = join(home, "original");
+	mkdirSync(cwd);
+	history("ancient", cwd, 800);
+	expect(await service.hasSessionsToMigrate(), "age does not matter").toBe(true);
+	const scan = await service.scan({ kinds: ["sessions"] });
+	const job = await complete(await service.preview({ candidateId: scan.candidates[0]!.id }));
+	expect(job.items[0]?.status).toBe("imported");
+	expect(await service.hasSessionsToMigrate(), "everything is already imported").toBe(false);
+});
+
+it("probing for sessions stops at the first match and keeps scanned candidate ids usable", async () => {
+	for (const id of ["a", "b", "c"]) history(id, join(home, "original"));
+	const scan = await service.scan({ kinds: ["sessions"] });
+	let admitted = 0;
+	const found = await sessions.probe({ claudeRoot: join(home, ".claude", "projects") }, () => {
+		admitted++;
+		return true;
+	});
+	expect(found).toBe(true);
+	expect(admitted).toBe(1);
+	expect(await sessions.probe({ claudeRoot: join(home, ".claude", "projects") }, () => false)).toBe(false);
+	// The probe never replaced the candidate capabilities the scan handed out.
+	const preview = await service.preview({ candidateId: scan.candidates[0]!.id });
+	expect(preview.sourceText).toContain("Readable historical content");
+});

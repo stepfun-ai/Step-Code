@@ -254,10 +254,7 @@ export class MigrationService {
 				options.range && options.range !== "all" ? Date.now() - Number(options.range) * 86400000 : undefined;
 			const result = await this.sessions
 				.scan({
-					claudeRoot: join(this.paths.claude, "projects"),
-					codexRoot: this.paths.codex,
-					workbuddyRoot: workbuddyProjectsRoot(this.paths.home),
-					qoderRoot: join(this.paths.home, ".qoder", "projects"),
+					...this.sessionRoots(),
 					includeArchived: options.includeArchived,
 					modifiedSince,
 				})
@@ -329,6 +326,31 @@ export class MigrationService {
 			}
 		}
 		return structuredClone(resource.result);
+	}
+
+	private sessionRoots(): { claudeRoot: string; codexRoot: string; workbuddyRoot: string; qoderRoot: string } {
+		return {
+			claudeRoot: join(this.paths.claude, "projects"),
+			codexRoot: this.paths.codex,
+			workbuddyRoot: workbuddyProjectsRoot(this.paths.home),
+			qoderRoot: join(this.paths.home, ".qoder", "projects"),
+		};
+	}
+
+	/**
+	 * Whether local history holds at least one session StepCode has not imported yet, at any age.
+	 * Archived sessions are left out as in the default scan. It reads source files without touching
+	 * scan results, so it can run beside an open migration view; it stops at the first match.
+	 */
+	async hasSessionsToMigrate(): Promise<boolean> {
+		this.open();
+		const imported = await importedSessionKeys(
+			this.paths.env.STEP_CODING_AGENT_SESSION_DIR || join(this.paths.agent, "sessions"),
+		);
+		return this.sessions.probe(
+			this.sessionRoots(),
+			(candidate) => !imported.has(`${candidate.source}\0${candidate.sessionId}`),
+		);
 	}
 
 	async preview(input: MigrationPreviewRequest): Promise<MigrationPreview> {
