@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- The Unix installer no longer requires `awk`. Release-manifest fields, the GitHub `tag_name` fallback, the sha256 digest, and the `# stepcode` PATH block are read with bash pattern matching, so an install works on a base system that ships no awk implementation (for example a minimal Fedora/WSL image).
 - Summary requests now use the provider's model output limit and remaining-context sizing instead of fixed compaction/branch caps or reserve-derived budgets. Existing reserve arguments remain accepted for call compatibility; automatic trigger and branch source-selection settings are unchanged.
 - Compaction and branch-summary inputs omit provider thinking blocks while retaining visible replies, tool calls, diagnostic output, and existing skill-retention rules. Original session history is unchanged. These changes adapt Pi commits `15e7bdc` and `6fcb486` (upstream PR #11036).
 

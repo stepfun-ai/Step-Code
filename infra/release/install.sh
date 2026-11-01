@@ -21,16 +21,39 @@ download_progress() {
 	die "curl or wget is required";
 }
 
-json_value() {
-	awk -F'"' -v section="$1" -v wanted="$2" '
-		$0 ~ "\\\"" section "\\\"[[:space:]]*:" { in_section=1; next }
-		in_section && /^[[:space:]]*}/ { exit }
-		in_section && $2 == wanted { print $4; exit }
-	' "$3"
+# The release bundle writes latest.json and manifest.json with JSON.stringify(_, null, 2),
+# so both documents are line-oriented: one top-level key per line, one entry per line
+# inside each object. Reading them with bash pattern matching keeps the installer free
+# of a JSON parser and of awk (which is not installed in every base system, e.g. a
+# minimal Fedora/WSL image).
+
+# Emit the first string value of a top-level `key`.
+json_top_value() {
+	local key="$1" file="$2" line
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		if [[ "$line" =~ \"$key\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
+			printf '%s' "${BASH_REMATCH[1]}"
+			return 0
+		fi
+	done <"$file"
+	return 1
 }
 
-json_top_value() {
-	awk -F'"' -v wanted="$1" '$0 ~ "\\\"" wanted "\\\"[[:space:]]*:" { print $4; exit }' "$2"
+# Emit the string value of `target` inside the top-level `section` object.
+json_value() {
+	local section="$1" target="$2" file="$3" line in_section=0
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		if [[ "$in_section" -eq 0 ]]; then
+			if [[ "$line" =~ \"$section\"[[:space:]]*:[[:space:]]*\{ ]]; then in_section=1; fi
+			continue
+		fi
+		if [[ "$line" =~ ^[[:space:]]*\} ]]; then return 1; fi
+		if [[ "$line" =~ \"$target\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
+			printf '%s' "${BASH_REMATCH[1]}"
+			return 0
+		fi
+	done <"$file"
+	return 1
 }
 
 normalize_version() {
@@ -62,9 +85,11 @@ detect_target() {
 verify_checksum() {
 	local archive="$1" expected="$2" actual
 	[[ -z "$expected" ]] && return 0
-	if has_cmd sha256sum; then actual="$(sha256sum "$archive" | awk '{print $1}')"
-	elif has_cmd shasum; then actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+	if has_cmd sha256sum; then actual="$(sha256sum "$archive")"
+	elif has_cmd shasum; then actual="$(shasum -a 256 "$archive")"
 	else printf 'warning: no sha256 tool; skipped archive verification\n' >&2; return 0; fi
+	# Both tools print "<hash>  <file>"; keep the hash only.
+	actual="${actual%%[[:space:]]*}"
 	[[ "$actual" == "$expected" ]] || die "checksum mismatch (expected $expected, got $actual)"
 }
 
@@ -96,7 +121,7 @@ install_managed_tool() {
 	if ! download "https://api.github.com/repos/${repo}/releases/latest" "$metadata"; then
 		return 0
 	fi
-	version="$(awk -F'"' '/"tag_name"[[:space:]]*:/ { print $4; exit }' "$metadata")"
+	version="$(json_top_value tag_name "$metadata" || true)"
 	version="${version#v}"
 	archive="${WORK_DIR}/${name}.archive"
 	extract="${WORK_DIR}/${name}.extract"
@@ -157,40 +182,47 @@ strip_step_block() {
 	# prior write, or an unrelated "# stepcode" comment) leaves the file untouched.
 	# Returns non-zero for malformed markers or a failed rewrite, so the caller can
 	# avoid appending a duplicate block on top of one it failed to remove.
-	local file="$1" tmp
+	local file="$1" tmp line block="" blank="" inblock=0
 	# Never combine a dangling/nested marker with a newly appended block: the
 	# next reinstall could otherwise remove user content between those markers.
-	awk '
-		$0 == "# stepcode" { if (inblock) exit 1; inblock = 1 }
-		$0 == "# stepcode end" { if (!inblock) exit 1; inblock = 0 }
-		END { if (inblock) exit 1 }
-	' "$file" || return 1
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		if [[ "$line" == "# stepcode" ]]; then
+			if [[ "$inblock" -eq 1 ]]; then return 1; fi
+			inblock=1
+		elif [[ "$line" == "# stepcode end" ]]; then
+			if [[ "$inblock" -eq 0 ]]; then return 1; fi
+			inblock=0
+		fi
+	done <"$file"
+	if [[ "$inblock" -eq 1 ]]; then return 1; fi
+
 	tmp="$(mktemp "${file}.step.XXXXXX")" || return 1
-	if awk '
-		{
-			if (inblock) {
-				block = block $0 "\n"
-				if ($0 == "# stepcode end") { inblock = 0; block = ""; blank = "" }
-				next
-			}
-			if ($0 == "# stepcode") { inblock = 1; block = $0 "\n"; next }
-			if ($0 ~ /^[[:space:]]*$/) { blank = blank $0 "\n"; next }
-			if (blank != "") { printf "%s", blank; blank = "" }
-			print
-		}
-		END {
-			# Unterminated block: restore its lines (and preceding blanks) instead
-			# of dropping them. Trailing blanks are preserved.
-			if (inblock) { if (blank != "") printf "%s", blank; printf "%s", block }
-			else if (blank != "") printf "%s", blank
-		}
-	' "$file" >"$tmp"; then
-		cat "$tmp" >"$file"
+	inblock=0
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		if [[ "$inblock" -eq 1 ]]; then
+			block+="$line"$'\n'
+			if [[ "$line" == "# stepcode end" ]]; then inblock=0; block=""; blank=""; fi
+			continue
+		fi
+		if [[ "$line" == "# stepcode" ]]; then inblock=1; block="$line"$'\n'; continue; fi
+		if [[ "$line" =~ ^[[:space:]]*$ ]]; then blank+="$line"$'\n'; continue; fi
+		if [[ -n "$blank" ]]; then printf '%s' "$blank"; blank=""; fi
+		printf '%s\n' "$line"
+	done <"$file" >"$tmp"
+	# Unterminated block: restore its lines (and preceding blanks) instead of
+	# dropping them. Trailing blanks are preserved.
+	if [[ "$inblock" -eq 1 ]]; then
+		printf '%s' "$blank" >>"$tmp"
+		printf '%s' "$block" >>"$tmp"
+	elif [[ -n "$blank" ]]; then
+		printf '%s' "$blank" >>"$tmp"
+	fi
+	if ! cat "$tmp" >"$file"; then
 		rm -f "$tmp"
-		return 0
+		return 1
 	fi
 	rm -f "$tmp"
-	return 1
+	return 0
 }
 
 configure_shell_path() {
@@ -284,13 +316,13 @@ main() {
 		VERSION="$(normalize_version "$VERSION")"
 		download "${BASE_URL}/${VERSION}/manifest.json" "$manifest"
 	fi
-	resolved="$(json_top_value version "$manifest")"
+	resolved="$(json_top_value version "$manifest" || true)"
 	[[ -n "$resolved" ]] || die 'release manifest does not contain version'
 	VERSION="$resolved"
 	local package_url
-	package_url="$(json_value packages "$TARGET_ID" "$manifest")"
+	package_url="$(json_value packages "$TARGET_ID" "$manifest" || true)"
 	[[ -n "$package_url" ]] || die "manifest does not contain package for ${TARGET_ID}"
-	expected="$(json_value checksums "$TARGET_ID" "$manifest")"
+	expected="$(json_value checksums "$TARGET_ID" "$manifest" || true)"
 	download_progress "$package_url" "$archive"
 	verify_checksum "$archive" "$expected"
 	mkdir -p "$extract"
