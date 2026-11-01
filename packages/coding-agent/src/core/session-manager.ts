@@ -6,11 +6,14 @@ import {
 	closeSync,
 	createReadStream,
 	existsSync,
+	fsyncSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
 	readSync,
+	renameSync,
 	statSync,
+	unlinkSync,
 	writeFileSync,
 } from "fs";
 import { readdir, stat } from "fs/promises";
@@ -944,15 +947,32 @@ export class SessionManager {
 
 	private _rewriteFile(): void {
 		if (!this.persist || !this.sessionFile) return;
-		const fd = openSync(this.sessionFile, "w");
+		const sessionFile = this.sessionFile;
+		// Build the whole transcript beside the original and swap it in with a rename.
+		// Truncating the original first would destroy saved history when the process
+		// dies or a write fails while migration rewrites the file.
+		const temporaryFile = `${sessionFile}.${randomUUID()}.tmp`;
 		try {
-			for (const entry of this.fileEntries) {
-				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+			const fd = openSync(temporaryFile, "w");
+			try {
+				for (const entry of this.fileEntries) {
+					writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+				}
+				fsyncSync(fd);
+			} finally {
+				closeSync(fd);
 			}
-		} finally {
-			closeSync(fd);
+			renameSync(temporaryFile, sessionFile);
+		} catch (error) {
+			try {
+				unlinkSync(temporaryFile);
+			} catch {
+				// The temporary file may never have been created. The original file is
+				// untouched on this path either way, so the cleanup failure is not fatal.
+			}
+			throw error;
 		}
-		this._notifyFilePersisted(this.sessionFile, "rewrite");
+		this._notifyFilePersisted(sessionFile, "rewrite");
 	}
 
 	/**

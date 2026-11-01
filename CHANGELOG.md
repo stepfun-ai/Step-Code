@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- Rewrite a session file atomically when migration upgrades it: the migrated transcript is built in a sibling temporary file and renamed into place, so an interrupted or failed rewrite can no longer leave the previous history truncated.
 - Summary requests now use the provider's model output limit and remaining-context sizing instead of fixed compaction/branch caps or reserve-derived budgets. Existing reserve arguments remain accepted for call compatibility; automatic trigger and branch source-selection settings are unchanged.
 - Compaction and branch-summary inputs omit provider thinking blocks while retaining visible replies, tool calls, diagnostic output, and existing skill-retention rules. Original session history is unchanged. These changes adapt Pi commits `15e7bdc` and `6fcb486` (upstream PR #11036).
 
