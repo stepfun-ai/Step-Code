@@ -62,17 +62,19 @@ OpenAI-compatible providers share this normalized event path. The `thinking`
 label follows thinking events and clears when text or tool output begins. The
 native presentation does not run this tracker or display these metrics.
 
-The built-in Step provider uses the `anthropic-messages` adapter, which appends
-`/v1/messages` to the configured base URL, so the canonical Step base is
-`https://api.stepfun.com/step_plan`. For compatibility, `STEP_BASE_URL` also
-accepts the older `.../v1` and `.../v1/messages` spellings; the provider
-normalizes them before registering the model so the version segment is never
-sent twice. Startup also repairs the same stale spellings in an existing
-`.stepcode/agent/models.json`, including model-level overrides. If an older
-legacy Step projection recorded a built-in Step id as an OpenAI-compatible
-model, startup restores its `anthropic-messages` API and Step endpoint as well.
-Upgrading from an earlier Step build therefore does not require signing
-in again.
+The built-in Step provider uses the `openai-completions` adapter, which appends
+`/chat/completions` to the profile's OpenAI base (`{profile base}/v1`, for
+example `https://api.stepfun.com/step_plan/v1`), so the canonical Step base
+remains `https://api.stepfun.com/step_plan`. For compatibility, `STEP_BASE_URL`
+and stored endpoints also accept the older `.../v1` and `.../v1/messages`
+spellings; the provider strips any trailing `/v1/messages`, `/messages`, or
+`/v1` segment before re-appending `/v1`, so the version segment is never sent
+twice. Startup also repairs the same stale spellings in an existing
+`~/.stepcode/models.json`, including model-level overrides. Every Step model is
+forced onto the active profile's OpenAI dialect and base URL with
+`supportsDeveloperRole: false`, so a stale models.json overlay cannot misroute
+a Step model or send an unsupported `developer` role. Upgrading from an earlier
+Step build therefore does not require signing in again.
 
 The login page offers one profile per plan and region. Each profile owns its
 model endpoint, its developer-center login page and the environment variables

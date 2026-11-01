@@ -442,7 +442,7 @@ If no model is provided:
 2. Uses default from settings
 3. Falls back to first available model
 
-Remote catalogs are persisted locally so later runtimes can restore them without a network request. The default file is `~/.stepcode/agent/models-store.json`; set `modelsStorePath` to choose another location, or inject `modelsStore` to control persistence. Network refreshes are throttled to once per provider every four hours unless forced. To force an immediate refresh, call `await modelRuntime.refresh({ allowNetwork: true, force: true, signal })`.
+Remote catalogs are persisted locally so later runtimes can restore them without a network request. The default file is `~/.stepcode/models-store.json`; set `modelsStorePath` to choose another location, or inject `modelsStore` to control persistence. Network refreshes are throttled to once per provider every four hours unless forced. To force an immediate refresh, call `await modelRuntime.refresh({ allowNetwork: true, force: true, signal })`.
 
 To match CLI model parsing, use the exported resolver helpers:
 
@@ -484,7 +484,7 @@ Authentication resolution priority (handled by `ModelRuntime`):
 import { InMemoryCredentialStore } from "@step-harness/providers";
 import { createAgentSession, ModelRuntime } from "@step-harness/coding-agent";
 
-// Default: uses ~/.stepcode/agent/auth.json and ~/.stepcode/agent/models.json
+// Default: uses ~/.stepcode/auth.json and ~/.stepcode/models.json
 const modelRuntime = await ModelRuntime.create();
 
 // Provider-owned auth methods and current status
