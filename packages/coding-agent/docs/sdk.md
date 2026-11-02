@@ -30,6 +30,18 @@ For an invocation failure with observations to retain, custom tools may throw
 The agent loop keeps its content and details while marking the invocation as an
 error. This does not grant permission to retry or bypass cancellation.
 
+Wire surfaces and statistics that predate this distinction stay compatible: the
+framed stdio host reports a non-success command result as `is_error` on both its
+live event path and `session.messages`, so existing clients do not silently
+treat a failed command as success. Read `details.execution` when you need the
+precise outcome; treat `is_error` as the "was this a successful result"
+question.
+
+The `--mode rpc` and `--mode json` event streams publish the new semantics:
+`tool_execution_end.isError` is `false` for a command that returned a nonzero
+exit, deadline, or signal. Consumers of those streams must read
+`details.execution`; they do not get the compatibility projection.
+
 ## Quick Start
 
 ```typescript

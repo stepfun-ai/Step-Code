@@ -25,6 +25,8 @@ export interface BashExecutorOptions {
 	onChunk?: (chunk: string) => void;
 	/** AbortSignal for cancellation */
 	signal?: AbortSignal;
+	/** Deadline in seconds, so a deadline survives into the recorded facts */
+	timeout?: number;
 }
 
 export interface BashResult {
@@ -111,6 +113,7 @@ export async function executeBashWithOperations(
 		const result = await operations.exec(command, cwd, {
 			onData,
 			signal: options?.signal,
+			timeout: options?.timeout,
 		});
 
 		const fullOutput = outputChunks.join("");
@@ -129,7 +132,7 @@ export async function executeBashWithOperations(
 			cancelled,
 			truncated: truncationResult.truncated,
 			fullOutputPath: tempFilePath,
-			execution: commandOutcome(result, undefined, cancelled),
+			execution: commandOutcome(result, options?.timeout, cancelled),
 		};
 	} catch (err) {
 		// Check if it was an abort
@@ -146,7 +149,7 @@ export async function executeBashWithOperations(
 				output: truncationResult.truncated ? truncationResult.content : fullOutput,
 				exitCode: undefined,
 				cancelled: true,
-				execution: commandOutcome({ exitCode: null }, undefined, true),
+				execution: commandOutcome({ exitCode: null }, options?.timeout, true),
 				truncated: truncationResult.truncated,
 				fullOutputPath: tempFilePath,
 			};

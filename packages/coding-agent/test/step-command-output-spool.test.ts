@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ShellToolError } from "../src/core/tools/bash.ts";
+import { splitCommandOutputFooter } from "../src/core/tools/command-outcome.ts";
 import { createStepToolProfile } from "../src/step/tool-profile.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -96,7 +97,8 @@ describe("Step command output spool recovery", () => {
 			expect(result.isError).toBe(false);
 			expect(result.details).toMatchObject({ execution: { exitCode } });
 			const text = textOf(result);
-			expect(text).toContain(`Command exited with code ${exitCode}`);
+			if (exitCode === 0) expect(text).not.toContain("Command exited with code");
+			else expect(text).toContain(`Command exited with code ${exitCode}`);
 			const fullPath = /Full output: ([^\]\n]+)/u.exec(text)?.[1];
 			expect(fullPath).toBeDefined();
 			logs.add(fullPath!);
@@ -107,6 +109,40 @@ describe("Step command output spool recovery", () => {
 			expect(fs.createWriteStream).toHaveBeenCalledTimes(1);
 		},
 	);
+
+	it("reports an executor failure that produced no output as a status row", async () => {
+		const tool = createStepToolProfile(directory, {
+			agentDir: join(directory, "agent"),
+			bash: {
+				operations: {
+					exec: async () => {
+						throw new Error("spawn denied");
+					},
+				},
+			},
+		}).find((candidate) => candidate.name === "run_command")!;
+		const failure = await tool
+			.execute(
+				"no-output-fault",
+				{ command: "fixture", max_output_chars: 1_000 },
+				undefined,
+				undefined,
+				undefined as never,
+			)
+			.then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+		expect(failure).toBeInstanceOf(ShellToolError);
+		const observed = failure as ShellToolError;
+		const footer = observed.details.outputFooter;
+		expect(footer?.status).toContain("spawn denied");
+		// The declared framing must describe the exact tail of the message so a
+		// renderer can separate the status from the (empty) body.
+		const split = splitCommandOutputFooter(observed.message, footer);
+		expect(split.body).toBe("");
+		expect(split.status).toBe(footer?.status);
+	});
 
 	it.each(["unknown", "executor_fault", "long_executor_fault"] as const)(
 		"bounds %s output using producer metadata instead of parsing status text",
@@ -154,7 +190,12 @@ describe("Step command output spool recovery", () => {
 			expect(rendered.length).toBeLessThan(350);
 			const retained = await readFile(fullPath, "utf8");
 			expect(retained).toContain(raw);
-			if (kind !== "unknown") expect(retained).toContain(reason);
+			// The log holds command output only; executor diagnostics stay in the
+			// result so the user's log is not mixed with harness text.
+			if (kind !== "unknown") {
+				expect(retained).not.toContain(reason);
+				expect(rendered).toContain(reason.slice(0, 24));
+			}
 		},
 	);
 

@@ -497,7 +497,14 @@ Response:
     "output": "total 48\ndrwxr-xr-x ...",
     "exitCode": 0,
     "cancelled": false,
-    "truncated": false
+    "truncated": false,
+    "execution": {
+      "status": "exited",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "aborted": false
+    }
   }
 }
 ```
@@ -513,7 +520,14 @@ If output was truncated, includes `fullOutputPath`:
     "exitCode": 0,
     "cancelled": false,
     "truncated": true,
-    "fullOutputPath": "/tmp/step-bash-abc123.log"
+    "fullOutputPath": "/tmp/step-bash-abc123.log",
+    "execution": {
+      "status": "exited",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "aborted": false
+    }
   }
 }
 ```
@@ -531,6 +545,9 @@ total 48
 drwxr-xr-x ...
 ```
 ````
+
+A status sentence follows the output only for a nonzero exit, a deadline, a
+signal, cancellation, or an unknown exit.
 
 This means:
 1. Bash output is included in the LLM context on the **next prompt**, not immediately
@@ -1537,8 +1554,7 @@ Created by the `bash` RPC command (not by LLM tool calls):
     "exitCode": 0,
     "signal": null,
     "timedOut": false,
-    "aborted": false,
-    "timeoutSeconds": 120
+    "aborted": false
   },
   "timestamp": 1733234567890
 }

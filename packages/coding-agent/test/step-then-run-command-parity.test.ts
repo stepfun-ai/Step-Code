@@ -127,7 +127,11 @@ describe("then_run uses run_command execution", () => {
 		expect(details.fullOutputPath).toBeTruthy();
 		expect(referencedPath).toBe(details.fullOutputPath);
 		expect(await readFile(details.fullOutputPath!, "utf8")).toBe("0".repeat(chars));
-		expect(output).toContain(`Command exited with code ${exitCode}`);
+		if (exitCode === 0) {
+			expect(output).not.toContain("Command exited with code");
+		} else {
+			expect(output).toContain(`Command exited with code ${exitCode}`);
+		}
 		expect(output).not.toContain("call run_command again");
 		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("applied\n");
 		expect(result).not.toHaveProperty("isError", true);
@@ -266,8 +270,14 @@ describe("then_run uses run_command execution", () => {
 			undefined,
 			undefined as never,
 		);
-		expect(result.isError).toBe(true);
+		// The file mutation succeeded, so the call is not an error; the failed
+		// check is recorded inside its own details.
+		expect(result).not.toHaveProperty("isError", true);
 		expect(result.details).toMatchObject({ changed: true, thenRun: { exitCode: null, timedOut: false } });
+		// The failure is described by the declared execution facts and status, not
+		// by a separate free-text field.
+		expect(result.details.thenRun).toMatchObject({ execution: { status: "unknown" } });
+		expect(result.details.thenRun).not.toHaveProperty("invocationError");
 		expect(text(result)).toContain("executor unavailable");
 		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("applied\n");
 		expect(exec).toHaveBeenCalledTimes(1);

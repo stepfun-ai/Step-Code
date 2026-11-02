@@ -12,6 +12,15 @@ export {
 	createLocalBashOperations,
 } from "./bash.ts";
 export {
+	type CommandExecutionOutcome,
+	type CommandOutputFooter,
+	commandOutcomeNotice,
+	isToolCommandFailure,
+	readCommandExecutionOutcome,
+	readCommandOutputFooter,
+	readToolCommandNotice,
+} from "./command-outcome.ts";
+export {
 	createEditTool,
 	createEditToolDefinition,
 	type EditOperations,

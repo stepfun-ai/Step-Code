@@ -59,7 +59,12 @@ describe("command execution results through the agent loop", () => {
 				});
 				expect(getMessageText(result)).toContain("command output");
 				expect(getMessageText(result)).toContain("diagnostic output");
-				expect(getMessageText(result)).toContain(`Command exited with code ${exitCode}`);
+				// A clean exit needs no status line; failures stay explicit.
+				if (exitCode === 0) {
+					expect(getMessageText(result)).not.toContain("Command exited with code");
+				} else {
+					expect(getMessageText(result)).toContain(`Command exited with code ${exitCode}`);
+				}
 				return fauxAssistantMessage("inspected the command result");
 			},
 		]);

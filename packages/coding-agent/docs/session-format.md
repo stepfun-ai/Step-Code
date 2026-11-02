@@ -126,11 +126,11 @@ The exported `StopReason` type also includes `"pending"`, but that value is rese
 For `run_command`, `bash`, and `powershell`, `isError` describes whether the tool
 invocation failed, not whether the command met the user's objective. A nonzero
 exit code, an execution deadline, or termination by a signal returns an ordinary
-tool result with `isError: false`. Output retains the command status, and
-`details.execution` carries these observations:
+tool result with `isError: false`, and `details.execution` carries the
+observations:
 
 ```typescript
-interface BashExecutionOutcome {
+interface CommandExecutionOutcome {
   status: "exited" | "timed_out" | "signaled" | "canceled" | "unknown";
   exitCode: number | null;
   signal: string | null;
@@ -139,6 +139,11 @@ interface BashExecutionOutcome {
   timeoutSeconds?: number;
 }
 ```
+
+Model-visible text states the outcome only when it is worth stating. A clean
+`exited` result with exit code 0 adds no status line; a nonzero exit, deadline,
+signal, cancellation, or unknown exit appends one sentence. Consumers must read
+`details.execution` rather than parse that sentence.
 
 Timeout and cancellation facts remain independent of the exit code: a command
 that exits with zero after a deadline still has `timedOut: true`. Missing exit
@@ -150,8 +155,15 @@ that effects were rolled back; verify state before repeating a mutation.
 
 An embedded `then_run` retains the same facts under
 `details.thenRun.execution`, alongside its existing summary fields. A nonzero
-exit or deadline does not undo the edit or write. An invocation fault in the
-check sets the enclosing result's error flag while retaining the file change.
+exit or deadline does not undo the edit or write. A check that could not be
+invoked is recorded as `details.thenRun.invocationError`; the enclosing result
+stays successful because the file mutation already applied, and the check's
+diagnostic remains in the result text.
+
+Producers also declare their display framing in `details.outputFooter`
+(`{ notice, status }`): `notice` is the truncation or full-output reference and
+`status` is the trailing outcome sentence. It is presentation metadata, not a
+source of execution facts; `details.execution` is authoritative.
 
 Existing records without `details.execution` remain readable and are not
 reclassified by parsing their output. The JSONL format version is unchanged.
@@ -159,6 +171,8 @@ reclassified by parsing their output. The JSONL format version is unchanged.
 User-initiated bash executions keep the same optional facts in
 `BashExecutionMessage.execution`. They survive session recording and are shown
 in the next model request, including deadlines whose observed exit code is zero.
+A user-initiated command has no deadline of its own, so `timeoutSeconds` is
+present only when an executing adapter reported one.
 
 Session totals and the cost breakdown use the shared [`usage-totals.ts`](../src/core/usage-totals.ts) ledger. It includes assistant, tool, compaction, branch-summary and incremental `step-auto-clm-usage` records; cumulative maintenance summaries are excluded. Token increments must contain nonnegative safe integers and must not overflow the accumulated total. A missing/invalid cost does not hide valid tokens. `SessionStats.tokens.input` excludes caches, which are reported separately; the [Account summary](account-usage.md) combines them into complete input.
 
@@ -173,7 +187,7 @@ interface BashExecutionMessage {
   cancelled: boolean;
   truncated: boolean;
   fullOutputPath?: string;
-  execution?: BashExecutionOutcome;
+  execution?: CommandExecutionOutcome;
   excludeFromContext?: boolean;  // true for !! prefix commands
   timestamp: number;
 }

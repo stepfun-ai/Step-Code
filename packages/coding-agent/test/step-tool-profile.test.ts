@@ -646,7 +646,6 @@ describe("Step tool profile", () => {
 			);
 			expect(text(passed)).toContain("Successfully replaced 1 occurrence(s) in sample.txt.");
 			expect(text(passed)).toContain("then_run: $ cat sample.txt\nbeta");
-			expect(text(passed)).toMatch(/Command exited with code 0$/u);
 			expect((passed.details as { thenRun: unknown }).thenRun).toMatchObject({
 				command: "cat sample.txt",
 				exitCode: 0,

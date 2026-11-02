@@ -510,7 +510,10 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	expanded: boolean;
 	/** Whether inline images are currently shown in the TUI. */
 	showImages: boolean;
-	/** Whether the current result is an error. */
+	/**
+	 * Whether the invocation failed. A product outcome such as a command's exit
+	 * code lives in `details.execution`, not here.
+	 */
 	isError: boolean;
 }
 
@@ -893,6 +896,7 @@ export interface ToolExecutionEndEvent {
 	toolCallId: string;
 	toolName: string;
 	result: any;
+	/** Whether the invocation failed; read `result.details.execution` for a command's outcome. */
 	isError: boolean;
 }
 

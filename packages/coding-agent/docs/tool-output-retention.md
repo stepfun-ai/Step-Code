@@ -38,6 +38,15 @@ observed output and full-output references through the agent loop. A failing
 return-stage hook also retains the prior result's details and termination hint,
 so it cannot erase an already-applied mutation or cause that mutation to replay.
 
+A command result declares its own display framing in `details.outputFooter`
+(`{ notice, status }`), so the Step character cap and the terminal renderers
+remove framing from the body without re-parsing status text. A spool required by
+truncation that fails, or a failed close, is reported as a storage failure that
+keeps the observed output; the result never advertises a possibly incomplete
+file as a complete log. An optional spool taken only to satisfy a character cap
+may still fail quietly, because the complete output remains in memory and the
+result then carries no log reference.
+
 This bounds final model-facing text, not streaming progress updates or arbitrary
 typed `details` payloads. No new permission bypass or external upload is added.
 

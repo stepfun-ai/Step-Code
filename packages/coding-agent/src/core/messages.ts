@@ -6,10 +6,9 @@
  */
 
 import { type AgentMessage, bashExecutionToText } from "@step-harness/agent-core";
+import type { ImageContent, Message, TextContent } from "@step-harness/providers";
 
 export { type BashExecutionMessage, bashExecutionToText } from "@step-harness/agent-core";
-
-import type { ImageContent, Message, TextContent } from "@step-harness/providers";
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
 

@@ -646,7 +646,7 @@ describe("Coding Agent Tools", () => {
 			});
 
 			const result = await bashWithPrefix.execute("test-prefix-1", { command: "echo $TEST_VAR" });
-			expect(getTextOutput(result).trim()).toBe("hello\n\n\nCommand exited with code 0");
+			expect(getTextOutput(result).trim()).toBe("hello");
 		});
 
 		it("should include output from both prefix and command", async () => {
@@ -655,14 +655,14 @@ describe("Coding Agent Tools", () => {
 			});
 
 			const result = await bashWithPrefix.execute("test-prefix-2", { command: "echo command-output" });
-			expect(getTextOutput(result).trim()).toBe("prefix-output\ncommand-output\n\n\nCommand exited with code 0");
+			expect(getTextOutput(result).trim()).toBe("prefix-output\ncommand-output");
 		});
 
 		it("should work without command prefix", async () => {
 			const bashWithoutPrefix = createBashTool(testDir, {});
 
 			const result = await bashWithoutPrefix.execute("test-prefix-3", { command: "echo no-prefix" });
-			expect(getTextOutput(result).trim()).toBe("no-prefix\n\n\nCommand exited with code 0");
+			expect(getTextOutput(result).trim()).toBe("no-prefix");
 		});
 
 		it("should coalesce streaming updates for chatty output", async () => {
@@ -720,7 +720,7 @@ describe("Coding Agent Tools", () => {
 
 			const result = await bash.execute("test-call-split-utf8", { command: "split-utf8" });
 
-			expect(getTextOutput(result).trim()).toBe("€\n\n\nCommand exited with code 0");
+			expect(getTextOutput(result).trim()).toBe("€");
 		});
 
 		it("should expose local bash operations for extension reuse", async () => {
