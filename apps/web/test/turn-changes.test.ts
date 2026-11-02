@@ -111,7 +111,7 @@ test("revertTurnChanges restores the turn's files and deletes created ones", asy
 			}),
 			entry("r1", { role: "toolResult", toolCallId: "c1", details: { patch: PATCHES.two } }),
 			entry("r2", { role: "toolResult", toolCallId: "c2", details: { patch: PATCHES.fresh, created: true } }),
-			entry("r3", { role: "toolResult", toolCallId: "c3", isError: true, details: { patch: "x" } }),
+			entry("r3", { role: "toolResult", toolCallId: "c3", isError: true }),
 			entry("u3", { role: "user", content: "third" }),
 		];
 		assert.deepEqual(turnChanges(entries, "u1"), { changes: [], skipped: [] });
@@ -159,6 +159,69 @@ test("turnChanges lists writes without a patch as skipped", async () => {
 			{ path: "big.txt", reason: "too_large" },
 			{ path: "o.txt", reason: "unknown" },
 		]);
+	});
+});
+
+test("a change the call applied stays listed when the call failed afterwards", async () => {
+	await withRoot(async (root) => {
+		// The session's own edit tool records the patch; only the check it ran
+		// alongside was cancelled, so the call reports an error.
+		const s = session(root);
+		await writeFile(join(root, "a.txt"), "one\n");
+		ask(s, "u1");
+		await edit(s, "c1", "a.txt", "one", "two");
+		(s.entries.find((candidate) => candidate.id === "r-c1")!.message as { isError?: boolean }).isError = true;
+		ask(s, "u2");
+
+		// The change is listed, it is no skip, and the undo the user asked for works
+		// instead of reporting a turn without changes.
+		const { changes, skipped } = turnChanges(s.entries, "u1");
+		assert.deepEqual(
+			changes.map((change) => change.path),
+			["a.txt"],
+		);
+		assert.deepEqual(skipped, []);
+		assert.equal(await undo(s, "u1"), "ok");
+		assert.equal(await content(join(root, "a.txt")), "one\n");
+		assert.deepEqual(s.recorded, ["u1"]);
+	});
+});
+
+test("a failed later turn that did apply its change is suggested before this one", async () => {
+	await withRoot(async (root) => {
+		const s = session(root);
+		await writeFile(join(root, "a.txt"), "zero\n");
+		ask(s, "u1");
+		await write(s, "w1", "a.txt", "one\n");
+		ask(s, "u2");
+		await edit(s, "e2", "a.txt", "one", "two");
+		// The second turn's call failed afterwards, but its edit is what the file holds.
+		(s.entries.find((candidate) => candidate.id === "r-e2")!.message as { isError?: boolean }).isError = true;
+		// Undoing u1 needs u2 undone first, exactly as for a successful turn.
+		assert.equal(await undo(s, "u1"), "conflict");
+		assert.equal(await content(join(root, "a.txt")), "two\n");
+		assert.equal(await undo(s, "u2"), "ok");
+		assert.equal(await undo(s, "u1"), "ok");
+		assert.equal(await content(join(root, "a.txt")), "zero\n");
+	});
+});
+
+test("a failed call that recorded nothing is neither a change nor a skip", async () => {
+	await withRoot(async (root) => {
+		const entries = [
+			entry("u1", { role: "user", content: "go" }),
+			entry("a1", {
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "c1", name: "edit", arguments: { path: "a.txt" } },
+					{ type: "toolCall", id: "c2", name: "write", arguments: { path: "b.txt" } },
+				],
+			}),
+			// The search string did not match, and the write never ran.
+			entry("r1", { role: "toolResult", toolCallId: "c1", isError: true, details: { changed: false } }),
+			entry("r2", { role: "toolResult", toolCallId: "c2", isError: true }),
+		];
+		assert.deepEqual(turnChanges(entries, "u1"), { changes: [], skipped: [] });
 	});
 });
 
@@ -370,7 +433,8 @@ test("later turns that recorded no change to the file are not suggested", async 
 		ask(s, "u3");
 		await write(s, "w3", "b.txt", "another file\n");
 		ask(s, "u4");
-		// A failed write whose patch would explain the file, and a write without a patch, both to a.txt.
+		// Two failed writes to a.txt that never reached the file: one that stopped
+		// before recording anything, and one whose result carries no change record.
 		s.entries.push(
 			entry("a-w4", {
 				role: "assistant",
@@ -379,13 +443,8 @@ test("later turns that recorded no change to the file are not suggested", async 
 					{ type: "toolCall", id: "w5", name: "write", arguments: { path: "a.txt" } },
 				],
 			}),
-			entry("r-w4", {
-				role: "toolResult",
-				toolCallId: "w4",
-				isError: true,
-				details: { patch: "--- a.txt\n+++ a.txt\n@@ -1,1 +1,1 @@\n-one\n+two\n" },
-			}),
-			entry("r-w5", { role: "toolResult", toolCallId: "w5" }),
+			entry("r-w4", { role: "toolResult", toolCallId: "w4", isError: true }),
+			entry("r-w5", { role: "toolResult", toolCallId: "w5", isError: true, details: {} }),
 		);
 		assert.equal(await undo(s, "u1"), "modified");
 		assert.equal(await content(join(root, "a.txt")), "two\n");
@@ -562,6 +621,26 @@ test("each turn's delivery is rebuilt as that turn left the file", async () => {
 	});
 });
 
+test("a turn's version stays exact when its call failed after writing", async () => {
+	await withRoot(async (root) => {
+		const s = session(root);
+		ask(s, "u1");
+		await write(s, "w1", "index.html", "<p>one</p>\n");
+		ask(s, "u2");
+		await edit(s, "e2", "index.html", "one", "two");
+		// The check the edit ran alongside was cancelled: the file changed, the call is an error.
+		const result = s.entries.find((candidate) => candidate.id === "r-e2") as SessionEntry;
+		const message = result.message as { details?: { patch?: string } };
+		(result.message as { isError?: boolean }).isError = true;
+		assert.equal(typeof message.details?.patch, "string");
+		// The recorded patch is still the truth about that turn, so a later turn's
+		// delivery rebuilds it instead of falling back to the file on disk.
+		ask(s, "u3");
+		await edit(s, "e3", "index.html", "two", "three");
+		assert.deepEqual(await fileAtTurnEnd(s.entries, "u2", "index.html", root), { text: "<p>two</p>\n", exact: true });
+	});
+});
+
 test("a turn's version is inexact when neither replay nor reversal reaches it", async () => {
 	await withRoot(async (root) => {
 		const s = session(root);
@@ -580,6 +659,7 @@ test("a turn's version is inexact when neither replay nor reversal reaches it", 
 });
 
 /** A Step-profile call as Web sessions record it: `write_file` keeps no patch, `edit_file` the edit's. */
+/** A `write_file` result as version 0.84.4 and older recorded it: no patch, no reason. */
 async function stepWrite(s: Session, id: string, path: string, content: string, changed = true): Promise<void> {
 	const input = { path, content };
 	s.entries.push(entry(`a-${id}`, { role: "assistant", content: [{ type: "toolCall", id, name: "write_file", arguments: input }] }));
@@ -601,7 +681,7 @@ async function stepEdit(s: Session, id: string, path: string, search: string, re
 	s.entries.push(entry(`r-${id}`, { role: "toolResult", toolCallId: id, details: result.details }));
 }
 
-test("Step's edit_file patches are turn changes; a write_file is untracked, or nothing when unchanged", async () => {
+test("Step's edit_file patches are turn changes; an older write_file without one is untracked", async () => {
 	await withRoot(async (root) => {
 		const s = session(root);
 		ask(s, "u1");
