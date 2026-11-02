@@ -11,7 +11,6 @@ Inherits the [root rules](../../AGENTS.md). This package is `@step-harness/agent
 
 ## Boundaries and invariants
 
-- Internal dependencies are limited to providers and telemetry. Do not depend on coding-agent, config, contracts, CLI, or TUI.
 - Do not introduce vendor SDKs, Step defaults, CLI argument parsing, or UI objects. Products compose capabilities through stream, tool, environment, and resource interfaces.
 - All product modes share this loop. New entry points must not copy the tool-call loop or message state machine.
 - Preserve tool-call/result pairing, event ordering, cancellation propagation, steer / follow-up timing, and the distinction between errors and normal completion.

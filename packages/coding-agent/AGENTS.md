@@ -57,7 +57,7 @@ Features connect through existing extension and session-event interfaces. Reuse 
 
 ## Boundaries and invariants
 
-- Internal dependencies are limited to agent-core, providers, config, and tui. Do not import CLI or turn app hooks into reverse dependencies.
+- Do not turn app hooks into reverse dependencies on the CLI.
 - Reuse agent-core's Loop and generic harness. Implement coding-session message conversion, skill retention, permissions, and tool-output policies in this package.
 - Provider protocols and vendor SDKs stay in providers. This package passes user configuration, credentials, model selection, and tool capabilities to providers.
 - Preserve the frozen `bin` / `exports` boundary. Do not add argv, TTY, or process entry points, or weaken `check:coding-agent-entry-freeze`.
@@ -88,7 +88,7 @@ Features connect through existing extension and session-event interfaces. Reuse 
 ## Validation and documentation
 
 - Run `pnpm exec vitest --run <test-path>` from this directory. For session regressions, prefer `test/suite/harness.ts` and faux providers; see the [test harness](test/suite/README.md).
-- Run root `pnpm run check:coding-agent-entry-freeze`; run the full `pnpm run check` after code changes.
+- Run root `pnpm run check:coding-agent-entry-freeze`.
 - Lifecycle changes cover cancellation, retries, compaction, queues, session replacement, and RPC. Permission tests use harmless shell fixtures; feature tests use fake RPC children, VM executors, and clocks. VM mocks do not replace actual isolation validation.
 - Update public API documentation as applicable: [SDK](docs/sdk.md), [extensions](docs/extensions.md), [RPC](docs/rpc.md), [session format](docs/session-format.md), [output retention](docs/tool-output-retention.md), or [compaction recovery](docs/compaction-overflow-recovery.md).
 - For product policies and orchestration, update [configuration](../../docs/step-configuration.md), [command permissions](../../docs/command-permissions.md), [orchestration lifecycle](../../docs/orchestration-lifecycle.md), [goal lifecycle](../../docs/goal-lifecycle.md), or [MCP catalogs](docs/mcp-catalog.md).

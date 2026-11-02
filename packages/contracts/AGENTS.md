@@ -21,6 +21,6 @@ Inherits the [root rules](../../AGENTS.md). This package is `@step-harness/contr
 
 ## Validation and documentation
 
-- Run root `pnpm run check:contracts-deps-empty`; run the full `pnpm run check` after code changes.
+- Run root `pnpm run check:contracts-deps-empty`.
 - Run `pnpm exec vitest --run test/frame.test.ts` here. Framing changes cover split and combined chunks, empty payloads, and trailing-frame recovery.
 - Update consumer SDK / mode documentation when connections change. Explain the relationship between independent contracts and existing RPC protocols explicitly.

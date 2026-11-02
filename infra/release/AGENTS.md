@@ -24,4 +24,4 @@ Inherits the [root rules](../../AGENTS.md). This directory provides local releas
 - Run root `node --test scripts/release-bundle.test.mjs`.
 - Check all six archive names with `node infra/release/release-bundle.mjs --version 0.1.0 --base-url https://release.example.test/stepcode --dry-run`, without starting actual publication.
 - Run `bash -n infra/release/install.sh` for the shell template. Validate PowerShell changes on the corresponding platform and report any untested platforms.
-- Update installation / local-build guidance; stage new files before running `pnpm run check:public-boundary`.
+- Update installation / local-build guidance.

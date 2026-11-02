@@ -22,6 +22,6 @@ Inherits the [root rules](../../AGENTS.md). This package is `@step-harness/telem
 
 ## Validation and documentation
 
-- Run `pnpm exec vitest --run test/telemetry.test.ts test/conformance.test.ts` here; run root `pnpm run check` after code changes.
+- Run `pnpm exec vitest --run test/telemetry.test.ts test/conformance.test.ts` here.
 - Adapter-contract changes validate both no-op and in-memory references, including synchronous throws, asynchronous rejections, recording failures, and post-settlement writes.
 - Update the [package overview](README.md). Consumers maintain domain-schema documentation, such as the [agent-core schema](../agent-core/docs/telemetry-schema.md).
