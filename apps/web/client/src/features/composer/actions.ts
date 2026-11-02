@@ -99,6 +99,26 @@ export async function selectPolicy(preset: string): Promise<void> {
 	}
 }
 
+/**
+ * Leave plan mode now, without composing a message.
+ *
+ * `/plan off` is a kernel command, so the host applies it immediately even while
+ * a turn runs. Sending it as a message would queue it behind that turn instead —
+ * and a queued "leave" arrives after the turn it was meant to interrupt.
+ */
+export async function leavePlanMode(): Promise<void> {
+	const current = getState().current;
+	if (!current) return;
+	try {
+		await apiSend(`/api/v1/sessions/${current.id}/mode`, "PATCH", { mode: "plan", enabled: false });
+		// The route is fire-and-forget (a slash command can take seconds), so pull
+		// the state the mode change settled on instead of waiting for an event.
+		await refreshCurrent();
+	} catch (error) {
+		showError(errorMessage(error));
+	}
+}
+
 /* ── Kernel selectors (the Full Access risk question) ─────────────────────── */
 
 /** The question to show: the open session's, or the draft's own Full Access question. */

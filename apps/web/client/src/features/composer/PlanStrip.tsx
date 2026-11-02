@@ -20,7 +20,7 @@ import { useT } from "../../i18n";
 import { basename } from "../../lib/format";
 import { useAppStore } from "../../state/store";
 import { Icon, Tooltip } from "../../ui";
-import { sendMessage } from "./actions";
+import { leavePlanMode } from "./actions";
 
 export function PlanStrip() {
 	const t = useT();
@@ -41,16 +41,16 @@ export function PlanStrip() {
 			{path ? <span className="plan-strip-path">{name}</span> : null}
 			<span className="plan-strip-hint">{t("planStripHint")}</span>
 			{enabled ? (
-				// Leaving is the user's own decision, expressed as an absolute verb.
-				// A toggle would flip whatever state the turn left behind when the
-				// message is queued behind a running turn.
+				// Leaving is the user's own decision and takes effect now: a queued
+				// one would arrive after the turn it was meant to interrupt, and a
+				// toggle would flip whatever state that turn left behind.
 				<Tooltip content={t("planStripExitHint")}>
 					<button
 						className="plan-strip-exit"
 						id="planStripExit"
 						type="button"
 						onClick={() => {
-							void sendMessage("/plan off");
+							void leavePlanMode();
 						}}
 					>
 						{t("planStripExit")}

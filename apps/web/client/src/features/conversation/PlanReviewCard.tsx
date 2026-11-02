@@ -22,7 +22,7 @@ import { useT } from "../../i18n";
 import { useAppStore } from "../../state/store";
 import type { PlanReview } from "../../state/types";
 import { Icon } from "../../ui";
-import { sendMessage } from "../composer/actions";
+import { leavePlanMode, sendMessage } from "../composer/actions";
 
 export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 	const t = useT();
@@ -94,14 +94,14 @@ export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 								<Icon name="pencil" size="xs" />
 								{t("planRequestChanges")}
 							</button>
-							{/* Leaving without running is the third answer, and an absolute
-							 * verb: a toggle queued behind a running turn would flip the state. */}
+							{/* Leaving without running is the third answer, applied now: a
+							 * queued one would arrive after the turn it meant to interrupt. */}
 							<button
 								type="button"
 								className="plan-review-button"
 								id={id("planExit", actionable)}
 								disabled={busy}
-								onClick={() => void send("/plan off")}
+								onClick={() => void leavePlanMode()}
 							>
 								{t("planExit")}
 							</button>
