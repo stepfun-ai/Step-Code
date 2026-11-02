@@ -75,9 +75,12 @@ export function transformMessages<TApi extends Api>(
 
 	// First pass: transform messages (unsupported image downgrade, thinking blocks, tool call ID normalization)
 	const transformed = imageAwareMessages.map((msg) => {
-		// User messages pass through unchanged
+		// User messages pass through unchanged, except that an image-only prompt carries
+		// a blank text block beside its images, which vendors may reject.
 		if (msg.role === "user") {
-			return msg;
+			if (!Array.isArray(msg.content)) return msg;
+			const kept = msg.content.filter((block) => block.type !== "text" || block.text.trim().length > 0);
+			return kept.length > 0 && kept.length < msg.content.length ? { ...msg, content: kept } : msg;
 		}
 
 		// Handle toolResult messages - normalize toolCallId if we have a mapping
