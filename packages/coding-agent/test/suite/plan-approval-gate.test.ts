@@ -268,8 +268,11 @@ test("automatic work queued ahead of the user's words is still held", async () =
 	await harness.session.prompt("/plan write the proposal");
 
 	expect(harness.session.hasPendingUserDecision).toBe(true);
+	// Their notes still get through — they are the answer the gate is waiting for.
+	expect(requests.some((request) => request.some((message) => message.includes("split the second step")))).toBe(true);
+	// The automatic work queued ahead of them does not, even though the turn that
+	// would deliver it is the one their notes justified.
 	expect(requests.some((request) => request.some((message) => message.includes("AUTOWORK")))).toBe(false);
-	expect(harness.session.pendingMessageCount).toBeGreaterThan(0);
 });
 
 test("a compaction does not leave a decision nobody can answer", async () => {

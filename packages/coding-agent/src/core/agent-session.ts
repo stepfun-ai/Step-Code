@@ -491,6 +491,9 @@ export class AgentSession {
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
+		// Installed once: the loop drains the queues long after a run-start check,
+		// so the decision has to be consulted at delivery time.
+		this.agent.setQueueDeliveryFilter(this._queueDeliveryAllowed);
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
 		this._scopedModels = config.scopedModels ?? [];
@@ -2059,7 +2062,9 @@ export class AgentSession {
 		// existed is how they answer it, whether it arrived mid-turn or after, so it
 		// still runs — otherwise their request waits behind a gate only they can
 		// open, with nothing left on screen to open it.
-		if (this.hasPendingUserDecision && !this._nextQueuedInputIsUser()) return false;
+		if (this.hasPendingUserDecision && !this.agent.hasDeliverableQueuedMessage(this._queueDeliveryAllowed)) {
+			return false;
+		}
 
 		// CLM maintains context for a future request. A successful settled answer
 		// needs no extra model call; the next prompt/continuation performs the
@@ -2084,7 +2089,7 @@ export class AgentSession {
 		// The agent loop drains both queues before emitting agent_end, except when a
 		// tool result ended the turn first. Messages here were queued by `agent_end`
 		// handlers, or were still pending when a control barrier ended the run.
-		return this.agent.hasQueuedMessages();
+		return this.agent.hasDeliverableQueuedMessage(this._queueDeliveryAllowed);
 	}
 
 	/**
@@ -2410,17 +2415,17 @@ export class AgentSession {
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
 	/**
-	 * Whether the user's own input is what the agent would deliver next.
+	 * Whether this queued message may be delivered now.
 	 *
-	 * A continuation delivers one queued message at a time — steering before
-	 * follow-ups. Only the message at the head of that order is the user's answer;
-	 * work queued ahead of it is not, and letting the whole continuation run would
-	 * deliver that work on the user's behalf.
+	 * A pending decision holds work that would run on the user's behalf — a goal
+	 * continuation, a cron delivery, a lane waking its parent. It does not hold
+	 * what the user wrote: their message is how they answer, and it may be waiting
+	 * in the queue from before the decision existed. Asked per message, because
+	 * the loop delivers a batch at a time and would otherwise carry the refused
+	 * work along with the allowed one.
 	 */
-	private _nextQueuedInputIsUser(): boolean {
-		const next = this.agent.peekNextQueued();
-		return next !== undefined && this._queuedFromUser.has(next);
-	}
+	private _queueDeliveryAllowed = (message: AgentMessage): boolean =>
+		!this.hasPendingUserDecision || this._queuedFromUser.has(message);
 
 	private async _queueSteer(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
 		this._steeringMessages.push(text);

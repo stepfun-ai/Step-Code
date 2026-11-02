@@ -705,23 +705,48 @@ describe("Agent", () => {
 		expect(agent.state.messages).not.toContainEqual(message);
 	});
 
-	it("peeks the next queued message without draining it", () => {
-		// A caller that must decide whether continuing is safe needs to know which
-		// message goes first: steering drains before follow-ups.
-		const agent = new Agent({ streamFn: unusedStreamFunction });
-		expect(agent.peekNextQueued()).toBeUndefined();
+	it("holds a queued message a delivery filter refuses", async () => {
+		// Holding is per message: the loop takes a batch at a time, so refusing one
+		// message must not carry the ones behind it along, and the held message has
+		// to stay queued rather than be dropped.
+		let responseCount = 0;
+		const agent = new Agent({
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				responseCount++;
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage(`Reply ${responseCount}`) });
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: [{ type: "text", text: "Initial" }], timestamp: Date.now() - 10 },
+			createAssistantMessage("Initial response"),
+		];
+		const held = { role: "user" as const, content: [{ type: "text" as const, text: "Held work" }], timestamp: 1 };
+		const allowed = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "The user's words" }],
+			timestamp: 2,
+		};
+		agent.followUp(held);
+		agent.followUp(allowed);
 
-		const followUp = { role: "user" as const, content: "Follow-up", timestamp: Date.now() };
-		const steer = { role: "user" as const, content: "Steering", timestamp: Date.now() };
-		agent.followUp(followUp);
-		expect(agent.peekNextQueued()).toBe(followUp);
+		agent.setQueueDeliveryFilter((message) => message === allowed);
+		await agent.continue();
 
-		agent.steer(steer);
-		expect(agent.peekNextQueued()).toBe(steer);
+		const texts = agent.state.messages
+			.filter((message) => message.role === "user")
+			.map((message) =>
+				typeof message.content === "string"
+					? message.content
+					: message.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+			);
+		expect(texts).toContain("The user's words");
+		expect(texts).not.toContain("Held work");
+		// Refused, not dropped: it is still waiting for a turn that may deliver it.
 		expect(agent.hasQueuedMessages()).toBe(true);
-
-		// Peeking is not delivery.
-		expect(agent.peekNextQueued()).toBe(steer);
 	});
 
 	it("should handle abort controller", () => {

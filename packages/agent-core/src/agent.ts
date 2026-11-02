@@ -144,24 +144,42 @@ class PendingMessageQueue {
 		return this.messages.length > 0;
 	}
 
-	/** The message the next drain would return, without removing it. */
-	peek(): AgentMessage | undefined {
-		return this.messages[0];
+	/**
+	 * Take the messages that may be delivered now.
+	 *
+	 * `allow` is asked per message, and a refused one stays queued: a caller can
+	 * hold part of the queue without dropping what it holds or reordering what it
+	 * releases. With no predicate this drains everything the mode allows.
+	 */
+	drain(allow?: (message: AgentMessage) => boolean): AgentMessage[] {
+		if (!allow) {
+			if (this.mode === "all") {
+				const drained = this.messages.slice();
+				this.messages = [];
+				return drained;
+			}
+			const first = this.messages[0];
+			if (!first) return [];
+			this.messages = this.messages.slice(1);
+			return [first];
+		}
+		if (this.mode === "all") {
+			const released: AgentMessage[] = [];
+			const held: AgentMessage[] = [];
+			for (const message of this.messages) (allow(message) ? released : held).push(message);
+			this.messages = held;
+			return released;
+		}
+		const index = this.messages.findIndex(allow);
+		if (index === -1) return [];
+		const [first] = this.messages.splice(index, 1);
+		return [first!];
 	}
 
-	drain(): AgentMessage[] {
-		if (this.mode === "all") {
-			const drained = this.messages.slice();
-			this.messages = [];
-			return drained;
-		}
-
-		const first = this.messages[0];
-		if (!first) {
-			return [];
-		}
-		this.messages = this.messages.slice(1);
-		return [first];
+	/** Whether any queued message would pass `allow`. */
+	hasDeliverable(allow?: (message: AgentMessage) => boolean): boolean {
+		if (!allow) return this.messages.length > 0;
+		return this.messages.some(allow);
 	}
 
 	clear(): void {
@@ -330,14 +348,26 @@ export class Agent {
 	}
 
 	/**
-	 * The message the next drain would deliver, without removing it.
+	 * Whether either queue holds a message that may be delivered now.
 	 *
-	 * A caller that has to decide whether continuing is safe needs to know which
-	 * queued message would go first: steering drains before follow-ups, and a
-	 * queue that will mix the two has no single "has queued work" answer.
+	 * A caller that has to decide whether continuing is safe asks this rather than
+	 * `hasQueuedMessages`: work the predicate refuses does not justify a turn.
 	 */
-	peekNextQueued(): AgentMessage | undefined {
-		return this.steeringQueue.peek() ?? this.followUpQueue.peek();
+	hasDeliverableQueuedMessage(allow: (message: AgentMessage) => boolean): boolean {
+		return this.steeringQueue.hasDeliverable(allow) || this.followUpQueue.hasDeliverable(allow);
+	}
+
+	/**
+	 * Filter consulted whenever the loop takes a queued message.
+	 *
+	 * Holding a message is the only way to keep automatic work out of a turn while
+	 * the user's own input still runs: the queues are drained by the loop, one
+	 * batch at a time, so a check made before starting the run cannot govern what
+	 * it delivers later.
+	 */
+	private queueDeliveryFilter: ((message: AgentMessage) => boolean) | undefined;
+	setQueueDeliveryFilter(filter: ((message: AgentMessage) => boolean) | undefined): void {
+		this.queueDeliveryFilter = filter;
 	}
 
 	/** Active abort signal for the current run, if any. */
@@ -399,13 +429,13 @@ export class Agent {
 		}
 
 		if (lastMessage.role === "assistant") {
-			const queuedSteering = this.steeringQueue.drain();
+			const queuedSteering = this.steeringQueue.drain(this.queueDeliveryFilter);
 			if (queuedSteering.length > 0) {
 				await this.runPromptMessages(queuedSteering, { skipInitialSteeringPoll: true });
 				return;
 			}
 
-			const queuedFollowUps = this.followUpQueue.drain();
+			const queuedFollowUps = this.followUpQueue.drain(this.queueDeliveryFilter);
 			if (queuedFollowUps.length > 0) {
 				await this.runPromptMessages(queuedFollowUps);
 				return;
@@ -511,9 +541,9 @@ export class Agent {
 					skipInitialSteeringPoll = false;
 					return [];
 				}
-				return this.steeringQueue.drain();
+				return this.steeringQueue.drain(this.queueDeliveryFilter);
 			},
-			getFollowUpMessages: async () => this.followUpQueue.drain(),
+			getFollowUpMessages: async () => this.followUpQueue.drain(this.queueDeliveryFilter),
 		};
 	}
 
