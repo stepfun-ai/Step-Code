@@ -27,14 +27,27 @@ import {
 
 /**
  * File-changing tools: the built-in names and the Step tool profile's, which
- * Web sessions use. Step's `edit_file` records the same patch as `edit`; its
- * `write_file` records none (skipped) and `changed: false` for a no-op.
+ * Web sessions use. Step's `edit_file` records the same patch as `edit`, and
+ * its `write_file` records the same patch (or why it recorded none) as
+ * `write`; a `write_file` from older sessions has neither. Both report
+ * `changed: false` for a file that already held the content.
  */
 const FILE_CHANGE_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "edit_file", "write_file"]);
 
 function toolPath(input: Readonly<Record<string, unknown>>): string | undefined {
 	const value = input.path ?? input.file_path;
 	return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+/**
+ * Whether a finished edit/write result records what the call left in the file:
+ * a patch, or why it recorded none. A call can fail after its write landed (a
+ * cancelled `then_run`, a failure preparing the result) and still carry that
+ * record, so `isError` does not answer this; a call that failed before writing
+ * records neither, and must not be counted as a change.
+ */
+function recordsAppliedChange(details: WriteToolDetails & { changed?: unknown }): boolean {
+	return typeof details.patch === "string" || details.untracked !== undefined;
 }
 
 /**
@@ -252,7 +265,7 @@ export function turnRevertNotice(
 	].join("\n");
 }
 
-/** Successful edit/write calls of the turn that starts at the user entry `turnId`, in order. */
+/** Edit/write calls of the turn that starts at the user entry `turnId`, in order, that recorded a change. */
 export function turnChanges(entries: readonly SessionEntry[], turnId: string): TurnChangeSet {
 	const start = entries.findIndex((entry) => entry.id === turnId && isUserMessage(entry));
 	const changes: TurnChange[] = [];
@@ -276,10 +289,13 @@ export function turnChanges(entries: readonly SessionEntry[], turnId: string): T
 				calls.set(String(part.id), { name: String(part.name ?? ""), path: toolPath(args) });
 			}
 		}
-		if (message.role !== "toolResult" || message.isError || !message.toolCallId) continue;
+		if (message.role !== "toolResult" || !message.toolCallId) continue;
 		const call = calls.get(message.toolCallId);
 		if (!call?.path || !FILE_CHANGE_TOOLS.has(call.name)) continue;
 		const details = (message.details ?? {}) as WriteToolDetails & { changed?: unknown };
+		// A call that failed before writing recorded nothing; one that failed after
+		// writing still carries the change it applied.
+		if (message.isError === true && !recordsAppliedChange(details)) continue;
 		// Step's write_file left a file that already held the content untouched.
 		if (details.changed === false) continue;
 		if (typeof details.patch !== "string") {
@@ -553,10 +569,13 @@ async function replayFile(
 				calls.set(String(part.id), { name: String(part.name ?? ""), path: toolPath(args), content: args.content });
 			}
 		}
-		if (message.role !== "toolResult" || message.isError || !message.toolCallId) continue;
+		if (message.role !== "toolResult" || !message.toolCallId) continue;
 		const call = calls.get(message.toolCallId);
 		if (!call?.path || !FILE_CHANGE_TOOLS.has(call.name) || !(await sameFile(call.path))) continue;
 		const details = (message.details ?? {}) as WriteToolDetails & { changed?: unknown };
+		// A call that failed before writing recorded nothing to replay; one that
+		// failed after writing left exactly what its record describes.
+		if (message.isError === true && !recordsAppliedChange(details)) continue;
 		const write = call.name === "write" || call.name === "write_file";
 		// A write names the whole content, even when the file already held it (`changed: false`).
 		if (write && typeof call.content === "string") content = recordedText(call.content);

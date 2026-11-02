@@ -330,7 +330,8 @@ When to add or change one:
   protection, or bring back a Host-owned browser.
 - File delivery recognition is a frontend projection, not a persisted or
   filesystem-verified registry. Settled turns collect local Markdown links
-  and supported structured successful write/edit outputs; inline basenames
+  and supported structured write/edit outputs that recorded a change (a call
+  whose own error came after the write still counts); inline basenames
   require an unambiguous observed output. References use the existing
   workspace file API and containment checks, never browser `file:` navigation.
   Delivery cards (under the closing reply of a turn) toggle only their own
@@ -344,6 +345,11 @@ When to add or change one:
   profile Web sessions use (`edit_file` and `write_file` record the same
   patches as `edit` / `write`; a `write_file` from older sessions has none and
   stays untracked; `changed: false` is no change) as well as `edit` / `write`.
+  Whether a call changed a file is read from its result details (`patch`, or
+  the reason none was recorded), never from `isError`: a call can fail after
+  its write landed (a cancelled `then_run`, a result-preparation failure) and
+  still carry the change, which must stay listed, undoable and replayable,
+  while a call that failed before writing records neither and is no change.
   Browser-renderable pages open in the
   embedded browser on click, with a system-browser action; both
   browsers load them from `src/site-preview.ts`, a separate token-scoped

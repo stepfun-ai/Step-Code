@@ -368,24 +368,32 @@ const FILE_CHANGE_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "edit_f
 
 /**
  * The file change of a finished edit/write call. `edit`, `write` and Step's
- * `edit_file` record a unified patch in their result details; `write` says why
- * when it recorded none. Step's `write_file` records no patch (an untracked
- * change), and `changed: false` when the file already held the content.
+ * `edit_file` record a unified patch in their result details, and say why when
+ * they recorded none. Step's `write_file` records the same patch as `write`; a
+ * `write_file` from older sessions has neither a patch nor a reason, and both
+ * report `changed: false` when the file already held the content.
  * `result` is the recorded tool result, or a live `tool_execution_end`'s
  * result with the event's own `isError`.
+ *
+ * Whether the file was written is answered by the change record, not by
+ * `isError`: a call can fail after its write landed (a cancelled `then_run`, a
+ * failure preparing the result) and still record the patch. A call that failed
+ * before writing records neither a patch nor a reason for its absence.
  */
 function fileChange(
 	name: string,
 	args: unknown,
 	result: { readonly details?: unknown; readonly isError?: boolean } | undefined,
 ): FileChange | undefined {
-	if (!FILE_CHANGE_TOOLS.has(name) || !result || result.isError) return undefined;
+	if (!FILE_CHANGE_TOOLS.has(name) || !result) return undefined;
 	const details = (result.details ?? {}) as {
 		patch?: unknown;
 		untracked?: unknown;
 		changed?: unknown;
 	};
 	if (details.changed === false) return undefined;
+	if (result.isError === true && typeof details.patch !== "string" && details.untracked === undefined)
+		return undefined;
 	const input = (args ?? {}) as { path?: unknown; file_path?: unknown };
 	const path = typeof input.path === "string" ? input.path : input.file_path;
 	if (typeof path !== "string" || !path.trim()) return undefined;
