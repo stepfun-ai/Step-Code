@@ -200,10 +200,10 @@ test("notes sent mid-run reach the model as they are, with no second message", a
 	expect(request.some((message) => message.includes("call exit_plan_mode again"))).toBe(false);
 });
 
-test("a change request is not held back by the proposal the running turn submits", async () => {
-	// The user's own words always run: that message is also how a decision gets
-	// answered. A turn that submits the old proposal while their notes are queued
-	// must not lock those notes behind the gate it just armed.
+test("the user's own queued words are not held back by a proposal the run submits", async () => {
+	// The gate stops automatic work. A prompt the user typed is how they answer a
+	// decision, so it still runs — otherwise their change request waits behind a
+	// gate only they can open, with nothing on screen to open it.
 	const { harness } = await createPlanHarness("step-plan-gate-notes-");
 	const seen: string[][] = [];
 	harness.setResponses([

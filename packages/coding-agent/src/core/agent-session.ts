@@ -366,6 +366,11 @@ export class AgentSession {
 	private _steeringMessages: string[] = [];
 	/** Tracks pending follow-up messages for UI display. Removed when delivered. */
 	private _followUpMessages: string[] = [];
+	/**
+	 * Queued inputs a person wrote, by text, so the decision gate below can tell
+	 * the user's own words from work a feature queued on their behalf.
+	 */
+	private _queuedFromUser = new Set<string>();
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
 	/** Context-only custom messages queued during a run, flushed once the current turn's tool results are in. */
@@ -1338,12 +1343,14 @@ export class AgentSession {
 				const steeringIndex = this._steeringMessages.indexOf(messageText);
 				if (steeringIndex !== -1) {
 					this._steeringMessages.splice(steeringIndex, 1);
+					this._queuedFromUser.delete(messageText);
 					this._emitQueueUpdate();
 				} else {
 					// Check follow-up queue
 					const followUpIndex = this._followUpMessages.indexOf(messageText);
 					if (followUpIndex !== -1) {
 						this._followUpMessages.splice(followUpIndex, 1);
+						this._queuedFromUser.delete(messageText);
 						this._emitQueueUpdate();
 					}
 				}
@@ -2045,7 +2052,12 @@ export class AgentSession {
 		// The turn ended on a decision the user has not answered yet. Continuing here
 		// would run a queued input, or a compaction recovery request, on the user's
 		// behalf; the recovered work starts from the user's next prompt instead.
-		if (this.hasPendingUserDecision) return false;
+		//
+		// The user's own words are not that. A prompt they typed before the decision
+		// existed is how they answer it, whether it arrived mid-turn or after, so it
+		// still runs — otherwise their request waits behind a gate only they can
+		// open, with nothing left on screen to open it.
+		if (this.hasPendingUserDecision && !this._hasQueuedUserInput()) return false;
 
 		// CLM maintains context for a future request. A successful settled answer
 		// needs no extra model call; the next prompt/continuation performs the
@@ -2145,9 +2157,9 @@ export class AgentSession {
 					);
 				}
 				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
+					await this._queueFollowUp(expandedText, currentImages, options?.source);
 				} else {
-					await this._queueSteer(expandedText, currentImages);
+					await this._queueSteer(expandedText, currentImages, options?.source);
 				}
 				preflightResult?.(true);
 				return;
@@ -2157,7 +2169,7 @@ export class AgentSession {
 			// answered; the message waits for the turn that answers it. A user's own
 			// message always runs, because that is how the decision gets answered.
 			if (options?.source === "extension" && this.hasPendingUserDecision) {
-				await this._queueFollowUp(expandedText, currentImages);
+				await this._queueFollowUp(expandedText, currentImages, options.source);
 				preflightResult?.(true);
 				return;
 			}
@@ -2395,8 +2407,14 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
-	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+	private _hasQueuedUserInput(): boolean {
+		const queued = [...this._steeringMessages, ...this._followUpMessages];
+		return queued.some((text) => this._queuedFromUser.has(text));
+	}
+
+	private async _queueSteer(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
 		this._steeringMessages.push(text);
+		if (source !== "extension") this._queuedFromUser.add(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
@@ -2412,8 +2430,9 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
-	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueFollowUp(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
 		this._followUpMessages.push(text);
+		if (source !== "extension") this._queuedFromUser.add(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
@@ -2581,6 +2600,7 @@ export class AgentSession {
 		const followUp = [...this._followUpMessages];
 		this._steeringMessages = [];
 		this._followUpMessages = [];
+		this._queuedFromUser.clear();
 		// Custom messages held behind a pending decision are queue entries too:
 		// leaving them would deliver content the caller believes it cleared.
 		this._pendingCustomMessages = [];

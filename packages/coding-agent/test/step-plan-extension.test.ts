@@ -810,6 +810,45 @@ test("entering plan mode does not carry a proposal from an earlier round", async
 	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
 });
 
+test("a question past a submitted proposal does not release the decision", async () => {
+	// The whole point of the review surface: the user is still deciding, so
+	// another thing they say — a question as easily as a note — is not consent.
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx({ mode: "rpc", hasUI: true, planReviewSurface: true });
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Plan\n1. Do the thing\n");
+	await runTool(harness, "exit_plan_mode", {}, context);
+	const waiting = lastPlanEntry(harness).pendingProposalHash;
+	expect(waiting).toBeDefined();
+
+	await startTurn(harness, context);
+
+	expect(lastPlanEntry(harness).pendingProposalHash).toBe(waiting);
+});
+
+test("a caller handoff is settled by the next turn, because that is its only channel", async () => {
+	// The mirror case: no surface to answer with, so the caller's next message is
+	// the decision, and the gate lets the conversation continue.
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx({ mode: "rpc", hasUI: false });
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Plan\n1. Do the thing\n");
+	await runTool(harness, "exit_plan_mode", {}, context);
+	expect(lastPlanEntry(harness).pendingProposalHash).toBeDefined();
+
+	await startTurn(harness, context);
+
+	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
+});
+
 test("a caller handoff records the wait and the exit in one entry", async () => {
 	// Two writes would leave a window where the branch says a proposal waits but
 	// the caller never received one, or the reverse.
@@ -2499,10 +2538,13 @@ interface AnnouncementMessage {
 	details: { mode: string; planFilePath?: string };
 }
 
-async function startTurn(harness: Harness): Promise<AnnouncementMessage | undefined> {
+async function startTurn(
+	harness: Harness,
+	context: ExtensionContext = harness.ctx(),
+): Promise<AnnouncementMessage | undefined> {
 	const result = (await harness.emit(
 		{ type: "before_agent_start", prompt: "next", systemPrompt: "base prompt" },
-		harness.ctx(),
+		context,
 	)) as { message?: AnnouncementMessage } | undefined;
 	// Persist like AgentSession does, so the next turn sees what was announced.
 	if (result?.message) {
