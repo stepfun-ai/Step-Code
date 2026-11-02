@@ -1243,7 +1243,7 @@ const enUS: Record<MessageKey, string> = {
 	themeLight: "Light",
 	themeDark: "Dark",
 	emptyConversation: "No messages yet — start a conversation below",
-	emptyTitle: "What should we move forward today?",
+	emptyTitle: "What's next?",
 	emptySessionImport: "Migrate sessions into StepCode",
 	messagePlaceholder: "Type a message…",
 	markdownPreview: "Preview Markdown",
