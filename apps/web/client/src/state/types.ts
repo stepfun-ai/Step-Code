@@ -284,6 +284,14 @@ export interface SessionSnapshot extends SessionSummary {
 	readonly goal?: GoalState;
 	/** Plan mode state (runtime.ts `projectPlanMode`). */
 	readonly planMode?: PlanModeState;
+	/**
+	 * Hash of the proposal waiting for the user's answer, when one is.
+	 *
+	 * A session fact from the kernel: exactly this snapshot's card is actionable.
+	 * An answered proposal cannot look pending, and a message typed past the
+	 * proposal cannot look like consent.
+	 */
+	readonly pendingPlanHash?: string;
 }
 
 /** The summary board's goal section data (runtime.ts `projectGoal`). */

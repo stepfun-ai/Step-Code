@@ -1,11 +1,14 @@
 /**
  * The plan review handoff as a session fact.
  *
- * A handoff leaves plan mode and ends its turn, so the proposal is no longer in
- * an assistant message: it lives in the `exit_plan_mode` tool result. Hosts that
- * report a final answer, print text mode, or decide whether to continue on their
- * own all need the same reading of that result, and a second spelling would
- * drift from the tool that writes it.
+ * A handoff ends its turn, so the proposal is no longer in an assistant message:
+ * it lives in the `exit_plan_mode` tool result. Hosts that report a final answer
+ * or print text mode need the same reading of that result, and a second spelling
+ * would drift from the tool that writes it.
+ *
+ * Whether the user has answered is a separate session fact (the `step-plan`
+ * entry's `pendingProposalHash`), because this scan cannot tell an answer from a
+ * question and cannot see a decision that wrote no user message.
  */
 
 import type { AgentMessage } from "@step-harness/agent-core";

@@ -253,6 +253,15 @@ export interface AgentSessionConfig {
 export interface ExtensionBindings {
 	uiContext?: ExtensionUIContext;
 	mode?: ExtensionMode;
+	/**
+	 * The host can show a plan proposal and collect a decision for it.
+	 *
+	 * `mode` and `hasUI` cannot answer this: every rpc host passes a dialog
+	 * bridge, including clients with no plan-review surface. A host that has one
+	 * sets this, and the plan tool hands the proposal over instead of leaving the
+	 * mode by itself.
+	 */
+	planReviewSurface?: boolean;
 	commandContextActions?: ExtensionCommandContextActions;
 	/** Host UI cleanup after the session cancels its run (for example, restore queued input). */
 	abortHandler?: () => void;
@@ -419,6 +428,8 @@ export class AgentSession {
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
 	private _extensionMode: ExtensionMode = "print";
+	/** Whether the bound host can show a plan proposal and collect a decision. */
+	private _extensionPlanReviewSurface = false;
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionAbortHandler?: () => void;
 	/** Predicates that block automatic turn starts until the user answers. */
@@ -3501,6 +3512,9 @@ export class AgentSession {
 		if (bindings.mode !== undefined) {
 			this._extensionMode = bindings.mode;
 		}
+		if (bindings.planReviewSurface !== undefined) {
+			this._extensionPlanReviewSurface = bindings.planReviewSurface;
+		}
 		if (bindings.commandContextActions !== undefined) {
 			this._extensionCommandContextActions = bindings.commandContextActions;
 		}
@@ -3682,6 +3696,7 @@ export class AgentSession {
 				getScopedModels: () => this._scopedModels,
 				isIdle: () => this.isIdle,
 				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
+				hasPlanReviewSurface: () => this._extensionPlanReviewSurface,
 				getSignal: () => this.agent.signal,
 				abort: () => {
 					this._abortCurrentRun();

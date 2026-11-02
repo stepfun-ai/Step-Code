@@ -137,7 +137,16 @@ function ComposerInput({
 	const cwd = useAppStore(activeCwd);
 	const selection = useAppStore((state) => `${state.current?.id ?? "draft"}\0${activeCwd(state)}`);
 	const status = useAppStore((state) => state.current?.status);
-	const waiting = status === "waiting";
+	/*
+	 * A proposal waiting for an answer blocks composing a different message:
+	 * without this, text typed past the card would read as an answer to it — the
+	 * exact ambiguity the card exists to remove. The card takes the input it
+	 * needs (approve, notes, or exit).
+	 */
+	const awaitingPlanReview = useAppStore((state) => state.pendingPlanReview !== undefined);
+	// Only the bottom composer is blocked: the in-place editor rewrites a message
+	// that already exists, and the plan card has nothing to say about it.
+	const waiting = status === "waiting" || (awaitingPlanReview && variant !== "edit");
 	/** During a turn Enter queues the message and Cmd/Ctrl+Enter steers it (see `sendMessage`). */
 	const active = useAppStore(turnActive);
 	const queuedCount = useAppStore((state) => state.current?.queuedMessages?.length ?? 0);

@@ -59,14 +59,14 @@ function userEntry(text: string): SessionEntry {
 	};
 }
 
-function reviews(entries: readonly SessionEntry[]) {
-	return timelineFromEntries(entries).flatMap((item) =>
+function reviews(entries: readonly SessionEntry[], pendingPlanHash?: string) {
+	return timelineFromEntries(entries, undefined, pendingPlanHash).flatMap((item) =>
 		item.kind === "tool" && item.planReview ? [{ tool: item.toolName, review: item.planReview }] : [],
 	);
 }
 
 test("a persisted proposal keeps its review card after a snapshot refresh", () => {
-	const found = reviews(call("exit_plan_mode", { details }));
+	const found = reviews(call("exit_plan_mode", { details }), details.planHash);
 	assert.equal(found.length, 1);
 	assert.deepEqual(found[0]?.review, {
 		planFilePath: details.planFilePath,
@@ -77,33 +77,41 @@ test("a persisted proposal keeps its review card after a snapshot refresh", () =
 	});
 });
 
-test("a decision (an ordinary user message after it) settles the card", () => {
-	const found = reviews([...call("exit_plan_mode", { details }), userEntry("同意执行，请按这份计划开始实现。")]);
-	assert.equal(found[0]?.review.pending, false);
-	assert.equal(found[0]?.review.outcome, "external_approval_required");
+test("only the proposal the kernel is waiting on is actionable", () => {
+	// `pending` comes from the session fact, not from the transcript: a question
+	// typed after the proposal is not consent, and an answered one is not pending.
+	const waiting = reviews([...call("exit_plan_mode", { details })], details.planHash);
+	assert.equal(waiting[0]?.review.pending, true);
+
+	const answered = reviews([...call("exit_plan_mode", { details })], undefined);
+	assert.equal(answered[0]?.review.pending, false);
+
+	const superseded = reviews([...call("exit_plan_mode", { details })], "f".repeat(64));
+	assert.equal(superseded[0]?.review.pending, false);
 });
 
-test("only the newest proposal is actionable", () => {
+test("a newer proposal supersedes the older one", () => {
 	const second = {
 		...details,
 		planContents: "# Plan\n\n1. Write README.md\n2. Write CHANGELOG.md\n",
 		planHash: "b".repeat(64),
 	};
-	const found = reviews([...call("exit_plan_mode", { details }), ...call("exit_plan_mode", { details: second })]);
+	const entries = [...call("exit_plan_mode", { details }), ...call("exit_plan_mode", { details: second })];
+	// Exactly one card answers the pending hash; the record of the earlier round
+	// stays in the transcript as a handled card.
 	assert.deepEqual(
-		found.map((item) => item.review.pending),
+		reviews(entries, second.planHash).map((item) => item.review.pending),
 		[false, true],
 	);
-	// A later decision settles the newest proposal too.
-	const decided = reviews([
-		...call("exit_plan_mode", { details }),
-		...call("exit_plan_mode", { details: second }),
-		userEntry("计划需要修改：\n\nsplit the README step"),
-	]);
-	assert.deepEqual(
-		decided.map((item) => item.review.pending),
-		[false, false],
-	);
+});
+
+test("an answered proposal leaves its record and stops blocking the page", () => {
+	// After a decision the card must still be visible as history — it just stops
+	// offering buttons — and nothing waits any more.
+	const items = timelineFromEntries(call("exit_plan_mode", { details }), undefined, undefined);
+	const card = items.flatMap((item) => (item.kind === "tool" && item.planReview ? [item.planReview] : []));
+	assert.equal(card.length, 1);
+	assert.equal(card[0]?.pending, false);
 });
 
 test("guard results (no proposal details) stay plain tool rows", () => {

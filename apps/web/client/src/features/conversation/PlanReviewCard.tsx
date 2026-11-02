@@ -2,14 +2,14 @@
  * `.plan-review`: the proposal an `exit_plan_mode` call submitted, shown when
  * the host has no review dialog of its own.
  *
- * Planning is investigation plus a written proposal, and exiting reports that
- * the investigation finished — it never authorizes the work. So the card asks
- * the user, in two ways the kernel already understands:
+ * The proposal is a submission, not an approval: plan mode stays on until the
+ * user answers, so the model cannot authorize itself and an ordinary question
+ * does not count as consent. The card asks with the two verbs the kernel owns:
  *
- * - "request changes" sends the notes through `/plan`, so the revision round is
- *   planned again and produces a new proposal to review (plan mode itself is
- *   already off when this card is shown);
- * - "approve and run" sends a normal message that authorizes implementation.
+ * - "request changes" sends the notes through `/plan`, which keeps planning and
+ *   produces a new proposal to review;
+ * - "approve and run" sends `/plan approve`, which leaves plan mode and starts
+ *   the implementation turn as one decision.
  *
  * Both are ordinary user messages: the decision lands in the transcript, starts
  * one turn, and needs no special execution channel. The state projection marks
@@ -19,6 +19,7 @@
 
 import { useState } from "react";
 import { useT } from "../../i18n";
+import { useAppStore } from "../../state/store";
 import type { PlanReview } from "../../state/types";
 import { Icon } from "../../ui";
 import { sendMessage } from "../composer/actions";
@@ -41,7 +42,13 @@ export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 		}
 	};
 
-	const actionable = review.pending && !settled;
+	// The kernel keeps plan mode on until the user answers, so the page's one
+	// pending proposal is the answer to "is this still waiting": a message typed
+	// after it — a question as easily as a note — does not settle it. Both places
+	// that draw the card (its transcript row and the panel at the end of the
+	// stream) ask the same source, so they cannot disagree.
+	const pending = useAppStore((state) => state.pendingPlanReview);
+	const actionable = pending?.planHash === review.planHash && !settled;
 	// A transcript keeps the cards of earlier rounds as their record. The ids stay
 	// on the one card that can be answered, so they name a single element.
 	const id = (name: string, show: boolean): string | undefined => (show ? name : undefined);
@@ -87,12 +94,23 @@ export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 								<Icon name="pencil" size="xs" />
 								{t("planRequestChanges")}
 							</button>
+							{/* Leaving without running is the third answer, and an absolute
+							 * verb: a toggle queued behind a running turn would flip the state. */}
+							<button
+								type="button"
+								className="plan-review-button"
+								id={id("planExit", actionable)}
+								disabled={busy}
+								onClick={() => void send("/plan off")}
+							>
+								{t("planExit")}
+							</button>
 							<button
 								type="button"
 								className="plan-review-button approve"
 								id={id("planApprove", actionable)}
 								disabled={busy}
-								onClick={() => void send(t("planApproveMessage"))}
+								onClick={() => void send("/plan approve")}
 							>
 								{t("planApprove")}
 							</button>
@@ -126,6 +144,22 @@ export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 					)}
 				</footer>
 			) : null}
+		</section>
+	);
+}
+
+/**
+ * The proposal the page is waiting on, as the stream's last element.
+ *
+ * Same card as the transcript record, in the place the questionnaire uses: the
+ * decision is the one thing the page is blocked on, so it sits where the user is
+ * looking rather than scrolling back to the tool row that produced it.
+ */
+export function PlanReviewPanel() {
+	const review = useAppStore((state) => state.pendingPlanReview);
+	return (
+		<section className="plan-review-panel" hidden={!review}>
+			{review ? <PlanReviewCard review={review} /> : null}
 		</section>
 	);
 }

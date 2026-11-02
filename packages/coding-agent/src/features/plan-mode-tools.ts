@@ -36,6 +36,31 @@ export interface StepPlanModeController {
 	exitPlanMode(outcome: StepPlanExitOutcome, extensionContext: ExtensionContext): void;
 	/** Plan file path for this session (persisted or derived from the session id). */
 	resolvePlanFilePath(extensionContext: ExtensionContext): string;
+	/**
+	 * A proposal is waiting for this user's answer.
+	 *
+	 * This is a session fact, not a projection: the handoff records the reviewed
+	 * snapshot here, and every decision clears it. Hosts and the automatic-turn
+	 * guard read it instead of inferring "still waiting" from the transcript, so
+	 * a question typed past the proposal cannot look like an answer and an
+	 * answered proposal cannot look pending.
+	 */
+	recordPendingProposal(planHash: string): void;
+	/** The hash of the proposal waiting for an answer, or undefined. */
+	pendingProposalHash(): string | undefined;
+	/** The proposal was answered (approved, revised, or left); nothing waits now. */
+	clearPendingProposal(): void;
+}
+
+/**
+ * Identity of a proposal's exact text.
+ *
+ * Shared by the review that shows it and the approval that must match it: two
+ * spellings of "the same plan" would let a click approve text the user did not
+ * read.
+ */
+export function hashPlanContents(planContents: string): string {
+	return createHash("sha256").update(planContents, "utf8").digest("hex");
 }
 
 /** Select a new per-session plan path; the extension retains saved paths on restore. */
@@ -136,7 +161,7 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 		renderShell: "self",
 		renderResult: renderPlanReviewResult,
 		description:
-			"Submit the written proposal for review. Requires a readable, nonempty regular plan file. In the TUI the user approves execution, requests refinements, or dismisses; approval exits planning, while refining or dismissing keeps it active. In headless and RPC runs the proposal is handed to the caller instead: plan mode exits, this turn ends, and the caller must obtain approval before execution. If no proposal was written, answer read-only questions directly and keep plan mode active until the user turns it off.",
+			"Submit the written proposal for review. Requires a readable, nonempty regular plan file. The user decides; you do not. In a host with a review surface — the terminal dialog, or the web and desktop apps — the proposal is shown and this turn ends, and plan mode stays until they answer: approval leaves planning and starts the work, a request for changes arrives as a new user message, and leaving keeps the mode off. A host without that surface hands the proposal to its caller, which must obtain approval before execution. If no proposal was written, answer read-only questions directly and keep plan mode active until the user turns it off.",
 		promptSnippet: "Submit the written proposal for review",
 		parameters: Type.Object({}),
 		// A decision barrier: later calls in this batch must not run behind it.
@@ -164,7 +189,7 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 					`Cannot review the plan at ${planFilePath}: ${error instanceof Error ? error.message : String(error)}. Provide a readable, nonempty regular file containing your proposal with write_file, then call exit_plan_mode again.`,
 				);
 			}
-			const planHash = createHash("sha256").update(planContents, "utf8").digest("hex");
+			const planHash = hashPlanContents(planContents);
 			const reviewed = (outcome: PlanReviewOutcome, feedback?: string): PlanReviewDetails => ({
 				planFilePath,
 				planContents,
@@ -179,14 +204,29 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 			const offText = planMode.enteredByUser()
 				? "Plan mode, which the host turned on for the user's /plan request, is now off"
 				: "Plan mode is now off";
+			// Every handoff leaves a proposal awaiting approval, so no automatic
+			// starter continues past it. A host that can ask the user keeps the fact
+			// until an explicit decision; one that cannot clears it on the caller's
+			// next message, which is the only channel it has. The terminal dialog
+			// answers in-process, so it never records one.
+			if (ctx.planReviewSurface) {
+				planMode.recordPendingProposal(planHash);
+				// The host draws the proposal and can collect an answer, which is what
+				// the terminal dialog does. Plan mode stays on until the user decides:
+				// leaving on submission would let any later message — a question as
+				// easily as an approval — authorize the work. The turn ends so the host
+				// can ask.
+				return reviewedResult(
+					`The proposal was submitted for review and this turn ends now. Do not call exit_plan_mode again in this turn; the user answers through the host, and a request for changes comes back as a new user message. Plan mode stays on, so file mutations stay limited to ${planFilePath}. Do not execute until the user approves.\n\nPlan file: ${planFilePath}\n\nPlan contents:\n${planContents}`,
+					reviewed("external_approval_required"),
+					true,
+				);
+			}
 			if (ctx.mode === "rpc") {
-				// An rpc child has a dialog bridge (hasUI is true) but no real user
-				// behind it, so its dialog can be auto-cancelled. Exit plan mode, but
-				// end this turn: the caller still owns approval before execution.
-				// Interactive hosts that drive the session over rpc (the web and
-				// desktop apps) land here too: they show the proposal in their own UI,
-				// so the result must neither claim the user approved nor imply that
-				// implementation may start.
+				// An rpc child has no user behind its dialog bridge, so nothing can
+				// answer there. Exit plan mode, but end this turn: the caller still
+				// owns approval before execution.
+				planMode.recordPendingProposal(planHash);
 				planMode.exitPlanMode("auto_rpc", ctx);
 				return reviewedResult(
 					`${offText} and the proposal was submitted for review. Do not call exit_plan_mode again. Exiting reports that the investigation is finished; it does not authorize implementation. This turn ends now: do not execute until the caller approves.\n\nPlan file: ${planFilePath}\n\nPlan contents:\n${planContents}`,
@@ -195,6 +235,7 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				);
 			}
 			if (!ctx.hasUI) {
+				planMode.recordPendingProposal(planHash);
 				planMode.exitPlanMode("auto_headless", ctx);
 				return reviewedResult(
 					`${offText}. Plan file kept at ${planFilePath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show an interactive prompt; the caller must gate approval externally. This turn ends now. Do not call exit_plan_mode again.`,
@@ -212,8 +253,7 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				// the click that approved the old text.
 				let unchanged = false;
 				try {
-					unchanged =
-						createHash("sha256").update(readPlanContents(planFilePath), "utf8").digest("hex") === planHash;
+					unchanged = hashPlanContents(readPlanContents(planFilePath)) === planHash;
 				} catch {
 					// A deleted or unreadable file cannot be the approved snapshot.
 				}

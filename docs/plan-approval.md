@@ -9,10 +9,16 @@ active and steers the notes into the next response; dismissal keeps it active an
 ends the turn. There is no deadline on that decision. The dialog closes when the
 run is cancelled, and the tool then reports the review as aborted.
 
-Headless runs and RPC hosts cannot obtain approval. They exit plan mode and hand
+A host declares which of the two it is. One that can show a proposal and collect a
+decision — the web and desktop apps — sets `planReviewSurface` when it binds the
+session; plan mode then stays on, the turn ends, and the proposal is recorded as
+`pendingProposalHash` in the `step-plan` entry. `mode` and `hasUI` cannot answer
+this: every rpc host passes a dialog bridge, including clients with no review
+surface.
+
+A host without that surface cannot obtain approval. It exits plan mode and hands
 the proposal to the caller, but the turn ends immediately: leaving the mode does
-not authorize execution. RPC hosts are always external, even when their dialog
-bridge reports `hasUI: true`. The caller must approve the exact snapshot before
+not authorize execution. The caller must approve the exact snapshot before
 starting an implementation turn. The host reports the proposal in place of the
 answer it does not have: print text mode writes the handoff to stdout, and the
 SDK result and the RPC `get_last_assistant_text` reply carry the handoff rather
@@ -84,9 +90,10 @@ Both interactive and external results carry structured `details`:
 ```
 
 `outcome: "external_approval_required"` identifies a handoff awaiting the
-caller's decision. `planModeExited: true` describes the resulting mode state; it
-does not mean approval was granted. External handoffs end the turn: the result
-sets `stopTurn` in addition to `terminate`.
+caller's decision. `planModeExited` describes the resulting mode state: `true` for
+a caller that left the mode, `false` for a review-surface host that keeps planning
+until the user answers. Neither means approval was granted. Every handoff ends the
+turn: the result sets `stopTurn` in addition to `terminate`.
 
 `approvalSource` identifies who owns the decision: `"user"` for the TUI review,
 including feedback and dismissal, and `"external"` for the headless / RPC
@@ -112,7 +119,9 @@ if (details?.outcome === "external_approval_required") {
   const expectedHash = createHash("sha256")
     .update(details.planContents, "utf8")
     .digest("hex");
-  if (details.planModeExited !== true || details.planHash !== expectedHash) {
+  // `planModeExited` is `true` for a caller that left the mode, `false` for a
+  // review-surface host that keeps planning until its user answers.
+  if (details.planHash !== expectedHash) {
     throw new Error("Incomplete or inconsistent plan handoff");
   }
   // Present details.planContents and bind the caller's decision to details.planHash.
@@ -144,7 +153,7 @@ Native outcomes keep their existing behavior:
 | `approved` | `user` | `true` | The user selected execution; restore tools and continue. |
 | `feedback` | `user` | `false` | Keep planning and steer the user's notes into the next response. |
 | `dismissed` | `user` | `false` | Keep planning and stop the turn to wait for the user. |
-| `external_approval_required` | `external` | `true` | Headless / RPC handoff; the turn ends and the caller must gate execution. |
+| `external_approval_required` | `external` | `true` / `false` | The turn ends. `true` for a caller that left the mode; `false` for a review-surface host that keeps planning until its user answers. |
 
 The TUI still selects execution by default, and Enter confirms that selection.
 Interactive result details also include the hash of the reviewed snapshot.

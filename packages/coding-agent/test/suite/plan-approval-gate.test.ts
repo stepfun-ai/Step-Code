@@ -149,40 +149,46 @@ test("a reload does not leave an automatic-turn guard stranded", async () => {
 	harness.setResponses([fauxAssistantMessage("after reload")]);
 	await harness.session.reload();
 	expect(harness.session.hasPendingUserDecision).toBe(false);
+});
 
-	// The new generation registers its own guard: an unanswered handoff on the
-	// restored branch is gated again. The handoff is appended directly because the
-	// reload also drops the test provider registration.
-	harness.sessionManager.appendMessage({
-		role: "toolResult",
-		toolCallId: "plan-after-reload",
-		toolName: "exit_plan_mode",
-		content: [{ type: "text", text: "Caller must approve." }],
-		details: { outcome: "external_approval_required" },
-		isError: false,
-		timestamp: Date.now(),
-	} as unknown as Parameters<typeof harness.sessionManager.appendMessage>[0]);
-	expect(harness.session.hasPendingUserDecision).toBe(true);
+test("a caller handoff leaves the decision pending across a resume", async () => {
+	// A handoff that leaves the mode still has an unanswered proposal, and the
+	// guard must keep holding automatic work after a restart: only the answer
+	// clears it.
+	const { harness, planPath } = await createPlanHarness("step-plan-gate-resume-");
+	await handoff(harness, planPath);
+	const planEntry = harness.sessionManager
+		.getBranch()
+		.flatMap((entry) =>
+			entry.type === "custom" && entry.customType === "step-plan" ? [(entry as { data?: unknown }).data] : [],
+		)
+		.at(-1);
+	// The handoff left the mode but the proposal is still unanswered, so the fact
+	// survives with `enabled: false` — that is what keeps the guard holding.
+	expect(planEntry).toMatchObject({ enabled: false, pendingProposalHash: expect.any(String) });
 
-	harness.sessionManager.appendMessage({
-		role: "user",
-		content: [{ type: "text", text: "Approved." }],
-		timestamp: Date.now(),
-	} as unknown as Parameters<typeof harness.sessionManager.appendMessage>[0]);
+	// The guard keeps holding automatic work until someone answers, and only an
+	// answer clears the fact.
+	harness.setResponses([fauxAssistantMessage("implemented")]);
+	await harness.session.prompt("Approved.");
 	expect(harness.session.hasPendingUserDecision).toBe(false);
 });
 
-test("a compaction ends the wait instead of leaving a phantom decision", async () => {
+test("a compaction does not leave a decision nobody can answer", async () => {
 	const { harness, planPath } = await createPlanHarness("step-plan-gate-compact-");
 	await handoff(harness, planPath);
 	expect(harness.session.hasPendingUserDecision).toBe(true);
 
-	// The summary replaces the history that held the handoff, so it is no longer
-	// something the user can answer. Leaving the gate closed would stall goal,
-	// cron, and lane wake-ups with nothing to answer.
+	// The decision waits in the `step-plan` entry, not in the summarized history,
+	// so compaction changes neither answer nor wait. What must not happen is a
+	// decided proposal coming back after a summary.
 	const firstMessage = harness.sessionManager.getBranch().find((entry) => entry.type === "message");
 	expect(firstMessage).toBeDefined();
 	harness.sessionManager.appendCompaction("Earlier work summarized.", firstMessage!.id, 1_000);
+	expect(harness.session.hasPendingUserDecision).toBe(true);
+
+	harness.setResponses([fauxAssistantMessage("implemented")]);
+	await harness.session.prompt("Approved.");
 	expect(harness.session.hasPendingUserDecision).toBe(false);
 });
 

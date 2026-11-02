@@ -436,6 +436,13 @@ export interface ExtensionContext {
 	isIdle(): boolean;
 	/** Whether project-local trust is active for this context. */
 	isProjectTrusted(): boolean;
+	/**
+	 * The host can show a plan proposal and collect a decision for it.
+	 *
+	 * Unlike `hasUI`, this is about one specific surface, not about having a
+	 * dialog bridge at all: an rpc child has the bridge but no user to answer.
+	 */
+	planReviewSurface?: boolean;
 	/** The current abort signal, or undefined when the agent is not streaming. */
 	signal: AbortSignal | undefined;
 	/** Abort the current agent operation */
@@ -1902,6 +1909,8 @@ export interface ExtensionContextActions {
 	getScopedModels: () => readonly ScopedModel[];
 	isIdle: () => boolean;
 	isProjectTrusted: () => boolean;
+	/** Whether the host can collect a plan review decision (optional; defaults to false). */
+	hasPlanReviewSurface?: () => boolean;
 	getSignal: () => AbortSignal | undefined;
 	abort: () => void;
 	hasPendingMessages: () => boolean;

@@ -13,7 +13,7 @@ import { CompactionRow, CompactionRunningRow } from "./CompactionRow";
 import { GoalRoundRow } from "./GoalRoundRow";
 import { MessageActions, MessageItem } from "./MessageItem";
 import { NoticeRow } from "./NoticeRow";
-import { PlanReviewCard } from "./PlanReviewCard";
+import { PlanReviewCard, PlanReviewPanel } from "./PlanReviewCard";
 import { ProcessGroup } from "./ProcessGroup";
 import {
 	groupProcessRows,
@@ -320,7 +320,12 @@ export function ConversationStream() {
 											) : row.item.kind === "tool" ? (
 												<>
 													<ToolRow item={row.item} />
-													{row.item.planReview ? <PlanReviewCard review={row.item.planReview} /> : null}
+													{/* The waiting proposal is drawn as the stream's last element
+													 * (below), where the user answers it. Leaving an inert copy
+													 * here too would show the same decision twice. */}
+													{row.item.planReview && !row.item.planReview.pending ? (
+														<PlanReviewCard review={row.item.planReview} />
+													) : null}
 												</>
 											) : row.item.kind === "thinking" ? (
 												<ThinkingDisclosure item={row.item} active={running} />
@@ -409,6 +414,10 @@ export function ConversationStream() {
 				{/* The pending questionnaire is conversation, not composer chrome: it
 				 * renders as the stream's latest element, where the question was asked. */}
 				<ClarificationPanel />
+				{/* A proposal waiting for an answer takes the same place for the same
+				 * reason: it is the one decision the page is blocked on, and the
+				 * composer refuses new text until it is answered. */}
+				<PlanReviewPanel />
 			</div>
 		</div>
 	);

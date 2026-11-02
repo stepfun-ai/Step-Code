@@ -3271,23 +3271,34 @@ test("plan mode's proposal keeps its review card after a reload and its approval
     const card = await until(() => $("#planReviewCard"), "review card");
     const contents = card.textContent.includes("Read the fixture files");
     const approve = Boolean($("#planApprove"));
-    // The proposal is submitted, not approved: plan mode is already off.
-    const stripHidden = $("#planStrip").hidden;
+    // The proposal is submitted, not approved: plan mode stays on, so the strip
+    // is still there and the composer is blocked on this one decision.
+    const stripVisible = $("#planStrip").hidden === false;
+    const composerBlocked = $("#prompt").closest("[disabled]") !== null || $("#prompt").getAttribute("contenteditable") === "false";
     $("#planApprove").click();
     await until(() => !$("#planApprove"), "card settles after the decision");
     await until(async () => {
       const value = await (await fetch("/api/v1/sessions/${id}")).json();
-      return value.status === "completed" && $$(".message.user").some(node => node.textContent.includes("同意执行"));
-    }, "this approval turn settles and its decision is rendered");
+      return value.status === "completed" && value.pendingPlanHash === undefined;
+    }, "this approval turn settles and the decision is recorded");
     return {
       contents,
       approve,
-      stripHidden,
+      stripVisible,
+      composerBlocked,
       settled: !$("#planApprove"),
-      decided: $$(".message.user").some((node) => node.textContent.includes("同意执行")),
+      // The decision landed: the mode is off, so the strip is gone again.
+      decided: $("#planStrip").hidden === true,
     };
   `);
-  assert.deepEqual(shown, { contents: true, approve: true, stripHidden: true, settled: true, decided: true });
+  assert.deepEqual(shown, {
+    contents: true,
+    approve: true,
+    stripVisible: true,
+    composerBlocked: true,
+    settled: true,
+    decided: true,
+  });
   assert.match(
     await readFile(join(workspace, ".stepcode", "plans", `session-${id}.md`), "utf8"),
     /Read the fixture files/,

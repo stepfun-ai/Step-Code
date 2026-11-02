@@ -34,6 +34,8 @@ interface Harness {
 	appended: Array<{ customType: string; data: unknown }>;
 	notifications: Array<{ message: string; type?: string; options?: { transient?: boolean } }>;
 	userMessages: Array<Parameters<ExtensionAPI["sendUserMessage"]>>;
+	/** Hidden custom messages, so a test can assert an instruction is not in the user's bubble. */
+	customMessages: Array<Parameters<ExtensionAPI["sendMessage"]>>;
 	statuses: Map<string, string | undefined>;
 	customCalls: () => number;
 	reviewComponent: () => (Component & { handleInput?(data: string): void }) | undefined;
@@ -106,6 +108,7 @@ function createHarness(
 	const appended: Array<{ customType: string; data: unknown }> = [];
 	const notifications: Array<{ message: string; type?: string; options?: { transient?: boolean } }> = [];
 	const userMessages: Array<Parameters<ExtensionAPI["sendUserMessage"]>> = [];
+	const customMessages: Array<Parameters<ExtensionAPI["sendMessage"]>> = [];
 	const statuses = new Map<string, string | undefined>();
 	const cwd = options.cwd ?? "/workspace";
 	let customCalls = 0;
@@ -138,7 +141,9 @@ function createHarness(
 			appended.push({ customType, data });
 			session.appendCustomEntry(customType, data);
 		},
-		sendMessage: () => {},
+		sendMessage: (...args: Parameters<ExtensionAPI["sendMessage"]>) => {
+			customMessages.push(args);
+		},
 		sendUserMessage: (...args: Parameters<ExtensionAPI["sendUserMessage"]>) => {
 			userMessages.push(args);
 		},
@@ -205,6 +210,7 @@ function createHarness(
 		appended,
 		notifications,
 		userMessages,
+		customMessages,
 		statuses,
 		customCalls: () => customCalls,
 		reviewComponent: () => lastReviewComponent,
@@ -528,14 +534,65 @@ test("plan telemetry carries the source dim across enter, update, and exit", asy
 // rpc children
 // ---------------------------------------------------------------------------
 
-test.each([true, false])("rpc-mode exit_plan_mode hands approval to the caller (hasUI: %s)", async (hasUI) => {
+test("an interactive rpc host keeps plan mode on until the user answers", async () => {
+	// The web and desktop apps land here: they draw the proposal themselves, so
+	// the tool must not leave the mode on submission. Leaving would let the next
+	// message — a question as easily as an approval — authorize the work.
+	const cwd = makeWorkspace();
+	const { telemetry, events } = createTelemetryRecorder();
+	const harness = createHarness({ cwd, review: [REVIEW_KEYS.enter] });
+	createStepPlanExtension({ telemetry })(harness.api);
+	const context = harness.ctx({ mode: "rpc", hasUI: true, planReviewSurface: true });
+
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	const planContents = "# The plan\n1. Do the thing\n";
+	writeFileSync(planPath, planContents);
+
+	const result = (await runTool(harness, "exit_plan_mode", {}, context)) as {
+		content: Array<{ type: string; text: string }>;
+		details?: PlanReviewDetails;
+		terminate?: boolean;
+		stopTurn?: boolean;
+	};
+	expect(result.content[0]?.text).toContain("Plan mode stays on");
+	expect(result.content[0]?.text).toContain(planContents);
+	expect(result.details).toEqual({
+		outcome: "external_approval_required",
+		approvalSource: "external",
+		planFilePath: planPath,
+		planContents,
+		planHash: createHash("sha256").update(planContents, "utf8").digest("hex"),
+		planModeExited: false,
+	});
+	expect(result.terminate).toBe(true);
+	expect(result.stopTurn).toBe(true);
+	expect(harness.userMessages).toEqual([]);
+	// Still planning: the mode, its tools, and the file boundary are untouched.
+	expect(harness.activeTools()).toContain("exit_plan_mode");
+	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: true });
+	expect(events.filter((event) => event.event === "plan_mode_exited")).toEqual([]);
+
+	// The user's approval is one decision: leave the mode and start the work.
+	await harness.commands.get("plan")!.handler("approve", context);
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
+	expect(harness.statuses.get("plan-mode")).toBeUndefined();
+	expect(harness.userMessages.at(-1)?.[0]).toContain("Approved");
+	expect(events.at(-1)).toEqual({
+		event: "plan_mode_exited",
+		properties: { source: "user", outcome: "approved" },
+	});
+});
+
+test("an rpc child with no user behind its dialog hands approval to the caller", async () => {
 	const cwd = makeWorkspace();
 	const { telemetry, events } = createTelemetryRecorder();
 	const harness = createHarness({ cwd, review: [REVIEW_KEYS.enter] });
 	const originalTools = harness.activeTools();
 	createStepPlanExtension({ telemetry })(harness.api);
-	// RPC can expose a dialog bridge (hasUI true), but approval still belongs to its caller.
-	const context = harness.ctx({ mode: "rpc", hasUI });
+	const context = harness.ctx({ mode: "rpc", hasUI: false });
 
 	await enterPlanMode(harness, context);
 	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
@@ -552,7 +609,7 @@ test.each([true, false])("rpc-mode exit_plan_mode hands approval to the caller (
 	expect(result.content).toEqual([
 		{
 			type: "text",
-			text: `Plan mode, which the host turned on for the user's /plan request, is now off and the proposal was submitted for review. Exiting reports that the investigation is finished; it does not authorize implementation. This turn ends now: do not execute until the caller approves.\n\nPlan file: ${planPath}\n\nPlan contents:\n${planContents}`,
+			text: `Plan mode, which the host turned on for the user's /plan request, is now off and the proposal was submitted for review. Do not call exit_plan_mode again. Exiting reports that the investigation is finished; it does not authorize implementation. This turn ends now: do not execute until the caller approves.\n\nPlan file: ${planPath}\n\nPlan contents:\n${planContents}`,
 		},
 	]);
 	expect(result.details).toEqual({
@@ -567,19 +624,120 @@ test.each([true, false])("rpc-mode exit_plan_mode hands approval to the caller (
 	expect(result.stopTurn).toBe(true);
 	expect(harness.userMessages).toEqual([]);
 
-	// Plan mode actually exited: tools restored, chip cleared, state persisted off.
+	// Nothing can answer inside the child, so it leaves and restores the tools.
 	expect(harness.activeTools()).toEqual(originalTools);
 	expect(harness.statuses.get("plan-mode")).toBeUndefined();
 	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
-	// Exiting is reported through state and the tool result, never as a notice row:
-	// the host draws the mode from session state and the proposal from the result.
-	expect(
-		harness.notifications.some((notification) => /plan-review bridge|exited|submitted/i.test(notification.message)),
-	).toBe(false);
 	expect(events.at(-1)).toEqual({
 		event: "plan_mode_exited",
 		properties: { source: "user", outcome: "auto_rpc" },
 	});
+});
+
+test("a submitted proposal records the reviewed snapshot as the decision fact", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx({ mode: "rpc", hasUI: true, planReviewSurface: true });
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	const planContents = "# Plan\n1. Do the thing\n";
+	writeFileSync(planPath, planContents);
+	const hash = createHash("sha256").update(planContents, "utf8").digest("hex");
+
+	await runTool(harness, "exit_plan_mode", {}, context);
+	// The fact is persisted with the mode, so a restart still knows it waits.
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: true, pendingProposalHash: hash });
+
+	// Approval clears it: nothing waits, and the mutation boundary lifts.
+	await harness.commands.get("plan")!.handler("approve", context);
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
+	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
+	expect(harness.userMessages.at(-1)?.[0]).toContain("Approved");
+});
+
+test("a review requested change clears the fact so the session does not wait on the old proposal", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx({ mode: "rpc", hasUI: true, planReviewSurface: true });
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Plan\n1. Do the thing\n");
+	await runTool(harness, "exit_plan_mode", {}, context);
+	expect(lastPlanEntry(harness).pendingProposalHash).toBeDefined();
+
+	await harness.commands.get("plan")!.handler("split the second step", context);
+	// The notes replace the proposal: the old snapshot is not awaiting an answer,
+	// and the model is told to submit again.
+	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: true });
+	// The notes stay exactly what the user wrote; the "submit again" half is a
+	// hidden instruction, so their bubble does not grow internal text.
+	expect(harness.userMessages.at(-1)?.[0]).toBe("split the second step");
+	expect(
+		harness.customMessages.some(
+			([message]) =>
+				message.customType === "step-plan-revision" &&
+				String(message.content).includes("call exit_plan_mode again"),
+		),
+	).toBe(true);
+});
+
+test("/plan approve refuses a file edited after the review", async () => {
+	// Approval belongs to the snapshot the user read, the same rule the terminal
+	// dialog applies by rereading the file before it leaves.
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx({ mode: "rpc", hasUI: true, planReviewSurface: true });
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Plan\n1. Do the thing\n");
+	await runTool(harness, "exit_plan_mode", {}, context);
+
+	writeFileSync(planPath, "# Plan\n1. Something else entirely\n");
+	await harness.commands.get("plan")!.handler("approve", context);
+
+	// Not approved: the mode stays on and no implementation turn starts.
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: true });
+	expect(harness.userMessages).toEqual([]);
+	expect(harness.notifications.some((notice) => /plan changed since it was submitted/.test(notice.message))).toBe(
+		true,
+	);
+});
+
+test("/plan off leaves without implementing, even when plan mode is already off", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+
+	await enterPlanMode(harness, context);
+	await harness.commands.get("plan")!.handler("off", context);
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
+	expect(harness.userMessages).toEqual([]);
+
+	// Idempotent: a queued `/plan off` that arrives after the turn already left
+	// the mode must not turn it back on.
+	await harness.commands.get("plan")!.handler("off", context);
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
+	expect(harness.userMessages).toEqual([]);
+});
+
+test("/plan approve refuses when no proposal is waiting", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+
+	await harness.commands.get("plan")!.handler("approve", context);
+	expect(harness.userMessages).toEqual([]);
+	expect(harness.appended.filter((entry) => entry.customType === "step-plan")).toEqual([]);
+	expect(harness.notifications.some((notice) => /No plan is waiting for approval/.test(notice.message))).toBe(true);
 });
 
 test("tui-mode exit_plan_mode still gates through the review dialog", async () => {
@@ -1573,7 +1731,7 @@ test("a valid headless proposal exits requiring external approval with the whole
 	expect(result.content).toEqual([
 		{
 			type: "text",
-			text: `Plan mode, which the host turned on for the user's /plan request, is now off. Plan file kept at ${planPath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show an interactive prompt; the caller must gate approval externally. This turn ends now.`,
+			text: `Plan mode, which the host turned on for the user's /plan request, is now off. Plan file kept at ${planPath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show an interactive prompt; the caller must gate approval externally. This turn ends now. Do not call exit_plan_mode again.`,
 		},
 	]);
 	expect(result.details).toEqual({
@@ -1606,7 +1764,8 @@ test.each(["tui", "print", "rpc"] as const)(
 		const cwd = makeWorkspace();
 		const harness = createHarness({ cwd, review: [REVIEW_KEYS.enter] });
 		createStepPlanExtension()(harness.api);
-		const context = harness.ctx({ mode, hasUI: mode !== "print" });
+		// `rpc` here is the interactive host case, which keeps planning on submit.
+		const context = harness.ctx({ mode, hasUI: mode !== "print", planReviewSurface: mode === "rpc" });
 		const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
 		mkdirSync(path.dirname(planPath), { recursive: true });
 		const proposal = `\uFEFF# Plan — café 🧪\r\n\r\n${"detail ".repeat(1000)}\r\nlast line \t\r\n`;
@@ -1619,13 +1778,17 @@ test.each(["tui", "print", "rpc"] as const)(
 		const hashes: string[] = [];
 
 		for (const planContents of variants) {
-			await enterPlanMode(harness, context);
+			// An interactive rpc host stays in plan mode after each submission, so
+			// only enter when the previous round actually left it.
+			if (harness.statuses.get("plan-mode") !== "Planning (user)") await enterPlanMode(harness, context);
 			writeFileSync(planPath, planContents);
 			const result = (await runTool(harness, "exit_plan_mode", {}, context)) as { details?: PlanReviewDetails };
 			expect(result.details).toMatchObject({
 				planContents,
 				planHash: createHash("sha256").update(planContents, "utf8").digest("hex"),
-				planModeExited: true,
+				// An interactive rpc host keeps planning until the user answers; a
+				// host with no review surface leaves on submission.
+				planModeExited: mode !== "rpc",
 			});
 			hashes.push(result.details!.planHash!);
 		}
@@ -1906,11 +2069,12 @@ test("exit_plan_mode describes review and mode-specific approval rather than unc
 	expect(tool.executionMode).toBe("sequential");
 	expect(tool.description).toMatch(/^Submit .*proposal.*review/);
 	expect(tool.description).toContain("readable, nonempty regular plan file");
-	expect(tool.description).toContain("In the TUI the user approves execution");
-	expect(tool.description).toContain("refining or dismissing keeps it active");
-	expect(tool.description).toContain("In headless and RPC runs");
-	expect(tool.description).toContain("this turn ends");
-	expect(tool.description).toContain("caller must obtain approval before execution");
+	// One rule for every host: the user decides, the model cannot.
+	expect(tool.description).toContain("The user decides; you do not");
+	expect(tool.description).toContain("approval leaves planning and starts the work");
+	expect(tool.description).toContain("a request for changes arrives as a new user message");
+	expect(tool.description).toContain("hands the proposal to its caller");
+	expect(tool.description).toContain("must obtain approval before execution");
 	expect(tool.promptSnippet).toMatch(/^Submit .*proposal.*review/);
 });
 

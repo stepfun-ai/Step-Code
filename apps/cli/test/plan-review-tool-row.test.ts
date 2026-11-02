@@ -48,6 +48,9 @@ function exitPlanModeDefinition(): ToolDefinition<any, any, any> {
 		enteredByUser: () => false,
 		exitPlanMode: () => {},
 		resolvePlanFilePath: () => "/tmp/plan.md",
+		recordPendingProposal: () => {},
+		pendingProposalHash: () => undefined,
+		clearPendingProposal: () => {},
 	} satisfies StepPlanModeController);
 	return tools.get("exit_plan_mode") as ToolDefinition<any, any, any>;
 }

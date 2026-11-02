@@ -1283,6 +1283,15 @@ export class WebSession {
 				// Deferred: the kernel finishes settling after its listeners return,
 				// and an extension may have started a follow-up run in the meantime.
 				if (!hold) setImmediate(() => this.dispatchQueued());
+				// A decision that starts no run (leaving the mode, or an approval the
+				// plan file outran) settles nothing, so the queue would stay parked and
+				// a newer message would overtake it. The decision makes the host free
+				// again; dispatch on that edge.
+				setImmediate(() => {
+					if (this.session.hasPendingUserDecision) return;
+					if (!this.queue.size) return;
+					this.dispatchQueued();
+				});
 			}
 			// A manual compaction settles no run, so queued messages wait for this
 			// event instead. Auto compaction is part of a run: its retry continues
@@ -1298,6 +1307,10 @@ export class WebSession {
 		this.extensionsStartup = bound;
 		const binding = session.bindExtensions({
 			mode: "rpc",
+			// This host draws the proposal and collects the decision, so plan mode
+			// stays on until the user answers. An rpc client without this surface
+			// keeps the handoff-and-exit behavior.
+			planReviewSurface: true,
 			uiContext: webUiContext(
 				this.broker,
 				this.clarifications,
@@ -1434,6 +1447,11 @@ export class WebSession {
 			this.unread = false;
 			return this.sendWithinTurn(text, attachments, followUp);
 		});
+		// A command can settle no run at all — leaving plan mode, or an approval the
+		// plan file outran — while messages wait behind the decision it just made.
+		// `agent_settled` only fires for a run, so dispatch on this edge too; the
+		// `mustQueue` check keeps a real run's own settle in charge.
+		if (this.queue.size > 0 && !this.mustQueue()) setImmediate(() => this.dispatchQueued());
 	}
 
 	/**
@@ -1630,6 +1648,12 @@ export class WebSession {
 			this.session.isCompacting ||
 			this.startingPrompt !== undefined ||
 			this.status === "waiting" ||
+			// The kernel holds automatic starts behind a decision the user has not
+			// answered; the host queue is one of those starters. Holding it here is
+			// what keeps a message typed during planning from being dispatched the
+			// instant the handoff ends the turn — that would answer the proposal
+			// before the user did.
+			this.session.hasPendingUserDecision ||
 			this.isReverting()
 		);
 	}
@@ -2168,7 +2192,11 @@ export class WebSession {
 	async setMode(mode: WebMode, enabled: boolean, goal?: string): Promise<void> {
 		const prompt =
 			mode === "plan"
-				? "/plan"
+				? // Absolute verbs: a toggle whose effect depends on the state a turn
+					// left behind is what turned a queued "exit" into a re-entry.
+					enabled
+					? "/plan on"
+					: "/plan off"
 				: mode === "ultraloop"
 					? enabled
 						? "/ultraloop on"
@@ -2254,6 +2282,10 @@ export class WebSession {
 			// client draws a goal strip and a plan review card from these.
 			goal: projectGoal(getStepGoal(manager.getBranch(), manager.getSessionId())),
 			planMode: projectPlanMode(getStepPlanState(manager.getBranch())),
+			// The proposal the user has not answered yet, as a session fact. The
+			// client marks exactly this snapshot's card actionable, so an answered
+			// proposal cannot look pending and a question cannot look like consent.
+			pendingPlanHash: getStepPlanState(manager.getBranch())?.pendingProposalHash,
 		};
 	}
 

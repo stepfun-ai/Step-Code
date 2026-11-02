@@ -3,14 +3,15 @@
  *
  * Plan mode is session state the host already projects (`snapshot.planMode`), so
  * it is drawn from that state rather than announced into the transcript. It
- * disappears by itself when `exit_plan_mode` clears the state, which is what the
- * user expects after the plan review card appears.
+ * stays visible while a proposal waits for review — submitting does not leave
+ * the mode — and clears when the user decides.
  *
  * The strip is also the user's way out. Leaving plan mode is the user's
  * decision — a missing or unchanged plan file is not permission for the model to
  * turn it off — so a host that only offers a composer has to give the user a
- * control that says so. The button sends the same `/plan` toggle the terminal
- * uses, so one command owns the transition on every host.
+ * control that says so. The button sends `/plan off`, the same command the
+ * terminal accepts: setMode routes through it too, so one command owns the
+ * transition on every host.
  *
  * Stays mounted and toggles `hidden`, like every other strip here.
  */
@@ -40,15 +41,16 @@ export function PlanStrip() {
 			{path ? <span className="plan-strip-path">{name}</span> : null}
 			<span className="plan-strip-hint">{t("planStripHint")}</span>
 			{enabled ? (
-				// Leaving is the user's own command: the same `/plan` toggle the
-				// terminal and the slash menu dispatch, so there is one transition.
+				// Leaving is the user's own decision, expressed as an absolute verb.
+				// A toggle would flip whatever state the turn left behind when the
+				// message is queued behind a running turn.
 				<Tooltip content={t("planStripExitHint")}>
 					<button
 						className="plan-strip-exit"
 						id="planStripExit"
 						type="button"
 						onClick={() => {
-							void sendMessage("/plan");
+							void sendMessage("/plan off");
 						}}
 					>
 						{t("planStripExit")}
