@@ -468,7 +468,30 @@ export function applyPreviewWidth(width: number, persist = true): number {
 	return resolved;
 }
 
-/** Startup: the remembered width, or the default (legacy `initPreviewPanel`). */
+/**
+ * The width to open at when the user has never dragged the divider.
+ *
+ * The rail docks beside the conversation, so the friendly first look is an even
+ * split of the pane that is left: half preview, half conversation. A fixed 420px
+ * leaves the preview cramped on a wide window and crowds the conversation on a
+ * narrow one.
+ */
+export function defaultPreviewWidth(): number {
+	const app = typeof document === "undefined" ? null : document.querySelector<HTMLElement>(".app");
+	const sidebar = app?.querySelector<HTMLElement>(".sidebar");
+	const sidebarWidth = app?.classList.contains("sidebar-hidden") ? 0 : (sidebar?.getBoundingClientRect().width ?? 0);
+	const rail = app ? Number.parseFloat(getComputedStyle(app).getPropertyValue("--rail-width")) || 44 : 44;
+	const available = Math.max(0, window.innerWidth - sidebarWidth - rail);
+	return Math.round(available / 2);
+}
+
+/**
+ * Startup: the remembered width, or an even split (legacy `initPreviewPanel`).
+ *
+ * A stored width means the user dragged the divider, so it wins — including a
+ * width they set once and expect to keep. Absent one, nothing has been decided
+ * yet and the panel opens at {@link defaultPreviewWidth}.
+ */
 export function restorePreviewWidth(): void {
-	applyPreviewWidth(readStoredInt(STORAGE_KEYS.previewWidth) ?? PREVIEW_DEFAULT, false);
+	applyPreviewWidth(readStoredInt(STORAGE_KEYS.previewWidth) ?? defaultPreviewWidth(), false);
 }

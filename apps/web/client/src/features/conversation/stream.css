@@ -1541,19 +1541,7 @@
 	line-height: 20px;
 	overflow-wrap: anywhere;
 }
-.plan-review-contents {
-	margin-top: 10px;
-	padding: 0 4px;
-	max-height: min(360px, 40vh);
-	overflow: auto;
-	color: var(--ink-2);
-	font: 13px / 18px var(--mono);
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
-}
-.plan-review-contents[hidden] {
-	display: none;
-}
+
 .plan-review-actions {
 	display: flex;
 	justify-content: flex-end;

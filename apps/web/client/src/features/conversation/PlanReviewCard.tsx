@@ -23,10 +23,10 @@ import { useAppStore } from "../../state/store";
 import type { PlanReview } from "../../state/types";
 import { Icon } from "../../ui";
 import { leavePlanMode, sendMessage } from "../composer/actions";
+import { openFile } from "../files/actions";
 
 export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 	const t = useT();
-	const [expanded, setExpanded] = useState(false);
 	const [notes, setNotes] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [settled, setSettled] = useState(false);
@@ -48,6 +48,9 @@ export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 	// that draw the card (its transcript row and the panel at the end of the
 	// stream) ask the same source, so they cannot disagree.
 	const pending = useAppStore((state) => state.pendingPlanReview);
+	// The plan file lives inside the session's workspace, so the preview can read
+	// it by its workspace-relative path.
+	const previewCwd = useAppStore((state) => state.current?.cwd ?? "");
 	const actionable = pending?.planHash === review.planHash && !settled;
 	// A transcript keeps the cards of earlier rounds as their record. The ids stay
 	// on the one card that can be answered, so they name a single element.
@@ -60,25 +63,23 @@ export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 				<span className="plan-review-heading-title">
 					{t(actionable ? "planReviewPending" : "planReviewSettled")}
 				</span>
+				{/* The proposal is a Markdown file that outlives the round, so reading it
+				 * in full belongs in the file preview rather than in a card that has to
+				 * scroll inside the conversation. */}
 				<button
 					type="button"
 					className="plan-review-more"
-					onClick={() => setExpanded((value) => !value)}
-					aria-expanded={expanded}
+					id={id("planReviewOpen", actionable)}
+					onClick={() => void openFile(previewCwd, review.planFilePath, true)}
 				>
-					{t(expanded ? "planReviewCollapse" : "planReviewExpand")}
+					{t("planReviewOpen")}
 					<Icon name="chevron" size="2xs" />
 				</button>
 			</header>
 			<div className="plan-review-body">
-				<pre className="plan-review-contents" id={id("planReviewContents", actionable)} hidden={!expanded}>
-					{review.planContents}
-				</pre>
-				{expanded ? null : (
-					<p className="plan-review-summary" id={id("planReviewSummary", actionable)}>
-						{firstParagraph(review.planContents)}
-					</p>
-				)}
+				<p className="plan-review-summary" id={id("planReviewSummary", actionable)}>
+					{firstParagraph(review.planContents)}
+				</p>
 			</div>
 			{actionable ? (
 				<footer className="plan-review-actions">
