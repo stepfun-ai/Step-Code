@@ -559,9 +559,18 @@ export const createStepPlanExtension =
 						return;
 					}
 					exit("approved", ctx);
-					pi.sendUserMessage("Approved — implement this plan.", {
-						...(ctx.isIdle() ? {} : { deliverAs: "followUp" as const }),
-					});
+					// The decision itself is the command; this is only the instruction it
+					// carries. As a user message it would read as a second thing the user
+					// said, next to the command row they actually sent.
+					pi.sendMessage(
+						{
+							customType: "step-plan-approved",
+							display: false,
+							content:
+								"The user approved the plan. Plan mode is off and file mutations are re-enabled. Implement it now, using the plan file as the reference; do not silently diverge from it.",
+						},
+						{ triggerTurn: true },
+					);
 					return;
 				}
 				// `/plan <task>` is "plan this", never "toggle": make sure plan mode is on,

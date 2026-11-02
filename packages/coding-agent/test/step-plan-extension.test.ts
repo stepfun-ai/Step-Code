@@ -579,7 +579,15 @@ test("an interactive rpc host keeps plan mode on until the user answers", async 
 	await harness.commands.get("plan")!.handler("approve", context);
 	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
 	expect(harness.statuses.get("plan-mode")).toBeUndefined();
-	expect(harness.userMessages.at(-1)?.[0]).toContain("Approved");
+	// The decision is the command; the instruction it carries is hidden, so the
+	// transcript does not read as two things the user said.
+	expect(harness.userMessages).toEqual([]);
+	expect(
+		harness.customMessages.some(
+			([message]) =>
+				message.customType === "step-plan-approved" && String(message.content).includes("Implement it now"),
+		),
+	).toBe(true);
 	expect(events.at(-1)).toEqual({
 		event: "plan_mode_exited",
 		properties: { source: "user", outcome: "approved" },
@@ -654,7 +662,15 @@ test("a submitted proposal records the reviewed snapshot as the decision fact", 
 	await harness.commands.get("plan")!.handler("approve", context);
 	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
 	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
-	expect(harness.userMessages.at(-1)?.[0]).toContain("Approved");
+	// The decision is the command; the instruction it carries is hidden, so the
+	// transcript does not read as two things the user said.
+	expect(harness.userMessages).toEqual([]);
+	expect(
+		harness.customMessages.some(
+			([message]) =>
+				message.customType === "step-plan-approved" && String(message.content).includes("Implement it now"),
+		),
+	).toBe(true);
 });
 
 test("a review requested change clears the fact so the session does not wait on the old proposal", async () => {
