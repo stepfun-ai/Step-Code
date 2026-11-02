@@ -473,6 +473,21 @@ export interface ThinkingTimelineItem {
 	readonly timing?: ThinkingTiming;
 }
 
+/**
+ * A command's execution facts, as the tool result declares them in
+ * `details.execution` (and `details.thenRun.execution` for an embedded check).
+ * Mirrors `CommandExecutionOutcome` in
+ * `packages/agent-core/src/harness/command-outcome.ts`; keep the two in sync.
+ */
+export interface CommandExecutionOutcome {
+	readonly status: "exited" | "timed_out" | "signaled" | "canceled" | "unknown";
+	readonly exitCode: number | null;
+	readonly signal: string | null;
+	readonly timedOut: boolean;
+	readonly aborted: boolean;
+	readonly timeoutSeconds?: number;
+}
+
 export interface ToolTimelineItem {
 	readonly imported?: boolean;
 	readonly itemId: string;

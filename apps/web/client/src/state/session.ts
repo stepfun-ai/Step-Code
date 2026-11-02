@@ -12,6 +12,7 @@ import { t } from "../i18n";
 import { api, apiSend, errorMessage, setUnauthorizedHandler } from "../lib/api";
 import { splitAttachedFiles } from "../lib/attached-files";
 import { writeClipboard } from "../lib/clipboard";
+import { toolResultFailed } from "../lib/command-outcome";
 import { basename, clipDetail, compact, toolArgs, toolInputDetail, toolInputSummary } from "../lib/format";
 import { stripImportedUserControls } from "../lib/imported-content";
 import { contentText, skillInvocation } from "../lib/markdown";
@@ -667,7 +668,15 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 				items.push({
 					itemId: `tool-${block.id}`,
 					kind: "tool",
-					state: importedUnknown ? "unknown" : result?.isError ? "failed" : result ? "completed" : "pending",
+					// A command that ran and reported a nonzero exit, a deadline or a signal
+					// is a failure to show, even though the invocation itself succeeded.
+					state: importedUnknown
+						? "unknown"
+						: toolResultFailed(result?.isError, result?.details)
+							? "failed"
+							: result
+								? "completed"
+								: "pending",
 					...(imported ? { imported: true } : {}),
 					toolName: String(block.name ?? ""),
 					inputSummary: toolInputSummary(block.arguments),
@@ -1233,7 +1242,9 @@ function handleAgentEvent(
 		const output = contentText(agentEvent.result?.content) || JSON.stringify(agentEvent.result ?? {});
 		updateToolItem(agentEvent.toolCallId, (item) => ({
 			...item,
-			state: agentEvent.isError ? "failed" : "completed",
+			// Same rule as the historical projection: the command's own outcome counts,
+			// not only whether the invocation failed.
+			state: toolResultFailed(agentEvent.isError, agentEvent.result?.details) ? "failed" : "completed",
 			outputSummary: compact(output),
 			outputDetail: clipDetail(output),
 			// The end event carries no arguments: the row kept the path from the start event.
