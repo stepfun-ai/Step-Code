@@ -9,7 +9,6 @@ import { Composer } from "../composer";
 import { openSettings } from "../settings/actions";
 import { CommandRow } from "./CommandRow";
 import { CompactionRow, CompactionRunningRow } from "./CompactionRow";
-import { DecisionPanel } from "./DecisionPanel";
 import { GoalRoundRow } from "./GoalRoundRow";
 import { MessageActions, MessageItem } from "./MessageItem";
 import { NoticeRow } from "./NoticeRow";
@@ -413,10 +412,6 @@ export function ConversationStream() {
 				) : (
 					<EmptyConversation />
 				)}
-				{/* The one decision the page is blocked on — a plan review, a
-				 * questionnaire, or a tool approval — renders as the stream's last
-				 * element, and the composer refuses new text until it is answered. */}
-				<DecisionPanel />
 			</div>
 		</div>
 	);

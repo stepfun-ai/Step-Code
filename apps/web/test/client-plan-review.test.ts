@@ -105,6 +105,29 @@ test("a newer proposal supersedes the older one", () => {
 	);
 });
 
+test("a resubmitted proposal with identical text leaves only the newest actionable", () => {
+	// The plan file is the same file, so a second submission can carry byte-identical
+	// text and the same hash. Only the newest round is the one waiting: the earlier
+	// card is a finished round and must stop offering buttons, or clicking the old
+	// one would answer a proposal the user is no longer looking at.
+	const entries = [...call("exit_plan_mode", { details }), ...call("exit_plan_mode", { details })];
+	assert.deepEqual(
+		reviews(entries, details.planHash).map((item) => item.review.pending),
+		[false, true],
+	);
+	// The card the user clicks is the one the kernel is waiting on; the ids that
+	// name it therefore appears exactly once.
+	assert.equal(entries.length, 4);
+});
+
+test("answering settles every card carrying that hash, not just the newest", () => {
+	const entries = [...call("exit_plan_mode", { details }), ...call("exit_plan_mode", { details })];
+	assert.deepEqual(
+		reviews(entries, undefined).map((item) => item.review.pending),
+		[false, false],
+	);
+});
+
 test("an answered proposal leaves its record and stops blocking the page", () => {
 	// After a decision the card must still be visible as history — it just stops
 	// offering buttons — and nothing waits any more.

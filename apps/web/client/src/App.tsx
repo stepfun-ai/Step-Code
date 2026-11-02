@@ -1,6 +1,6 @@
 import { type CSSProperties, useLayoutEffect, useRef, useState } from "react";
 import { Composer, ImagePreview, SelectionDialog, TextInputDialog } from "./features/composer";
-import { ConversationStream, FeedbackModal, SessionHeader, StreamNav } from "./features/conversation";
+import { ConversationStream, DecisionPanel, FeedbackModal, SessionHeader, StreamNav } from "./features/conversation";
 import { FileTreePanel } from "./features/files";
 import { BranchControl } from "./features/gitbranch";
 import { RightPanel, RightToolRail } from "./features/inspector";
@@ -50,6 +50,19 @@ export function App() {
 	const appRef = useRef<HTMLDivElement>(null);
 	const migrationInvitation = useAppStore((state) => state.ui.migrationInvitation);
 	const [summarySpace, setSummarySpace] = useState(false);
+	/**
+	 * A plan review, a questionnaire, or a tool approval is waiting.
+	 *
+	 * All three block the session, so they replace the composer: the user answers
+	 * in the same place they would have typed, and nothing invites input the
+	 * session would refuse.
+	 */
+	const awaitingDecision = useAppStore(
+		(state) =>
+			state.pendingPlanReview !== undefined ||
+			state.current?.pendingClarifications?.[0] !== undefined ||
+			state.current?.pendingApprovals?.[0] !== undefined,
+	);
 	const layout = useAppStore(
 		(state) => ({
 			sidebarHidden: state.ui.sidebarHidden,
@@ -111,9 +124,19 @@ export function App() {
 					<SessionHeader />
 					<ConversationStream />
 					<StreamNav />
-					<div className="composer-zone">
-						<Composer workspaceControl={<WorkspaceControl />} branchControl={<BranchControl />} />
-					</div>
+					{/* One decision at a time takes the composer's place rather than
+					 * stacking above it: the session accepts no other input while it
+					 * waits, so a second input box below the question would only invite
+					 * text that cannot be sent. Same slot, same width, same padding. */}
+					{awaitingDecision ? (
+						<div className="decision-zone" id="decisionZone">
+							<DecisionPanel />
+						</div>
+					) : (
+						<div className="composer-zone">
+							<Composer workspaceControl={<WorkspaceControl />} branchControl={<BranchControl />} />
+						</div>
+					)}
 					<TerminalDock />
 					<ErrorToast />
 					<AuthBanner />

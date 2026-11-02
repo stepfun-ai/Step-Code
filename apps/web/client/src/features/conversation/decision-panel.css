@@ -1,11 +1,18 @@
 /*
- * `.decision-panel`: the one question the page is blocked on.
+ * `.decision-zone`: the one question the page is blocked on, standing in the
+ * composer's place.
  *
- * It sits in the stream's last slot, directly above the composer, so the user
- * answers where they were about to type. The composer closes while it is
- * occupied — the session accepts nothing else — which is why the panel belongs
- * here rather than in an overlay that could be dismissed by accident.
+ * It reuses the composer's slot, width, and padding so the question appears where
+ * the user was about to type. It is not stacked above the composer: the session
+ * accepts nothing else while it waits, so a second input box below it would only
+ * invite text that cannot be sent.
  */
-.decision-panel {
-  margin: 14px 0 6px;
+.decision-zone {
+	flex: none;
+	padding: 10px var(--gutter) 22px;
+}
+.decision-zone > * {
+	width: 100%;
+	max-width: var(--composer-width);
+	margin: 0 auto;
 }

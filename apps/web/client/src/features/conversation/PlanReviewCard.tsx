@@ -42,16 +42,15 @@ export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 		}
 	};
 
-	// The kernel keeps plan mode on until the user answers, so the page's one
-	// pending proposal is the answer to "is this still waiting": a message typed
-	// after it — a question as easily as a note — does not settle it. Both places
-	// that draw the card (its transcript row and the panel at the end of the
-	// stream) ask the same source, so they cannot disagree.
-	const pending = useAppStore((state) => state.pendingPlanReview);
+	// `review.pending` is already decided against the session's one waiting
+	// snapshot (see `settlePlanReviews`), and it names a single card: a resubmitted
+	// proposal can carry byte-identical text, so comparing hashes here would make
+	// every earlier round with the same text actionable too. Both places that draw
+	// the card agree because they read the same projection.
+	const actionable = review.pending && !settled;
 	// The plan file lives inside the session's workspace, so the preview can read
 	// it by its workspace-relative path.
 	const previewCwd = useAppStore((state) => state.current?.cwd ?? "");
-	const actionable = pending?.planHash === review.planHash && !settled;
 	// A transcript keeps the cards of earlier rounds as their record. The ids stay
 	// on the one card that can be answered, so they name a single element.
 	const id = (name: string, show: boolean): string | undefined => (show ? name : undefined);
