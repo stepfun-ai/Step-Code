@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { access as fsAccess } from "node:fs/promises";
-import type { AgentTool } from "@step-harness/agent-core";
+import { type AgentTool, ToolExecutionError } from "@step-harness/agent-core";
 import { Container, Text, truncateToWidth } from "@step-harness/pi-tui";
 import { type Static, Type } from "typebox";
 import { keyHint } from "../../render/keybinding-hints.ts";
@@ -17,6 +17,19 @@ import {
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import {
+	appendCommandOutputFooter,
+	type BashExecutionOutcome,
+	type BashExecutionResult,
+	type CommandOutputFooter,
+	commandOutcome,
+	commandOutcomeNotice,
+	readCommandOutputFooter,
+	splitCommandOutputFooter,
+} from "./command-outcome.ts";
+
+export type { BashExecutionOutcome, BashExecutionResult } from "./command-outcome.ts";
+
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -53,15 +66,23 @@ export type BashToolInput = Static<typeof bashSchema>;
 export interface BashToolDetails {
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
+	/** Producer-generated display suffix, retained without parsing rendered status text. */
+	outputFooter?: CommandOutputFooter;
+	/** Observed command outcome, independent of whether the tool invocation failed. */
+	execution?: BashExecutionOutcome;
+	/** Whether the Step character cap shortened the inline output. */
+	stepTruncated?: boolean;
 }
 
-/** Captured command failure with a log produced by the native accumulator. */
-export class ShellToolError extends Error {
+/** Tool failure retaining command observations and a complete output reference. */
+export class ShellToolError extends ToolExecutionError<BashToolDetails> {
 	readonly fullOutputPath: string | undefined;
+	readonly details: BashToolDetails;
 
-	constructor(message: string, fullOutputPath?: string) {
-		super(message);
-		this.fullOutputPath = fullOutputPath;
+	constructor(message: string, details: BashToolDetails | undefined, options?: ErrorOptions) {
+		super(message, { content: [], details: details ?? {} }, options);
+		this.details = this.result.details;
+		this.fullOutputPath = details?.fullOutputPath;
 	}
 }
 
@@ -86,7 +107,7 @@ export interface BashOperations {
 			timeout?: number;
 			env?: NodeJS.ProcessEnv;
 		},
-	) => Promise<{ exitCode: number | null }>;
+	) => Promise<BashExecutionResult>;
 }
 
 /** Shared process execution used by the built-in shell tools. */
@@ -99,7 +120,8 @@ export function createLocalShellOperations(
 		exec: async (command, cwd, { onData, signal, timeout, env }) => {
 			const timeoutMs = resolveTimeoutMs(timeout);
 			if (signal?.aborted) {
-				throw new Error("aborted");
+				// The invocation never started; report cancellation as a fact.
+				return { exitCode: null, aborted: true, ...(timeout === undefined ? {} : { timeoutSeconds: timeout }) };
 			}
 			const shellConfig = resolveShellConfig();
 			try {
@@ -140,16 +162,13 @@ export function createLocalShellOperations(
 				// Handle shell spawn errors and wait for the process to terminate without hanging
 				// on inherited stdio handles held by detached descendants.
 				const exitCode = await waitForChildProcess(child);
-				if (signal?.aborted) {
-					throw new Error("aborted");
-				}
-				if (timedOut) {
-					throw new Error(`timeout:${timeout}`);
-				}
-				if (child.signalCode) {
-					throw new Error(`signal:${child.signalCode}`);
-				}
-				return { exitCode };
+				return {
+					exitCode,
+					signal: child.signalCode,
+					timedOut,
+					aborted: signal?.aborted === true,
+					...(timeout === undefined ? {} : { timeoutSeconds: timeout }),
+				};
 			} finally {
 				if (child.pid) untrackDetachedChildPid(child.pid);
 				if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -242,9 +261,17 @@ function rebuildBashResultRenderComponent(
 	component.clear();
 
 	let output = getTextOutput(result as any, showImages).trim();
+	let commandStatus: string | undefined;
 	const truncation = result.details?.truncation;
 	const fullOutputPath = result.details?.fullOutputPath;
-	if (!options.isPartial && truncation?.truncated && fullOutputPath && output.endsWith("]")) {
+	const footer = readCommandOutputFooter(result.details?.outputFooter);
+	if (!options.isPartial && footer) {
+		// The producer declares its own framing, so the status row does not depend
+		// on whether a full-output log happens to exist.
+		const split = splitCommandOutputFooter(output, footer);
+		output = split.body.trimEnd();
+		commandStatus = split.status || undefined;
+	} else if (!options.isPartial && truncation?.truncated && fullOutputPath && output.endsWith("]")) {
 		const footerStart = output.lastIndexOf("\n\n[");
 		if (footerStart !== -1 && output.slice(footerStart).includes(fullOutputPath)) {
 			output = output.slice(0, footerStart).trimEnd();
@@ -302,6 +329,7 @@ function rebuildBashResultRenderComponent(
 		component.addChild(new Text(`\n${theme.fg("warning", `[${warnings.join(". ")}]`)}`, 0, 0));
 	}
 
+	if (commandStatus) component.addChild(new Text(`\n${theme.fg("error", commandStatus)}`, 0, 0));
 	if (startedAt !== undefined) {
 		const label = options.isPartial ? "Elapsed" : "Took";
 		const endTime = endedAt ?? Date.now();
@@ -396,16 +424,21 @@ export function createShellToolDefinition(
 				scheduleOutputUpdate();
 			};
 
-			const finishOutput = async () => {
+			/**
+			 * @param reserveChars framing that will be appended after the body, so the
+			 * Step output cap compares against the text the model actually receives.
+			 */
+			const finishOutput = async (reserveChars = 0) => {
 				acceptingOutput = false;
 				output.finish();
 				clearUpdateTimer();
 				emitOutputUpdate();
 				const snapshot = output.snapshot({ persistIfTruncated: true });
 				if (
+					!snapshot.truncation.truncated &&
 					!snapshot.fullOutputPath &&
 					options?.persistOutputAboveChars !== undefined &&
-					snapshot.content.length > options.persistOutputAboveChars
+					snapshot.content.length + reserveChars > options.persistOutputAboveChars
 				) {
 					try {
 						const preserved = output.snapshot({ persistFullOutput: true });
@@ -421,72 +454,117 @@ export function createShellToolDefinition(
 				return snapshot;
 			};
 
+			/** Split the body from the declared framing; nothing here concatenates them. */
 			const formatOutput = (snapshot: Awaited<ReturnType<typeof finishOutput>>, emptyText = "(no output)") => {
 				const truncation = snapshot.truncation;
-				let text = snapshot.content || emptyText;
+				const body = snapshot.content || emptyText;
 				let details: BashToolDetails | undefined;
+				let notice = "";
 				if (truncation.truncated) {
 					details = { truncation, fullOutputPath: snapshot.fullOutputPath };
 					const startLine = truncation.totalLines - truncation.outputLines + 1;
 					const endLine = truncation.totalLines;
 					if (truncation.lastLinePartial) {
 						const lastLineSize = formatSize(output.getLastLineBytes());
-						text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${snapshot.fullOutputPath}]`;
+						notice = `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${snapshot.fullOutputPath}]`;
 					} else if (truncation.truncatedBy === "lines") {
-						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${snapshot.fullOutputPath}]`;
+						notice = `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${snapshot.fullOutputPath}]`;
 					} else {
-						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${snapshot.fullOutputPath}]`;
+						notice = `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${snapshot.fullOutputPath}]`;
 					}
 				} else if (snapshot.fullOutputPath) {
 					details = { fullOutputPath: snapshot.fullOutputPath };
-					text += `\n\n[Full output: ${snapshot.fullOutputPath}]`;
+					notice = `\n\n[Full output: ${snapshot.fullOutputPath}]`;
 				}
-				return { text, details };
+				return { body, details, notice };
 			};
 
-			const appendStatus = (text: string, status: string) => `${text ? `${text}\n\n` : ""}${status}`;
+			/** Keep the producer framing and the model-visible status in one declaration. */
+			const buildFooter = (notice: string, status: string | undefined): CommandOutputFooter | undefined =>
+				notice || status ? { notice, status: status ?? "" } : undefined;
+			/** The only place that concatenates a body, its notice, and its status. */
+			const renderText = (body: string, footer: CommandOutputFooter | undefined) =>
+				appendCommandOutputFooter(body, footer);
+			/** A failure reason belongs in the footer, where the Step cap cannot cut it. */
+			const clampStatus = (text: string): string => (text.length > 120 ? `${text.slice(0, 120)}…` : text);
+			const unretainedNotice = (reason: string): string =>
+				`Command output could not be retained: ${reason}. Check effects before repeating the command.`;
+			/** Keep the truncation warning and its log reference when only storage failed. */
+			const unretainedDetails = (snapshot: { truncation: TruncationResult }): BashToolDetails =>
+				snapshot.truncation.truncated ? { truncation: snapshot.truncation } : {};
 
 			try {
-				let exitCode: number | null;
+				let execution: BashExecutionResult;
 				try {
-					const result = await ops.exec(spawnContext.command, spawnContext.cwd, {
+					execution = await ops.exec(spawnContext.command, spawnContext.cwd, {
 						onData: handleData,
 						signal,
 						timeout,
 						env: spawnContext.env,
 					});
-					exitCode = result.exitCode;
 				} catch (err) {
-					const snapshot = await finishOutput();
-					const { text } = formatOutput(snapshot, "");
-					if (err instanceof Error && err.message === "aborted") {
-						throw new ShellToolError(appendStatus(text, "Command aborted"), snapshot.fullOutputPath);
-					}
-					if (err instanceof Error && err.message.startsWith("timeout:")) {
-						const timeoutSecs = err.message.split(":")[1];
+					const observed = commandOutcome({ exitCode: null }, timeout, signal?.aborted === true);
+					const reason = err instanceof Error ? err.message : String(err);
+					const status = observed.aborted
+						? "Command aborted"
+						: `Command executor failed: ${clampStatus(reason)} Check effects before repeating it.`;
+					let snapshot: Awaited<ReturnType<typeof finishOutput>>;
+					try {
+						snapshot = await finishOutput(status.length + 8);
+					} catch (storageError) {
+						const storageReason = storageError instanceof Error ? storageError.message : String(storageError);
+						const failure = `${status}\n${unretainedNotice(storageReason)}`;
+						const fallback = output.snapshot({ persistIfTruncated: true });
+						const footer = buildFooter("", failure);
 						throw new ShellToolError(
-							appendStatus(text, `Command timed out after ${timeoutSecs} seconds`),
-							snapshot.fullOutputPath,
+							renderText(fallback.content, footer),
+							{ ...unretainedDetails(fallback), execution: observed, outputFooter: footer },
+							{ cause: new AggregateError([err, storageError], "Execution and output retention failed") },
 						);
 					}
-					if (err instanceof Error && err.message.startsWith("signal:")) {
-						throw new ShellToolError(
-							appendStatus(text, `Command terminated by signal ${err.message.slice(7)}`),
-							snapshot.fullOutputPath,
-						);
-					}
-					throw err;
-				}
-
-				const snapshot = await finishOutput();
-				const { text: outputText, details } = formatOutput(snapshot);
-				if (exitCode !== 0 && exitCode !== null) {
+					const { body, details, notice } = formatOutput(snapshot, "");
+					const footer = buildFooter(notice, status);
 					throw new ShellToolError(
-						appendStatus(outputText, `Command exited with code ${exitCode}`),
-						snapshot.fullOutputPath,
+						renderText(body, footer),
+						{ ...details, execution: observed, outputFooter: footer },
+						{
+							cause: err,
+						},
 					);
 				}
-				return { content: [{ type: "text", text: outputText }], details };
+
+				const observed = commandOutcome(execution, timeout, signal?.aborted === true);
+				const status = commandOutcomeNotice(observed);
+				let snapshot: Awaited<ReturnType<typeof finishOutput>>;
+				try {
+					snapshot = await finishOutput(status ? status.length + 2 : 0);
+				} catch (err) {
+					const reason = err instanceof Error ? err.message : String(err);
+					const failure = `${status ? `${status}\n` : ""}${unretainedNotice(reason)}`;
+					const fallback = output.snapshot({ persistIfTruncated: true });
+					const footer = buildFooter("", failure);
+					throw new ShellToolError(
+						renderText(fallback.content, footer),
+						{ ...unretainedDetails(fallback), execution: observed, outputFooter: footer },
+						{ cause: err },
+					);
+				}
+				const { body, details, notice } = formatOutput(snapshot);
+				const footer = buildFooter(notice, status);
+				// Cancellation stays an invocation failure, and the footer already
+				// carries the same sentence the message starts with.
+				if (observed.aborted) {
+					throw new ShellToolError(renderText(body, footer), {
+						...details,
+						execution: observed,
+						outputFooter: footer,
+					});
+				}
+				return {
+					content: [{ type: "text", text: renderText(body, footer) }],
+					details: { ...details, execution: observed, outputFooter: footer },
+					isError: false,
+				};
 			} finally {
 				clearUpdateTimer();
 			}

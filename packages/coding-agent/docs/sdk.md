@@ -13,6 +13,35 @@ The SDK provides programmatic access to step's agent capabilities. Use it to emb
 
 See [examples/sdk/](../examples/sdk/) for working examples from minimal to full control.
 
+## Tool invocation errors and command results
+
+Command tools return exit codes, signals, and execution deadlines as execution
+results, independently from `isError`. Inspect `details.execution` as described
+in [the session format](session-format.md#command-tool-outcomes); do not parse
+status text or assume an error means that no effects occurred. Existing custom
+`BashOperations` returning only `{ exitCode }` remain supported. New adapters
+should return the optional `signal`, `timedOut`, `aborted`, and `timeoutSeconds`
+observations instead of throwing textual command-status markers. Existing
+adapters using those markers must migrate too: a thrown status string is treated
+as an executor fault, not parsed as an execution outcome.
+
+For an invocation failure with observations to retain, custom tools may throw
+`ToolExecutionError` from `@step-harness/agent-core` with an `AgentToolResult`.
+The agent loop keeps its content and details while marking the invocation as an
+error. This does not grant permission to retry or bypass cancellation.
+
+Wire surfaces and statistics that predate this distinction stay compatible: the
+framed stdio host reports a non-success command result as `is_error` on both its
+live event path and `session.messages`, so existing clients do not silently
+treat a failed command as success. Read `details.execution` when you need the
+precise outcome; treat `is_error` as the "was this a successful result"
+question.
+
+The `--mode rpc` and `--mode json` event streams publish the new semantics:
+`tool_execution_end.isError` is `false` for a command that returned a nonzero
+exit, deadline, or signal. Consumers of those streams must read
+`details.execution`; they do not get the compatibility projection.
+
 ## Quick Start
 
 ```typescript

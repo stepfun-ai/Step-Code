@@ -13,7 +13,7 @@ import { closeSync, createWriteStream, openSync } from "node:fs";
 import { mkdir as fsMkdir, readdir as fsReaddir, stat as fsStat, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentToolResult } from "@step-harness/agent-core";
+import { type AgentToolResult, ToolExecutionError } from "@step-harness/agent-core";
 import { type Component, Text } from "@step-harness/pi-tui";
 import { type Static, Type } from "typebox";
 import type {
@@ -23,7 +23,13 @@ import type {
 	ToolRenderContext,
 	ToolRenderResultOptions,
 } from "../core/extensions/types.ts";
-import { ShellToolError } from "../core/tools/bash.ts";
+import { type BashExecutionOutcome, type BashToolDetails, ShellToolError } from "../core/tools/bash.ts";
+import {
+	commandOutcomeNotice,
+	readCommandExecutionOutcome,
+	readCommandOutputFooter,
+	splitCommandOutputFooter,
+} from "../core/tools/command-outcome.ts";
 import type { EditToolOptions } from "../core/tools/edit.ts";
 import { generateDiffString, generateUnifiedPatch, normalizeToLF } from "../core/tools/edit-diff.ts";
 import { withFileMutationQueue } from "../core/tools/file-mutation-queue.ts";
@@ -271,28 +277,23 @@ function withStepTextLimit(
 	return { text: `${prefix}${body}${compatibilitySuffix}`, truncated: true };
 }
 
-/** Keep recovery metadata intact when limiting either successful or failed commands. */
+/**
+ * Bound run_command text while keeping recovery metadata intact.
+ *
+ * Only a text whose complete form was stored may be shortened: dropping the
+ * middle of the only surviving copy would lose observations that cannot be
+ * re-read, which is worse than exceeding the inline budget.
+ */
 function limitRunCommandText(
 	text: string,
 	maxChars: number,
 	fullOutputPath: string | undefined,
+	footer: BashToolDetails["outputFooter"],
 ): { text: string; truncated: boolean } {
 	if (!fullOutputPath || text.length <= maxChars) return { text, truncated: false };
-	let body = text;
-	let suffix = "";
-	const status =
-		/(?:^|\n\n)(Command (?:aborted|timed out after [^\n]+|exited with code [^\n]+|terminated by signal [^\n]+))$/u.exec(
-			body,
-		);
-	if (status) {
-		suffix = `\n\n${status[1]}`;
-		body = body.slice(0, status.index);
-	}
-	const notice = /\n\n\[(?:Showing [^\n]*\. )?Full output: ([^\n]+)\]$/u.exec(body);
-	// This also preserves all diagnostics when additional log persistence failed.
-	if (!notice || notice[1] !== fullOutputPath) return { text, truncated: false };
-	suffix = `\n\n[Full output: ${notice[1]}]${suffix}`;
-	body = body.slice(0, notice.index);
+	const { body, status } = splitCommandOutputFooter(text, footer);
+	const notice = `\n\n[Full output: ${fullOutputPath}]`;
+	const suffix = `${notice}${status ? `\n\n${status}` : ""}`;
 	const prefix = maxChars < 512 ? "[Output truncated]\n" : `${STEP_TRUNCATION_HINTS.run_command.banner}\n\n`;
 	// A path/status longer than the cap must remain usable, even without inline output.
 	const remaining = Math.max(0, maxChars - prefix.length - suffix.length);
@@ -320,13 +321,13 @@ function withReadTextLimit(text: string, maxChars: number): { text: string; trun
 
 function applyStepTextLimit(result: AnyResult, toolName: StepTruncationToolName, maxChars: number): AnyResult {
 	const text = textFromResult(result);
+	const fullOutputPath =
+		typeof result.details?.fullOutputPath === "string" ? result.details.fullOutputPath : undefined;
+	// Validate the producer framing here as well: a hook could inject malformed details.
+	const outputFooter = readCommandOutputFooter((result.details as BashToolDetails | undefined)?.outputFooter);
 	const limited =
 		toolName === "run_command"
-			? limitRunCommandText(
-					text,
-					maxChars,
-					typeof result.details?.fullOutputPath === "string" ? result.details.fullOutputPath : undefined,
-				)
+			? limitRunCommandText(text, maxChars, fullOutputPath, outputFooter)
 			: withStepTextLimit(toolName, text, maxChars);
 	if (!limited.truncated) return result;
 	return {
@@ -335,6 +336,15 @@ function applyStepTextLimit(result: AnyResult, toolName: StepTruncationToolName,
 		details: {
 			...(result.details && typeof result.details === "object" ? result.details : {}),
 			stepTruncated: true,
+			...(toolName === "run_command"
+				? {
+						// The replacement framing is what the new text actually ends with.
+						outputFooter: {
+							notice: fullOutputPath ? `\n\n[Full output: ${fullOutputPath}]` : "",
+							status: outputFooter?.status ?? "",
+						},
+					}
+				: {}),
 		},
 	} as AnyResult;
 }
@@ -1144,9 +1154,15 @@ class StepCommandError extends ShellToolError {
 	readonly stepTruncated: boolean;
 
 	constructor(error: ShellToolError, maxChars: number) {
-		const limited = limitRunCommandText(error.message, maxChars, error.fullOutputPath);
-		super(limited.text, error.fullOutputPath);
-		this.cause = error;
+		const details = error.details;
+		const limited = limitRunCommandText(error.message, maxChars, error.fullOutputPath, details.outputFooter);
+		const outputFooter = limited.truncated
+			? {
+					notice: error.fullOutputPath ? `\n\n[Full output: ${error.fullOutputPath}]` : "",
+					status: details.outputFooter?.status ?? "",
+				}
+			: details.outputFooter;
+		super(limited.text, { ...details, outputFooter, stepTruncated: limited.truncated }, { cause: error });
 		this.stepTruncated = limited.truncated;
 	}
 }
@@ -1159,6 +1175,11 @@ export interface StepThenRunDetails {
 	stepTruncated: boolean;
 	/** Complete command output, retained by run_command when inline output is shortened. */
 	fullOutputPath?: string;
+	/** Command facts retained independently from the enclosing file mutation. */
+	execution?: BashExecutionOutcome;
+	outputFooter?: BashToolDetails["outputFooter"];
+	/** A check that could not be invoked; the file mutation above still applied. */
+	invocationError?: string;
 }
 
 /**
@@ -1175,9 +1196,13 @@ async function withThenRunResult(
 ): Promise<AnyResult> {
 	const receipt = textFromResult(result);
 	let output: string;
-	let status: string | undefined;
-	let exitCode: number | null = 0;
+	let exitCode: number | null = null;
 	let timedOut = false;
+	let execution: BashExecutionOutcome | undefined;
+	let outputFooter: BashToolDetails["outputFooter"];
+	let commandError: unknown;
+	let invocationError: string | undefined;
+	let isError = false;
 	let stepTruncated = false;
 	let fullOutputPath: string | undefined;
 	try {
@@ -1191,26 +1216,30 @@ async function withThenRunResult(
 		);
 		output = textFromResult(commandResult);
 		const details = nativeDetails(commandResult);
+		execution = readCommandExecutionOutcome((commandResult.details as BashToolDetails | undefined)?.execution);
+		outputFooter = (commandResult.details as BashToolDetails | undefined)?.outputFooter;
+		exitCode = execution?.exitCode ?? null;
+		timedOut = execution?.timedOut === true;
+		// Forward only a flag an extension or hook set on the command result; the
+		// built-in command tool reports outcomes through `details.execution`.
+		isError = commandResult.isError === true;
 		stepTruncated = details.stepTruncated === true;
 		fullOutputPath = typeof details.fullOutputPath === "string" ? details.fullOutputPath : undefined;
-		status = "Command exited with code 0";
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		if (isCallerAborted(signal)) {
-			throw new Error(`${receipt}\n\nthen_run: $ ${command}\n${message}`, { cause: error });
-		}
+		// The mutation already applied, so a check that cannot be invoked describes
+		// the check, not this call. Reporting it as an invocation failure would hide
+		// the change from consumers that filter error results.
+		commandError = error;
+		output = error instanceof Error ? error.message : String(error);
+		execution = error instanceof ShellToolError ? readCommandExecutionOutcome(error.details.execution) : undefined;
+		// Only a fault without observed execution facts is "could not be invoked";
+		// an aborted or failing command already describes itself through `execution`.
+		invocationError = execution ? undefined : describeCommandFailure(error);
+		outputFooter = error instanceof ShellToolError ? error.details.outputFooter : undefined;
+		exitCode = execution?.exitCode ?? null;
+		timedOut = execution?.timedOut === true;
 		stepTruncated = error instanceof StepCommandError && error.stepTruncated;
 		fullOutputPath = error instanceof ShellToolError ? error.fullOutputPath : undefined;
-		const match = /(?:^|\n\n)(Command exited with code (\d+)|Command timed out after .+ seconds)$/u.exec(message);
-		if (match) {
-			output = message.slice(0, match.index);
-			status = match[1];
-			exitCode = match[2] === undefined ? null : Number(match[2]);
-			timedOut = match[2] === undefined;
-		} else {
-			output = message;
-			exitCode = null;
-		}
 	}
 	// run_command already bounded the output and preserved its log/status footer.
 	// Limiting it again here could discard the only reference to the full output.
@@ -1220,17 +1249,35 @@ async function withThenRunResult(
 		timedOut,
 		stepTruncated,
 		...(fullOutputPath ? { fullOutputPath } : {}),
+		...(execution ? { execution } : {}),
+		...(outputFooter ? { outputFooter } : {}),
+		...(invocationError ? { invocationError } : {}),
 	};
-	return {
+	const combined = {
 		...result,
+		...(isError ? { isError: true } : {}),
 		content: [
 			{
 				type: "text",
-				text: `${receipt}\n\n${thenRunMarker(command)}${output || "(no output)"}${status ? `\n\n${status}` : ""}`,
+				text: `${receipt}\n\n${thenRunMarker(command)}${output || "(no output)"}`,
 			},
 		],
 		details: { ...nativeDetails(result), thenRun },
 	} as AnyResult;
+	// Only caller cancellation escalates. An adapter that stopped the command on
+	// its own already reported that as an execution failure; rethrowing it here
+	// would mark an applied mutation as a failed call.
+	if (isCallerAborted(signal)) {
+		throw new ToolExecutionError(textFromResult(combined), { ...combined, content: [] }, { cause: commandError });
+	}
+	return combined;
+}
+
+/** Describe why a check could not run, without the rendered status framing. */
+function describeCommandFailure(error: unknown): string {
+	if (error instanceof StepCommandError) return describeCommandFailure(error.cause);
+	if (error instanceof ShellToolError && error.cause instanceof Error) return error.cause.message;
+	return error instanceof Error ? error.message : String(error);
 }
 
 function thenRunMarker(command: string): string {
@@ -1280,19 +1327,38 @@ class ThenRunResultComponent implements Component {
 
 function formatThenRunSummary(result: AnyResult, thenRun: StepThenRunDetails, expanded: boolean, theme: any): string {
 	const command = thenRun.command.replace(/\s+/gu, " ").trim();
-	const status = thenRun.timedOut
-		? theme.fg("error", "timed out")
-		: thenRun.exitCode === 0
-			? theme.fg("success", "exit 0")
-			: theme.fg("error", thenRun.exitCode === null ? "failed" : `exit ${thenRun.exitCode}`);
+	// Keep the summary short: the notice text belongs in the expanded body.
+	// Keep the summary short; the full sentence belongs in the expanded body.
+	const executionStatus =
+		thenRun.execution?.status === "unknown"
+			? "failed"
+			: thenRun.execution
+				? commandOutcomeNotice(thenRun.execution)
+				: undefined;
+	const status = executionStatus
+		? theme.fg("error", executionStatus)
+		: thenRun.invocationError
+			? theme.fg("error", "check failed to start")
+			: thenRun.timedOut
+				? theme.fg("error", "timed out")
+				: thenRun.exitCode === 0
+					? theme.fg("success", "exit 0")
+					: theme.fg("error", thenRun.exitCode === null ? "failed" : `exit ${thenRun.exitCode}`);
 	const summary = `${theme.fg("muted", `then_run $ ${command} ·`)} ${status}`;
 	if (!expanded) return summary;
 	const text = textFromResult(result);
 	const markerIndex = text.indexOf(thenRunMarker(thenRun.command));
 	if (markerIndex < 0) return summary;
-	const body = text
-		.slice(markerIndex + thenRunMarker(thenRun.command).length)
-		.replace(/\n\n(Command exited with code \d+|Command timed out after .+ seconds)$/u, "");
+	const observedBody = text.slice(markerIndex + thenRunMarker(thenRun.command).length);
+	const footer = readCommandOutputFooter(thenRun.outputFooter);
+	// New records declare their own framing. Legacy records carry none, so they
+	// keep the historical text-based strip to avoid showing the status twice.
+	const body = footer
+		? splitCommandOutputFooter(observedBody, footer).body
+		: observedBody.replace(
+				/\n\n(Command exited with code \d+|Command timed out[^\n]*|Command terminated by signal \S+|Command aborted)$/u,
+				"",
+			);
 	return `${theme.fg("toolOutput", body)}\n${summary}`;
 }
 

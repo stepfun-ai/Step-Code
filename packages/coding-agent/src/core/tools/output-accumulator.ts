@@ -53,6 +53,7 @@ export class OutputAccumulator {
 
 	private tempFilePath: string | undefined;
 	private tempFileStream: WriteStream | undefined;
+	private storageError: Error | undefined;
 
 	constructor(options: OutputAccumulatorOptions = {}) {
 		this.maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
@@ -71,7 +72,7 @@ export class OutputAccumulator {
 
 		if (this.tempFileStream || this.shouldUseTempFile()) {
 			this.ensureTempFile();
-			this.tempFileStream?.write(data);
+			if (!this.storageError) this.tempFileStream?.write(data);
 		} else if (data.length > 0) {
 			this.rawChunks.push(data);
 		}
@@ -114,11 +115,16 @@ export class OutputAccumulator {
 		return {
 			content: truncation.content,
 			truncation,
-			fullOutputPath: this.tempFilePath,
+			fullOutputPath: this.storageError ? undefined : this.tempFilePath,
 		};
 	}
 
 	async closeTempFile(): Promise<void> {
+		if (this.storageError) {
+			this.tempFileStream?.destroy();
+			this.tempFileStream = undefined;
+			throw this.storageError;
+		}
 		if (!this.tempFileStream) {
 			return;
 		}
@@ -209,13 +215,24 @@ export class OutputAccumulator {
 	}
 
 	private ensureTempFile(): void {
-		if (this.tempFilePath) {
+		if (this.tempFilePath || this.storageError) {
 			return;
 		}
-		this.tempFilePath = defaultTempFilePath(this.tempFilePrefix);
-		this.tempFileStream = createWriteStream(this.tempFilePath);
+		const filePath = defaultTempFilePath(this.tempFilePrefix);
+		let stream: WriteStream;
+		try {
+			stream = createWriteStream(filePath);
+		} catch (error) {
+			this.storageError = error instanceof Error ? error : new Error(String(error));
+			return;
+		}
+		stream.on("error", (error) => {
+			this.storageError ??= error;
+		});
+		this.tempFilePath = filePath;
+		this.tempFileStream = stream;
 		for (const chunk of this.rawChunks) {
-			this.tempFileStream.write(chunk);
+			stream.write(chunk);
 		}
 		this.rawChunks = [];
 	}

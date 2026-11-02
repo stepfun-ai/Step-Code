@@ -1,4 +1,6 @@
 import { type Static, Type } from "typebox";
+import { ToolExecutionError } from "../../tool-error.ts";
+import { type CommandExecutionOutcome, commandExecutionNotice, normalizeCommandExecution } from "../command-outcome.ts";
 import type { AgentHarnessTool } from "../types.ts";
 import { getOrThrow } from "../types.ts";
 import { executeShellWithCapture, type ShellCaptureProgress } from "../utils/shell-output.ts";
@@ -18,6 +20,8 @@ export type BashToolInput = Static<typeof bashSchema>;
 export interface BashToolDetails {
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
+	/** Observed command outcome, independent of whether the tool invocation failed. */
+	execution?: CommandExecutionOutcome;
 }
 
 export interface BashExecution {
@@ -141,18 +145,32 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
 					}
 				}
 
-				const appendStatus = (status: string): string => `${outputText ? `${outputText}\n\n` : ""}${status}`;
-				if (capture.cancelled) throw new Error(appendStatus("Command aborted"));
-				if (capture.executionError?.code === "timeout") {
-					throw new Error(appendStatus(`Command timed out after ${timeout} seconds`), {
-						cause: capture.executionError,
-					});
+				const observed = normalizeCommandExecution(
+					{
+						exitCode: capture.exitCode ?? null,
+						timedOut: capture.executionError?.code === "timeout",
+						aborted: capture.cancelled,
+					},
+					{ timeoutSeconds: timeout },
+				);
+				details = { ...details, execution: observed };
+				const status = commandExecutionNotice(observed);
+				const text = status ? `${outputText ? `${outputText}\n\n` : ""}${status}` : outputText;
+				const executorFailure =
+					capture.executionError && capture.executionError.code !== "timeout" ? capture.executionError : undefined;
+				if (executorFailure || capture.cancelled) {
+					// Invocation and cancellation faults keep the observed facts instead of
+					// collapsing them into a message.
+					const diagnostic = executorFailure
+						? `${text ? `${text}\n\n` : ""}${executorFailure.message}`
+						: text || "Command aborted";
+					throw new ToolExecutionError(
+						diagnostic,
+						{ content: [], details },
+						executorFailure ? { cause: executorFailure } : undefined,
+					);
 				}
-				if (capture.executionError) throw capture.executionError;
-				if (capture.exitCode !== 0 && capture.exitCode !== undefined) {
-					throw new Error(appendStatus(`Command exited with code ${capture.exitCode}`));
-				}
-				return { content: [{ type: "text", text: outputText || "(no output)" }], details };
+				return { content: [{ type: "text", text: text || "(no output)" }], details };
 			} finally {
 				clearUpdateTimer();
 			}

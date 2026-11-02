@@ -17,6 +17,7 @@ import fs from "node:fs/promises";
 import { createInterface } from "node:readline";
 import type { Usage } from "@step-harness/providers";
 import type { SessionEntry } from "../../core/session-manager.ts";
+import { isToolCommandFailure } from "../../core/tools/command-outcome.ts";
 import { redactSecretString } from "../secret-redaction.ts";
 import { collapseHomePaths } from "./redact-home.ts";
 
@@ -516,7 +517,9 @@ function createSummary(options: FeedbackSummaryOptions): {
 			return;
 		}
 		if (record.role === "toolResult") {
-			const isError = record.isError === true;
+			// Keep the historical failure count: a non-clean command is not an
+			// invocation failure, but this ledger has always counted it.
+			const isError = record.isError === true || isToolCommandFailure(record.details);
 			const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
 			resolveCall(
 				typeof record.toolCallId === "string" ? record.toolCallId : undefined,

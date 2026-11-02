@@ -1,4 +1,6 @@
 export {
+	type BashExecutionOutcome,
+	type BashExecutionResult,
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
@@ -9,6 +11,15 @@ export {
 	createBashToolDefinition,
 	createLocalBashOperations,
 } from "./bash.ts";
+export {
+	type CommandExecutionOutcome,
+	type CommandOutputFooter,
+	commandOutcomeNotice,
+	isToolCommandFailure,
+	readCommandExecutionOutcome,
+	readCommandOutputFooter,
+	readToolCommandNotice,
+} from "./command-outcome.ts";
 export {
 	createEditTool,
 	createEditToolDefinition,

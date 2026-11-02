@@ -8,6 +8,7 @@ import {
 	type AgentToolUpdateCallback,
 	type StreamFn,
 	setDefaultStreamFn,
+	ToolExecutionError,
 } from "../src/index.ts";
 import { stepModel } from "./step-model.ts";
 
@@ -438,9 +439,70 @@ describe("Agent", () => {
 		const end = events.find((event) => event.type === "tool_execution_end");
 		expect(end).toMatchObject({
 			isError: true,
-			result: { content: [{ type: "text", text: "frame subscriber failed" }] },
+			result: {
+				isError: true,
+				content: [
+					{
+						type: "text",
+						text: "frame subscriber failed\nThe tool may already have run; check its effects before repeating a state-changing call.",
+					},
+					{ type: "text", text: "done" },
+				],
+			},
 		});
 		expect(events.at(-1)?.type).toBe("agent_end");
+	});
+
+	it("keeps one diagnostic when a typed execution failure also loses a frame", async () => {
+		const schema = Type.Object({});
+		const tool: AgentTool<typeof schema> = {
+			name: "typed_failure",
+			label: "Typed Failure",
+			description: "Fails with retained observations",
+			parameters: schema,
+			async execute(_id, _params, _signal, onUpdate) {
+				onUpdate?.({ content: [{ type: "text", text: "first" }], details: {} });
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				throw new ToolExecutionError("executor unavailable", {
+					content: [{ type: "text", text: "observed output" }],
+					details: { fullOutputPath: "/fixture/output.log" },
+				});
+			},
+		};
+		let calls = 0;
+		const agent = new Agent({
+			initialState: { tools: [tool] },
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				const message =
+					calls++ === 0
+						? createAssistantToolUseMessage([
+								{ type: "toolCall", id: "typed-1", name: "typed_failure", arguments: {} },
+							])
+						: createAssistantMessage("settled");
+				queueMicrotask(() =>
+					stream.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message }),
+				);
+				return stream;
+			},
+		});
+		const events: AgentEvent[] = [];
+		agent.subscribe((event) => {
+			events.push(event);
+			if (event.type === "tool_execution_update") throw new Error("frame subscriber failed");
+		});
+		await agent.prompt("run the failing tool");
+
+		const end = events.find((event) => event.type === "tool_execution_end");
+		const texts = (end as { result: { content: Array<{ type: string; text?: string }> } } | undefined)?.result.content
+			.filter((part) => part.type === "text")
+			.map((part) => part.text);
+		// The tool's own message must appear once; only the delivery cause is
+		// prepended, and the observed output is retained.
+		expect(texts?.filter((text) => text?.includes("executor unavailable"))).toHaveLength(1);
+		expect(texts?.join("\n")).toContain("frame subscriber failed");
+		expect(texts?.join("\n")).toContain("observed output");
+		expect(end).toMatchObject({ isError: true });
 	});
 
 	it("should ignore tool updates after the tool execution settles", async () => {
