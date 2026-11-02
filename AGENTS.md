@@ -49,6 +49,7 @@ packages/
     test/                      Product and session regressions
   config/                      Product-neutral startup migrations
   contracts/                   Independent host interfaces and wire frames
+  lark-adapter/                External Feishu/Lark protocol and SDK boundary
   providers/                   Model access, adapters, catalogs, and credentials
   telemetry/                   Telemetry contracts and reference implementations
   tui/                         Terminal input, layout, and rendering
@@ -70,15 +71,16 @@ Dependencies flow from product entry points toward foundational capabilities. Fo
 | Foundation | [tui](packages/tui/AGENTS.md) | Terminal input, layout, differential rendering, and generic components | None |
 | Foundation | [contracts](packages/contracts/AGENTS.md) | In-process host/Agent interfaces, wire events, and framing | None; runtime dependencies must remain empty |
 | Foundation | [config](packages/config/AGENTS.md) | Product-neutral configuration migrations | None |
+| Adapter | [lark-adapter](packages/lark-adapter/AGENTS.md) | External Feishu/Lark protocol and SDK connection; used only by apps/cli | None |
 | Model runtime | [providers](packages/providers/AGENTS.md) | Providers, API dialects, model catalogs, credentials, and vendor adapters | telemetry |
 | Agent runtime | [agent-core](packages/agent-core/AGENTS.md) | The single Agent Loop, generic harness, session and context semantics | providers, telemetry |
 | Coding product | [coding-agent](packages/coding-agent/AGENTS.md) | Coding sessions, tool policies, extensions, orchestration, Step integrations, and themes | agent-core, providers, config, tui |
-| Application host | [apps/cli](apps/cli/AGENTS.md) | argv, startup composition, mode routing, process lifecycle, and interactive UI | coding-agent, agent-core, providers, config, tui |
+| Application host | [apps/cli](apps/cli/AGENTS.md) | argv, startup composition, mode routing, process lifecycle, and interactive UI | coding-agent, agent-core, providers, config, tui, lark-adapter |
 
 - Register new workspaces in `pnpm-workspace.yaml`, root `package.json`, and `scripts/workspace-registry.json`. Use the `@step-harness/*` scope for new internal packages.
 - Use public package entry points for cross-package calls. Do not depend on another package's `dist/` layout or bypass boundaries with deep source imports.
 - `packages/**` must not import `apps/**`. `packages/tui` must not depend on Agent, provider, session, or product code.
-- Put new vendor SDKs behind adapters in `packages/providers`. Coding-product integrations such as MCP and plugins belong in `packages/coding-agent`, not the generic Agent Loop or rendering library.
+- Put new model-vendor SDKs behind adapters in `packages/providers`; other external protocol SDKs go in their own isolated adapter package, such as `packages/lark-adapter`. Coding-product integrations such as MCP and plugins belong in `packages/coding-agent`, not the generic Agent Loop or rendering library.
 
 ## 3. Ownership of core concepts
 

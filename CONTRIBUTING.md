@@ -94,7 +94,7 @@ Use the [PR template](.github/pull_request_template.md) and replace its guidance
 Before submitting a PR:
 
 ```bash
-npm run check
+pnpm run check
 ./test.sh
 ```
 
@@ -102,7 +102,7 @@ Both must pass.
 
 These are repository-wide submission checks. During development, run focused checks for the changed behavior; do not repeat a passing check solely because a commit or push follows, unless files or relevant inputs changed. Inspect any modifications made by the formatter before staging or publishing.
 
-If you are adding a new provider to `packages/providers`, see `AGENTS.md` for required tests.
+If you are adding a new provider to `packages/providers`, see [packages/providers/AGENTS.md](packages/providers/AGENTS.md#validation-and-documentation) for required tests.
 
 ## FAQ
 
