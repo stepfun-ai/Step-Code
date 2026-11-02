@@ -33,6 +33,7 @@ import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetr
 import type { TraceHeaderPolicy } from "../step/telemetry-contract.ts";
 import { getThenRunCommand } from "../step/then-run.ts";
 import { applyStepTraceHeaders } from "../step/trace-headers.ts";
+import { isPlanExtensionMounted, planModeToolCallDecision } from "./step-plan.ts";
 import {
 	fetchStepModelEfforts,
 	registerStepProvider,
@@ -367,6 +368,21 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 					reason: "then_run requires run_command, which is not available in this session; retry without then_run",
 				};
 			}
+			// Plan mode decides its own denials here, ahead of the approval prompt.
+			// This handler is registered before the plan extension's, so without it
+			// the `ask` preset would ask the user to approve an edit plan mode
+			// forbids and only then report the block. Only enforce the boundary when
+			// the plan extension is mounted, so an embedder that mounts this
+			// extension alone cannot inherit a state it has no command to leave.
+			if (isPlanExtensionMounted(ctx.sessionManager)) {
+				const planDecision = planModeToolCallDecision({
+					manager: ctx.sessionManager,
+					cwd: ctx.cwd,
+					toolName: event.toolName,
+					input: event.input,
+				});
+				if (planDecision?.block) return planDecision.block;
+			}
 			return await permissions.handleToolCall(event, ctx);
 		});
 
@@ -427,7 +443,9 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				}
 				// Route initialization through pi's normal user-message path. The model
 				// inspects the repository, and pi's native write/approval flow owns the
-				// actual file mutation and any existing-file decision.
+				// actual file mutation and any existing-file decision. The command
+				// source is inherited, so a user-typed /init may answer a pending
+				// decision.
 				await pi.sendUserMessage(STEP_INIT_PROMPT);
 			},
 		});

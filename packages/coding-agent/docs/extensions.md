@@ -790,7 +790,7 @@ Behavior guarantees:
 - Later `tool_call` handlers see mutations made by earlier handlers
 - No re-validation is performed after your mutation
 - Return values from `tool_call` control blocking via `{ block: true, reason?: string, terminate?: boolean }`
-- `terminate` only applies to a blocked call; the agent stops early only when every finalized result in the batch is terminating
+- `terminate` only applies to a blocked call; the agent stops early only when every finalized result in the batch is terminating. Neither `tool_call` nor `tool_result` handlers can request the `stopTurn` barrier; only a tool's own `execute()` can start it
 
 ```typescript
 import { isToolCallEventType } from "@step-harness/coding-agent";
@@ -923,7 +923,8 @@ Fired when user input is received, after extension commands are checked but befo
 pi.on("input", async (event, ctx) => {
   // event.text - raw input (before skill/template expansion)
   // event.images - attached images, if any
-  // event.source - "interactive" (typed), "rpc" (API), or "extension" (via sendUserMessage)
+  // event.source - "interactive" (typed), "rpc" (API), or "extension"
+  //   (extension-generated text, including sendUserMessage without a source)
   // event.streamingBehavior - "steer" | "followUp" | undefined
   //   undefined when idle, "steer" for mid-stream interrupts,
   //   "followUp" for messages queued until the agent finishes
@@ -1043,7 +1044,31 @@ pi.on("tool_result", async (event, ctx) => {
 
 ### ctx.isIdle() / ctx.abort() / ctx.hasPendingMessages()
 
-Control flow helpers. `ctx.isIdle()` is false while Step is processing an agent run, automatic retry, auto-compaction retry, or queued continuation.
+Control flow helpers. `ctx.isIdle()` is false while Step is processing an agent run, automatic retry, auto-compaction retry, or queued continuation. `ctx.hasPendingMessages()` includes messages held behind a pending decision.
+
+### ctx.registerAutomaticTurnGuard()
+
+Register a predicate that blocks turns started on the user's behalf until it
+returns false: `triggerTurn` messages, goal continuation, cron delivery,
+background-lane wake-ups, and post-run recovery all ask it first. A prompt the
+user sends always runs — that message is how a pending decision gets answered.
+
+```typescript
+pi.on("session_start", (_event, ctx) => {
+  // The call returns an unregister function; keep it only if the condition can end.
+  ctx.registerAutomaticTurnGuard?.(() => sessionStillAwaitingApproval());
+});
+```
+
+Guards read current session state and need no clearing by the extension that
+registered them: reload drops them with the runner generation that owned their
+context, and `session_start` registers the new one. A guard that throws counts as
+pending, so a failing check cannot authorize a turn the user has not approved,
+and the error is reported through the extension error listener.
+
+Features that can defer their own trigger ask `ctx.hasPendingUserDecision()` and
+retry later instead of sending a message that would replay work after the
+decision.
 
 ### ctx.shutdown()
 
@@ -1438,7 +1463,14 @@ pi.sendMessage({
 
 ### pi.sendUserMessage(content, options?)
 
-Send a user message to the agent. Unlike `sendMessage()` which sends custom messages, this sends an actual user message that appears as if typed by the user. Always triggers a turn.
+Send a user message to the agent. Unlike `sendMessage()` which sends custom messages, this sends an actual user text message that appears as if typed by the user.
+
+It starts a turn unless the session is waiting on a decision the user has not
+answered (see `ctx.hasPendingUserDecision()`): that answer is the user's own
+message, so extension-generated text is held and delivered as context in the
+turn that answers the decision. Inside a command handler the author is inherited
+from the command's origin, so a handler forwarding the user's request still
+starts a turn. A host bridge forwarding a real person's input passes `source`.
 
 The call is fire-and-forget: it returns before the turn finishes. Inside a command handler, a turn started this way is still awaited before `prompt()` resolves, so a host that disposes right after a prompt (print and JSON mode) does not tear the session down mid-turn. Await the call yourself when you need its result before continuing. The same applies to `sendMessage(..., { triggerTurn: true })`.
 
@@ -1465,6 +1497,7 @@ pi.sendUserMessage("/review src/index.ts", { expandPromptTemplates: true });
   - `"steer"` - Queues the message for delivery after the current assistant turn finishes executing its tool calls
   - `"followUp"` - Waits for agent to finish all tools
 - `expandPromptTemplates` - Dispatch extension commands and expand skill commands and prompt templates. Defaults to `false`.
+- `source` - Who authored the text: `"interactive"` for text a person typed, `"rpc"` for a remote user's input, `"extension"` (the default) for text this extension generated. Only `"extension"` waits behind a pending decision.
 
 When not streaming, the message is sent immediately and triggers a new turn. When streaming without `deliverAs`, throws an error.
 
@@ -2052,6 +2085,8 @@ pi.registerTool({
 `isError` means the invocation failed. A command that ran and reported a nonzero exit, a deadline, or a signal is a *result*: read `details.execution` (or `details.thenRun.execution`) to decide how to present it. Throw `ToolExecutionError` from `@step-harness/agent-core` to fail the invocation while keeping the observed content and details.
 
 **Early termination:** Return `terminate: true` from `execute()` to hint that the automatic follow-up LLM call should be skipped after the current tool batch. This only takes effect when every finalized tool result in that batch is terminating. See [examples/extensions/structured-output.ts](../examples/extensions/structured-output.ts) for a minimal example where the agent ends on a final structured-output tool call.
+
+**Decision barriers:** Return `stopTurn: true` to end the turn when this result settles, regardless of sibling results. Declare `executionMode: "sequential"` on the tool when it owns a user decision: later calls in the same batch then receive paired skipped results instead of running behind the barrier. Parallel calls already in flight still settle and earlier calls are not rolled back. The barrier ends this Agent Loop invocation; the session may still start another turn for input queued after `agent_end` or for automatic context maintenance. See [plan approval](../../../docs/plan-approval.md#stop-turn-barrier).
 
 ```typescript
 // Correct: throw to signal an error

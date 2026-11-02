@@ -846,7 +846,15 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 			options.runtime ??
 			new StepCronRuntime({
 				telemetry: options.telemetry,
-				isIdle: () => Boolean(currentContext?.isIdle() && !currentContext.hasPendingMessages()),
+				isIdle: () =>
+					Boolean(
+						currentContext?.isIdle() &&
+							!currentContext.hasPendingMessages() &&
+							// A job whose delivery would start a turn stays due instead of
+							// being fired into a queue, so an approval does not replay work the
+							// user may reject.
+							currentContext.hasPendingUserDecision?.() !== true,
+					),
 				warn: (message) => currentContext?.ui.notify(message, "warning"),
 				sendMessage: (delivery) => {
 					if (delivery.kind === "missed") {
