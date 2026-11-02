@@ -25,7 +25,12 @@ import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetr
 import { getThenRunCommand } from "../step/then-run.ts";
 import { findLegacyUnansweredHandoff } from "./plan-handoff.ts";
 import { type LegacyPlanTodoFields, migrateLegacyPlanTodos } from "./plan-mode-migration.ts";
-import { buildDefaultModePrompt, buildPlanModePrompt, PLAN_MODE_MESSAGE_TYPE } from "./plan-mode-prompt.ts";
+import {
+	buildDefaultModePrompt,
+	buildPlanModePrompt,
+	PLAN_MODE_MESSAGE_TYPE,
+	PLAN_MODE_PROMPT_VERSION,
+} from "./plan-mode-prompt.ts";
 import {
 	getPlanFilePath,
 	hashPlanContents,
@@ -85,6 +90,8 @@ interface PlanState {
 interface PlanModeAnnouncement {
 	mode: "plan" | "default";
 	planFilePath?: string;
+	/** Content version of a Plan block; absent in blocks written before it. */
+	version?: number;
 }
 
 interface AnnouncementRecord {
@@ -103,7 +110,8 @@ function lastAnnouncement(records: readonly AnnouncementRecord[]): PlanModeAnnou
 		if (details.mode === "plan") {
 			const planFilePath =
 				"planFilePath" in details && typeof details.planFilePath === "string" ? details.planFilePath : undefined;
-			return { mode: "plan", planFilePath };
+			const version = "version" in details && typeof details.version === "number" ? details.version : undefined;
+			return { mode: "plan", planFilePath, ...(version === undefined ? {} : { version }) };
 		}
 	}
 	return undefined;
@@ -126,8 +134,15 @@ function announcementFor(
 	recorded: PlanModeAnnouncement | undefined,
 ) {
 	if (planFilePath !== undefined) {
-		if (visible?.mode === "plan" && visible.planFilePath === planFilePath) return undefined;
-		const details: PlanModeAnnouncement = { mode: "plan", planFilePath };
+		// A block written by an older build states older rules; resuming it keeps
+		// the model on those rules until a new turn appends the current one.
+		const current = visible?.version === PLAN_MODE_PROMPT_VERSION;
+		if (visible?.mode === "plan" && visible.planFilePath === planFilePath && current) return undefined;
+		const details: PlanModeAnnouncement = {
+			mode: "plan",
+			planFilePath,
+			version: PLAN_MODE_PROMPT_VERSION,
+		};
 		return {
 			customType: PLAN_MODE_MESSAGE_TYPE,
 			content: buildPlanModePrompt(planFilePath),
@@ -470,14 +485,16 @@ export const createStepPlanExtension =
 				"info",
 			);
 		};
+		/**
+		 * Leave plan mode because its decision is over.
+		 *
+		 * Only a user decision comes through here — approval, or leaving. A caller
+		 * handoff leaves through {@link handOffProposal}, which keeps the wait.
+		 */
 		const exit = (outcome: StepPlanExitOutcome, ctx: ExtensionContext): void => {
 			if (!enabled) return;
-			// A user decision ends the wait. A handoff does not: the proposal still
-			// awaits the caller's approval, and the automatic-turn guard keeps
-			// holding queued work until that arrives.
-			const decided = outcome !== "auto_headless" && outcome !== "auto_rpc";
 			const previousPending = pendingProposal;
-			if (decided) pendingProposal = undefined;
+			pendingProposal = undefined;
 			try {
 				// Persist before lifting the live restriction: a failed write must leave
 				// the session in plan mode, not strand the branch saying it is still on.
@@ -607,8 +624,9 @@ export const createStepPlanExtension =
 					return;
 				}
 				// `/plan approve` answers the proposal, `/plan approve <hash>` answers
-				// that one. Any other text after the verb is a task, not a decision.
-				const namedProposal = /^approve\s+(.+)$/.exec(prompt)?.[1]?.trim();
+				// that one. A hash is 64 lowercase hex characters, so any other text
+				// after the verb is a task and falls through to the branch below.
+				const namedProposal = /^approve\s+([0-9a-f]{64})$/.exec(prompt)?.[1];
 				if (prompt === "approve" || namedProposal !== undefined) {
 					// The user accepted the proposal the host showed them. Leaving the
 					// mode and starting the implementation turn are one decision: the
@@ -677,8 +695,13 @@ export const createStepPlanExtension =
 				// Expand a leading `/skill:` or prompt template in the task, as the same
 				// text sent without `/plan` would be (the web composer puts its plan
 				// prefix in front of a picked skill).
+				//
+				// The words are the user's, forwarded: a proposal submitted by the turn
+				// this waited behind must not turn their request for changes into
+				// extension traffic that the pending-decision guard then holds back.
 				pi.sendUserMessage(prompt, {
 					expandPromptTemplates: true,
+					source: ctx.mode === "tui" ? "interactive" : "rpc",
 					...(ctx.isIdle() ? {} : { deliverAs: "followUp" as const }),
 				});
 			},

@@ -348,9 +348,14 @@ for path rules and retention responsibilities.
 - `exit_plan_mode` submits the written proposal for review, requiring a readable,
   nonempty regular plan file. In the TUI, the user can approve execution or
   provide refinement notes; dismissal keeps planning active and ends the turn.
-  Headless and RPC runs hand the proposal to the caller instead: plan mode exits,
-  the turn ends immediately, and the caller must gate approval externally before
-  allowing execution. `/plan` can still explicitly toggle planning off.
+  A host that declares `planReviewSurface` — an interactive app that draws the
+  proposal itself — keeps plan mode on, ends the turn, and records the reviewed
+  snapshot as `pendingProposalHash` in the `step-plan` entry; approval, a change
+  request, or leaving clears it. Runs without that surface hand the proposal to
+  their caller instead: plan mode exits, the turn ends immediately, and the
+  caller must gate approval externally before allowing execution. `/plan` states
+  the mode outright (`on`, `off`) and answers a submitted proposal (`approve`,
+  `approve <hash>`).
 - `task_create`, `task_update`, `task_get`, and `task_list` are the only task
   tools and work with or without plan mode. Each execution checklist is a
   separate task plan, distinct from the Markdown proposal. Tasks retain their

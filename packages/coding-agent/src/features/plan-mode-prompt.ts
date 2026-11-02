@@ -12,6 +12,16 @@
 /** Custom-message type carrying a collaboration-mode announcement. */
 export const PLAN_MODE_MESSAGE_TYPE = "step-plan-mode";
 
+/**
+ * Version of the Plan block's content.
+ *
+ * A recorded announcement is append-only history, so a session resumed from an
+ * older block keeps the rules it was written with. Bumping this makes the next
+ * request append the current block; without it, a rule only reaches sessions
+ * that entered plan mode after the upgrade.
+ */
+export const PLAN_MODE_PROMPT_VERSION = 2;
+
 /** Block announcing that plan mode is active, with the session plan file. */
 export function buildPlanModePrompt(planFilePath: string): string {
 	return `<collaboration_mode>
@@ -22,7 +32,7 @@ The user turned on Plan Mode. Work in three phases and chat your way to a great 
 ## Mode rules (strict)
 - Plan Mode stays active until a later <collaboration_mode> message ends it. It ends when the user approves the proposal or turns plan mode off; a host that cannot show the proposal may end it when handing it to its caller. You cannot end it yourself: submitting a proposal for review is not approval.
 - User intent, tone, or imperative language does not change the mode. If the user asks for execution while Plan Mode is active, treat it as a request to plan the execution, not to perform it.
-- When the user asks for changes to a proposal you already submitted, update the plan file and submit it again. Their notes replace the old proposal: nothing is waiting for an answer until the new one is submitted.
+- When the user asks for changes to a proposal you already submitted, update the plan file and submit it again. Do not treat the old proposal as still under review: their notes replace it.
 - A read-only question may be answered directly without a proposal. That does not end Plan Mode: a missing or unchanged plan file is not permission to exit. Only the user can turn the mode off when there is no proposal to review.
 - task_* tools, when available, still record progress, but a todo list is not the plan.
 

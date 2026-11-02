@@ -9,6 +9,7 @@ import { createEventBus } from "../src/core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
+import { PLAN_MODE_PROMPT_VERSION } from "../src/features/plan-mode-prompt.ts";
 import { getPlanFilePath } from "../src/features/plan-mode-tools.ts";
 import { createStepExtension } from "../src/features/step.ts";
 import { createStepPlanExtension } from "../src/features/step-plan.ts";
@@ -154,6 +155,8 @@ function createHarness(
 		({
 			mode: "tui",
 			hasUI: true,
+			// The terminal answers a plan review inside the tool call.
+			planReviewSurface: false,
 			cwd,
 			isIdle: () => true,
 			hasPendingMessages: () => false,
@@ -807,6 +810,97 @@ test("entering plan mode does not carry a proposal from an earlier round", async
 	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
 });
 
+test("a caller handoff records the wait and the exit in one entry", async () => {
+	// Two writes would leave a window where the branch says a proposal waits but
+	// the caller never received one, or the reverse.
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx({ mode: "rpc", hasUI: false });
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Plan\n1. Do the thing\n");
+	const before = harness.appended.filter((entry) => entry.customType === "step-plan").length;
+
+	await runTool(harness, "exit_plan_mode", {}, context);
+
+	const written = harness.appended.filter((entry) => entry.customType === "step-plan");
+	expect(written).toHaveLength(before + 1);
+	expect(written.at(-1)?.data).toMatchObject({ enabled: false, pendingProposalHash: expect.any(String) });
+});
+
+test("/plan off answers a proposal a caller handoff left waiting", async () => {
+	// Leaving is a decision too: the handoff set the wait, and the mode is already
+	// off, so a `/plan off` that only looked at the mode would leave the gate held
+	// with nothing left for the user to click.
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx({ mode: "rpc", hasUI: false });
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Plan\n1. Do the thing\n");
+	await runTool(harness, "exit_plan_mode", {}, context);
+	expect(lastPlanEntry(harness).pendingProposalHash).toBeDefined();
+
+	await harness.commands.get("plan")!.handler("off", context);
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
+	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
+	// Leaving is not approving: no implementation turn starts.
+	expect(harness.customMessages).toEqual([]);
+});
+
+test("/plan off is idempotent and never turns the mode back on", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+
+	await enterPlanMode(harness, context);
+	await harness.commands.get("plan")!.handler("off", context);
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
+	expect(harness.userMessages).toEqual([]);
+
+	// A queued `/plan off` that arrives after the turn already left the mode must
+	// not turn it back on.
+	await harness.commands.get("plan")!.handler("off", context);
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
+	expect(harness.userMessages).toEqual([]);
+});
+
+test("/plan approve refuses when no proposal is waiting", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+
+	await harness.commands.get("plan")!.handler("approve", context);
+	expect(harness.userMessages).toEqual([]);
+	expect(harness.appended.filter((entry) => entry.customType === "step-plan")).toEqual([]);
+	expect(harness.notifications.some((notice) => /No plan is waiting for approval/.test(notice.message))).toBe(true);
+});
+
+test("/plan approve <task text> is a task, not a decision", async () => {
+	// Only a snapshot hash names a proposal. Any other text after the verb is
+	// something to plan, and dropping it would silently lose what the user wrote.
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx({ mode: "rpc", hasUI: true, planReviewSurface: true });
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Plan\n1. Do the thing\n");
+	await runTool(harness, "exit_plan_mode", {}, context);
+
+	await harness.commands.get("plan")!.handler("approve the payment flow", context);
+	expect(harness.userMessages.at(-1)?.[0]).toBe("approve the payment flow");
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: true });
+	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
+});
+
 test("a pending write the branch rejects leaves nothing waiting", async () => {
 	// A wait nobody recorded would hold every automatic turn back with no visible
 	// cause; a decision nobody recorded would let work past an unapproved plan.
@@ -860,9 +954,12 @@ test("a revision requested mid-run is queued behind the running turn", async () 
 		}),
 	);
 
+	// The words are the user's, forwarded. A proposal submitted by the turn they
+	// waited behind must not turn their change request into extension traffic that
+	// the pending-decision guard holds back.
 	expect(harness.userMessages.at(-1)).toEqual([
 		"split the second step",
-		{ expandPromptTemplates: true, deliverAs: "followUp" },
+		{ expandPromptTemplates: true, source: "rpc", deliverAs: "followUp" },
 	]);
 	expect(harness.customMessages).toEqual([]);
 	// The old proposal is no longer waiting, so the session holds no gate while
@@ -946,11 +1043,47 @@ test("a session written before the decision fact keeps its gate after an upgrade
 		planEntry: { version: 2, enabled: false, planFilePath },
 		handoff: { planHash, planFilePath, planContents },
 	});
+	const before = harness.appended.filter((entry) => entry.customType === "step-plan").length;
 	await restoreLifecycle(harness, "session_start");
+
+	// Written back once, so the branch — which every reader consults — carries the
+	// wait too, not just this process's memory.
+	const written = harness.appended.filter((entry) => entry.customType === "step-plan");
+	expect(written).toHaveLength(before + 1);
+	expect(written.at(-1)?.data).toMatchObject({ version: 3, enabled: false, pendingProposalHash: planHash });
+
+	// A second restore reads version 3 and leaves the branch alone.
+	const afterFirst = harness.appended.length;
+	await restoreLifecycle(harness, "session_start");
+	expect(harness.appended).toHaveLength(afterFirst);
 
 	await harness.commands.get("plan")!.handler("approve", harness.ctx());
 	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
 	expect(harness.customMessages.some(([message]) => message.customType === "step-plan-approved")).toBe(true);
+});
+
+test("a legacy handoff behind a summary is not restored as a wait", async () => {
+	// The old gate scanned the conversation the model reads; a summary boundary
+	// means the handoff is no longer in it, so a wait restored from behind one is
+	// a wait nobody can be shown a proposal for.
+	const cwd = makeWorkspace();
+	const planContents = "# Plan\n1. Do the thing\n";
+	const planFilePath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planFilePath), { recursive: true });
+	writeFileSync(planFilePath, planContents);
+	const planHash = createHash("sha256").update(planContents, "utf8").digest("hex");
+
+	const harness = resumedHarness({
+		cwd,
+		planEntry: { version: 2, enabled: false, planFilePath },
+		handoff: { planHash, planFilePath, planContents },
+	});
+	harness.session.appendCompaction("Earlier work summarized.", harness.session.getEntries()[0]!.id, 1_000);
+	await restoreLifecycle(harness, "session_start");
+
+	await harness.commands.get("plan")!.handler("approve", harness.ctx());
+	expect(harness.notifications.some((notice) => /No plan is waiting for approval/.test(notice.message))).toBe(true);
+	expect(harness.customMessages).toEqual([]);
 });
 
 test("a plan entry after a legacy handoff is not replayed as a decision", async () => {
@@ -1135,7 +1268,10 @@ test.each(planEntryCases)(
 		const toolsBefore = harness.activeTools();
 		// `/plan <task>` while planning hands over the task without re-entering.
 		await harness.commands.get("plan")!.handler("refine the proposal", context);
-		expect(harness.userMessages.at(-1)).toEqual(["refine the proposal", { expandPromptTemplates: true }]);
+		expect(harness.userMessages.at(-1)).toEqual([
+			"refine the proposal",
+			{ expandPromptTemplates: true, source: "interactive" },
+		]);
 		expect(harness.appended).toHaveLength(snapshotsBefore);
 		expect(events).toHaveLength(telemetryBefore);
 		expect(events[0]).toEqual({ event: "plan_mode_entered", properties: { source } });
@@ -2306,7 +2442,9 @@ test("/plan with a task enables plan mode and sends the task as a user turn", as
 	await harness.commands.get("plan")!.handler("实现一个俄罗斯方块,简单版", context);
 
 	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
-	expect(harness.userMessages).toEqual([["实现一个俄罗斯方块,简单版", { expandPromptTemplates: true }]]);
+	expect(harness.userMessages).toEqual([
+		["实现一个俄罗斯方块,简单版", { expandPromptTemplates: true, source: "interactive" }],
+	]);
 	// The turn must start under the plan-mode tool set, not the unrestricted one.
 	expect(harness.activeTools()).not.toContain("edit_file_unrestricted");
 	expect(harness.activeTools()).toContain("read_file");
@@ -2332,7 +2470,9 @@ test("/plan with a task queues as a follow-up while the agent is streaming", asy
 
 	await harness.commands.get("plan")!.handler("plan this too", harness.ctx({ isIdle: () => false }));
 
-	expect(harness.userMessages).toEqual([["plan this too", { expandPromptTemplates: true, deliverAs: "followUp" }]]);
+	expect(harness.userMessages).toEqual([
+		["plan this too", { expandPromptTemplates: true, source: "interactive", deliverAs: "followUp" }],
+	]);
 });
 
 test("bare /plan still toggles plan mode and sends nothing", async () => {
@@ -2419,7 +2559,9 @@ test("/plan <task> announces plan mode on the turn that carries the task", async
 	const harness = createHarness({ cwd: makeWorkspace() });
 	createStepPlanExtension()(harness.api);
 	await harness.commands.get("plan")!.handler("plan the parser rewrite", harness.ctx());
-	expect(harness.userMessages).toEqual([["plan the parser rewrite", { expandPromptTemplates: true }]]);
+	expect(harness.userMessages).toEqual([
+		["plan the parser rewrite", { expandPromptTemplates: true, source: "interactive" }],
+	]);
 	expect((await startTurn(harness))?.details.mode).toBe("plan");
 });
 
@@ -2511,9 +2653,10 @@ test.each(["session_start", "session_tree"] as const)(
 	"%s restore re-announces only when the visible block disagrees with the mode",
 	async (type) => {
 		const planFilePath = "/workspace/.stepcode/plans/session-sess-1.md";
-		const announced = (mode: "plan" | "default") => (mode === "plan" ? { mode, planFilePath } : { mode });
+		const announced = (mode: "plan" | "default") =>
+			mode === "plan" ? { mode, planFilePath, version: PLAN_MODE_PROMPT_VERSION } : { mode };
 
-		// A legacy agent-entered plan that was already announced: no repeat.
+		// A plan that was already announced in the current wording: no repeat.
 		const legacy = createHarness({
 			entries: [
 				{ type: "custom", customType: "step-plan", data: { enabled: true, planSource: "agent", planFilePath } },
@@ -2524,6 +2667,22 @@ test.each(["session_start", "session_tree"] as const)(
 		await restoreLifecycle(legacy, type);
 		expect(legacy.statuses.get("plan-mode")).toBe("Planning (agent)");
 		expect(await startTurn(legacy)).toBeUndefined();
+
+		// A block written by an older build states older rules, so the current one is
+		// appended once; the next turn has nothing left to say.
+		const stale = createHarness({
+			entries: [
+				{ type: "custom", customType: "step-plan", data: { enabled: true, planSource: "agent", planFilePath } },
+			],
+		});
+		stale.session.appendCustomMessageEntry("step-plan-mode", "<collaboration_mode>", false, {
+			mode: "plan",
+			planFilePath,
+		});
+		createStepPlanExtension()(stale.api);
+		await restoreLifecycle(stale, type);
+		expect(await startTurn(stale)).toMatchObject({ details: announced("plan") });
+		expect(await startTurn(stale)).toBeUndefined();
 
 		// The same plan state recorded before announcements existed: announce once.
 		const unannounced = createHarness({

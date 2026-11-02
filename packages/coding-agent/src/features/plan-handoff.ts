@@ -76,7 +76,9 @@ export function pendingHandoffText(
 		if (message.role !== "toolResult" || message.toolName !== "exit_plan_mode" || message.isError) continue;
 		const details = message.details as { planHash?: unknown } | undefined;
 		if (details?.planHash !== pending) continue;
-		return readExternalPlanHandoff(message)?.text;
+		const text = readExternalPlanHandoff(message)?.text;
+		// An empty result would otherwise win over the answer the caller did get.
+		if (text) return text;
 	}
 	return undefined;
 }
@@ -100,6 +102,10 @@ export function findLegacyUnansweredHandoff(manager: {
 	const branch = manager.getBranch();
 	for (let index = branch.length - 1; index >= 0; index--) {
 		const entry = branch[index]!;
+		// A summary boundary means the handoff is no longer in the conversation the
+		// model reads: the old gate could not see it either, and a wait restored
+		// from behind a summary is one nobody can be shown.
+		if (entry.type === "compaction" || entry.type === "branch_summary") return undefined;
 		// A plan entry above the handoff is a later transition: the handoff's own
 		// exit is written before its result, so it is still below.
 		if (entry.type === "custom" && entry.customType === "step-plan") return undefined;
