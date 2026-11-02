@@ -1498,7 +1498,9 @@ export class WebSession {
 		const images = imagesOf(attachments);
 		const sent = withTextAttachments(text, attachments);
 		const promptCommand = this.recordPromptCommand(text, sent);
-		if (promptCommand) this.nameAfterPromptCommand(promptCommand);
+		if (promptCommand) this.nameSessionAfter(promptCommand);
+		// No words to generate a title from: without a name the listing reads "(no messages)".
+		else if (!text.trim() && attachments[0]) this.nameSessionAfter(attachments[0].name);
 		await this.session.prompt(sent, {
 			source: "rpc",
 			...(images.length ? { images } : {}),
@@ -1539,11 +1541,12 @@ export class WebSession {
 	}
 
 	/**
-	 * A session opened by a prompt command is named after that line. Without a
-	 * name the sidebar falls back to the first message, which is the whole
-	 * expanded template, and a slash line is never sent for a generated title.
+	 * A session opened by a prompt command is named after that line, and one opened
+	 * by attachments alone after the first file. Without a name the sidebar falls
+	 * back to the first message: the whole expanded template, or nothing at all.
+	 * Neither is ever sent for a generated title.
 	 */
-	private nameAfterPromptCommand(line: string): void {
+	private nameSessionAfter(line: string): void {
 		if (this.sessionTitleGenerated || this.session.sessionName) return;
 		if (this.session.sessionManager.getBranch().some(isUserEntry)) return;
 		this.sessionTitleGenerated = true;

@@ -200,6 +200,18 @@ function readAttachments(raw: unknown): WebAttachment[] | Error | undefined {
 }
 
 /**
+ * The `text` and `attachments` of a posted message. Text may be empty only
+ * when attachments carry the content (a pasted screenshot sent on its own).
+ */
+function readMessageContent(input: Record<string, unknown>): { text: string; attachments: WebAttachment[] } | Error {
+	const attachments = readAttachments(input.attachments);
+	if (attachments instanceof Error) return attachments;
+	if (typeof input.text !== "string") return new Error("text is required");
+	if (!input.text.trim() && !attachments?.length) return new Error("text or attachments is required");
+	return { text: input.text, attachments: attachments ?? [] };
+}
+
+/**
  * The message text with the content of each uploaded file the composer named
  * (`files`: upload ids in chip order). An Error answers 400: a malformed list
  * or an id whose copy is gone.
@@ -1195,27 +1207,25 @@ const server = createServer(async (request, response) => {
 			}
 			if (parts[4] === "messages" && method === "POST") {
 				const input = await body(request);
-				if (typeof input.text !== "string" || !input.text.trim()) return error(response, 400, "text is required");
-				const attachments = readAttachments(input.attachments);
-				if (attachments instanceof Error) return error(response, 400, attachments.message);
-				const text = await withFiles(input.text, input.files);
+				const content = readMessageContent(input);
+				if (content instanceof Error) return error(response, 400, content.message);
+				const text = await withFiles(content.text, input.files);
 				if (text instanceof Error) return error(response, 400, text.message);
 				if (session.isReverting()) return error(response, 409, "Wait for the revert to finish");
-				void session.send(text, attachments ?? []).catch((caught) => {
+				void session.send(text, content.attachments).catch((caught) => {
 					session.publishError(caught instanceof Error ? caught.message : String(caught));
 				});
 				return json(response, 202, { ok: true });
 			}
 			if (parts[4] === "steer" && method === "POST") {
 				const input = await body(request);
-				if (typeof input.text !== "string" || !input.text.trim()) return error(response, 400, "text is required");
-				const attachments = readAttachments(input.attachments);
-				if (attachments instanceof Error) return error(response, 400, attachments.message);
-				const text = await withFiles(input.text, input.files);
+				const content = readMessageContent(input);
+				if (content instanceof Error) return error(response, 400, content.message);
+				const text = await withFiles(content.text, input.files);
 				if (text instanceof Error) return error(response, 400, text.message);
 				// Queuing a steer is immediate; a refusal (an extension command) is this request's error.
 				try {
-					await session.steer(text, attachments ?? []);
+					await session.steer(text, content.attachments);
 				} catch (caught) {
 					return error(response, 400, caught instanceof Error ? caught.message : String(caught));
 				}
@@ -1225,13 +1235,11 @@ const server = createServer(async (request, response) => {
 				const itemId = parts[5] ? decodeURIComponent(parts[5]) : undefined;
 				if (parts.length === 5 && method === "POST") {
 					const input = await body(request);
-					if (typeof input.text !== "string" || !input.text.trim())
-						return error(response, 400, "text is required");
-					const attachments = readAttachments(input.attachments);
-					if (attachments instanceof Error) return error(response, 400, attachments.message);
+					const content = readMessageContent(input);
+					if (content instanceof Error) return error(response, 400, content.message);
 					const files = await readQueuedFiles(input.files);
 					if (files instanceof Error) return error(response, 400, files.message);
-					session.enqueue({ text: input.text.trim(), attachments: attachments ?? [], files });
+					session.enqueue({ text: content.text.trim(), attachments: content.attachments, files });
 					return json(response, 202, session.queueState());
 				}
 				// `queue/steer` steers every queued message; `queue/<id>/steer` one of them.

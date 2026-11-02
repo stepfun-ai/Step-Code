@@ -1430,7 +1430,7 @@ paths:
               type: object
               required: [text]
               properties:
-                text: { type: string }
+                text: { type: string, description: May be empty when attachments carry the message }
                 files:
                   type: array
                   items: { type: string }
@@ -1442,7 +1442,7 @@ paths:
                 attachments: { type: array, description: "Paperclip files: name, mimeType, base64 data" }
       responses:
         "202": { description: Prompt accepted }
-        "400": { description: text is missing, or an attachment or upload id is invalid }
+        "400": { description: text is missing (empty text needs attachments), or an attachment or upload id is invalid }
         "409": { description: A turn revert is writing files }
   /api/v1/sessions/{id}/steer:
     post:
@@ -1455,7 +1455,7 @@ paths:
               type: object
               required: [text]
               properties:
-                text: { type: string }
+                text: { type: string, description: May be empty when attachments carry the message }
                 files:
                   type: array
                   items: { type: string }
@@ -1467,7 +1467,7 @@ paths:
                 attachments: { type: array, description: "Paperclip files: name, mimeType, base64 data" }
       responses:
         "202": { description: Steer accepted; the running turn reads it before its next model call }
-        "400": { description: text is missing, an attachment or upload id is invalid, or the kernel refused the steer (an extension command) }
+        "400": { description: text is missing (empty text needs attachments), an attachment or upload id is invalid, or the kernel refused the steer (an extension command) }
   /api/v1/sessions/{id}/queue:
     post:
       summary: Queue a message sent during a turn
@@ -1484,7 +1484,7 @@ paths:
               type: object
               required: [text]
               properties:
-                text: { type: string }
+                text: { type: string, description: May be empty when attachments carry the message }
                 files:
                   type: array
                   items: { type: string }
@@ -1496,7 +1496,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/QueueState" }
-        "400": { description: text is missing, or an attachment or upload id is invalid }
+        "400": { description: text is missing (empty text needs attachments), or an attachment or upload id is invalid }
   /api/v1/sessions/{id}/queue/steer:
     post:
       summary: Steer every queued message into the running turn

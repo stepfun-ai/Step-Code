@@ -88,7 +88,7 @@ function slashLineText(prompt: string, resolve: SlashCommandResolver, nested: bo
 			// `/plan /skill:x task` is titled like the same text sent alone.
 			return titleText(taskArgumentText(name, args), resolve, true);
 		case "template":
-			// The host names a session opened by a template after its command line (`nameAfterPromptCommand`).
+			// The host names a session opened by a template after its command line (`nameSessionAfter`).
 			return nested ? prompt : "";
 		default:
 			return prompt;
