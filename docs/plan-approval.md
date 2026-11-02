@@ -213,7 +213,11 @@ decision: cron keeps the job due, and a goal continuation stays pending.
 
 A user's own prompt always runs: that message is how the decision gets answered.
 A host bridge forwarding a real person's input reports its own `source`, so the
-message is not mistaken for extension-generated text.
+message is not mistaken for extension-generated text. The same holds while a run
+is in flight: input a person typed waits in the queue, and when the turn submits
+a proposal, that input is still what the next request delivers. The gate reads
+the message the agent would deliver next, not whether the queue contains one —
+work a feature queued ahead of the user's words still waits.
 The guard never guesses from wording. On a host without a review surface the
 decision belongs to the caller, and the only channel it has is a message; the
 first turn after the handoff therefore settles the wait, and the guard stays

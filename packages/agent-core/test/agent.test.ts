@@ -705,6 +705,25 @@ describe("Agent", () => {
 		expect(agent.state.messages).not.toContainEqual(message);
 	});
 
+	it("peeks the next queued message without draining it", () => {
+		// A caller that must decide whether continuing is safe needs to know which
+		// message goes first: steering drains before follow-ups.
+		const agent = new Agent({ streamFn: unusedStreamFunction });
+		expect(agent.peekNextQueued()).toBeUndefined();
+
+		const followUp = { role: "user" as const, content: "Follow-up", timestamp: Date.now() };
+		const steer = { role: "user" as const, content: "Steering", timestamp: Date.now() };
+		agent.followUp(followUp);
+		expect(agent.peekNextQueued()).toBe(followUp);
+
+		agent.steer(steer);
+		expect(agent.peekNextQueued()).toBe(steer);
+		expect(agent.hasQueuedMessages()).toBe(true);
+
+		// Peeking is not delivery.
+		expect(agent.peekNextQueued()).toBe(steer);
+	});
+
 	it("should handle abort controller", () => {
 		const agent = new Agent({ streamFn: unusedStreamFunction });
 

@@ -144,6 +144,11 @@ class PendingMessageQueue {
 		return this.messages.length > 0;
 	}
 
+	/** The message the next drain would return, without removing it. */
+	peek(): AgentMessage | undefined {
+		return this.messages[0];
+	}
+
 	drain(): AgentMessage[] {
 		if (this.mode === "all") {
 			const drained = this.messages.slice();
@@ -322,6 +327,17 @@ export class Agent {
 	/** Returns true when either queue still contains pending messages. */
 	hasQueuedMessages(): boolean {
 		return this.steeringQueue.hasItems() || this.followUpQueue.hasItems();
+	}
+
+	/**
+	 * The message the next drain would deliver, without removing it.
+	 *
+	 * A caller that has to decide whether continuing is safe needs to know which
+	 * queued message would go first: steering drains before follow-ups, and a
+	 * queue that will mix the two has no single "has queued work" answer.
+	 */
+	peekNextQueued(): AgentMessage | undefined {
+		return this.steeringQueue.peek() ?? this.followUpQueue.peek();
 	}
 
 	/** Active abort signal for the current run, if any. */

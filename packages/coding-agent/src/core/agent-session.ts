@@ -367,10 +367,14 @@ export class AgentSession {
 	/** Tracks pending follow-up messages for UI display. Removed when delivered. */
 	private _followUpMessages: string[] = [];
 	/**
-	 * Queued inputs a person wrote, by text, so the decision gate below can tell
-	 * the user's own words from work a feature queued on their behalf.
+	 * Queued messages a person wrote, by identity, so the decision gate below can
+	 * tell the user's own words from work a feature queued on their behalf.
+	 *
+	 * Identity, not text: the same words can be queued by both, and queued
+	 * messages are delivered as objects the agent holds. A weak set keeps this
+	 * from outliving the queue.
 	 */
-	private _queuedFromUser = new Set<string>();
+	private _queuedFromUser = new WeakSet<AgentMessage>();
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
 	/** Context-only custom messages queued during a run, flushed once the current turn's tool results are in. */
@@ -1343,14 +1347,12 @@ export class AgentSession {
 				const steeringIndex = this._steeringMessages.indexOf(messageText);
 				if (steeringIndex !== -1) {
 					this._steeringMessages.splice(steeringIndex, 1);
-					this._queuedFromUser.delete(messageText);
 					this._emitQueueUpdate();
 				} else {
 					// Check follow-up queue
 					const followUpIndex = this._followUpMessages.indexOf(messageText);
 					if (followUpIndex !== -1) {
 						this._followUpMessages.splice(followUpIndex, 1);
-						this._queuedFromUser.delete(messageText);
 						this._emitQueueUpdate();
 					}
 				}
@@ -2057,7 +2059,7 @@ export class AgentSession {
 		// existed is how they answer it, whether it arrived mid-turn or after, so it
 		// still runs — otherwise their request waits behind a gate only they can
 		// open, with nothing left on screen to open it.
-		if (this.hasPendingUserDecision && !this._hasQueuedUserInput()) return false;
+		if (this.hasPendingUserDecision && !this._nextQueuedInputIsUser()) return false;
 
 		// CLM maintains context for a future request. A successful settled answer
 		// needs no extra model call; the next prompt/continuation performs the
@@ -2407,24 +2409,29 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
-	private _hasQueuedUserInput(): boolean {
-		const queued = [...this._steeringMessages, ...this._followUpMessages];
-		return queued.some((text) => this._queuedFromUser.has(text));
+	/**
+	 * Whether the user's own input is what the agent would deliver next.
+	 *
+	 * A continuation delivers one queued message at a time — steering before
+	 * follow-ups. Only the message at the head of that order is the user's answer;
+	 * work queued ahead of it is not, and letting the whole continuation run would
+	 * deliver that work on the user's behalf.
+	 */
+	private _nextQueuedInputIsUser(): boolean {
+		const next = this.agent.peekNextQueued();
+		return next !== undefined && this._queuedFromUser.has(next);
 	}
 
 	private async _queueSteer(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
 		this._steeringMessages.push(text);
-		if (source !== "extension") this._queuedFromUser.add(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.steer({
-			role: "user",
-			content,
-			timestamp: Date.now(),
-		});
+		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		if (source !== "extension") this._queuedFromUser.add(message);
+		this.agent.steer(message);
 	}
 
 	/**
@@ -2432,17 +2439,14 @@ export class AgentSession {
 	 */
 	private async _queueFollowUp(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
 		this._followUpMessages.push(text);
-		if (source !== "extension") this._queuedFromUser.add(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.followUp({
-			role: "user",
-			content,
-			timestamp: Date.now(),
-		});
+		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		if (source !== "extension") this._queuedFromUser.add(message);
+		this.agent.followUp(message);
 	}
 
 	/**
@@ -2600,7 +2604,6 @@ export class AgentSession {
 		const followUp = [...this._followUpMessages];
 		this._steeringMessages = [];
 		this._followUpMessages = [];
-		this._queuedFromUser.clear();
 		// Custom messages held behind a pending decision are queue entries too:
 		// leaving them would deliver content the caller believes it cleared.
 		this._pendingCustomMessages = [];
