@@ -2628,11 +2628,18 @@ execute the tool again.
 `signal`, `timedOut`, `aborted`, and `timeoutSeconds`). `CommandExecutionOutcome`
 normalizes those facts with an explicit `status`: `exited`, `timed_out`,
 `signaled`, `canceled`, or `unknown`. A deadline can coexist with exit code zero;
-an unknown exit is not success. These DTOs and their shared formatter live in
-[`src/harness/command-outcome.ts`](../src/harness/command-outcome.ts).
+an unknown exit is not success. These DTOs, the normalizer, and their formatters
+live in [`src/harness/command-outcome.ts`](../src/harness/command-outcome.ts).
+The generic `bash` tool in [`src/harness/tools/bash.ts`](../src/harness/tools/bash.ts)
+returns a nonzero exit or deadline as an ordinary result with `details.execution`;
+only a cancellation or executor fault is an invocation failure, and it retains
+the same observations.
+
 The canonical [`BashExecutionMessage`](../src/harness/messages.ts) stores the
-optional `execution` outcome and uses the shared formatter for model projection.
-Older messages without the field retain their existing projection.
+optional `execution` outcome and projects it through
+`commandExecutionNotice`, which stays silent for a clean exit and states every
+other observation. Older messages without the field retain their existing
+projection.
 
 The existing `agent-loop.ts` remains behavior-compatible and is refactored into these exported phases. Existing fields on `AgentTool`, `AgentToolResult`, and provider messages are retained. Add recovery declaration `replay?: "never" | "safe"` to `AgentTool`; omission means `"never"`. `AgentHarnessTool` inherits it. The `AgentEventSink` below is the existing agent-loop sink, not the harness event listener; the harness adapts agent events into §5.5 events.
 

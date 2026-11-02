@@ -158,6 +158,7 @@ export * from "./proxy.ts";
 export * from "./search/index.ts";
 // Stream defaults
 export { setDefaultStreamFn } from "./stream-fn.ts";
+// Tool invocation failures
 export * from "./tool-error.ts";
 // Types
 export * from "./types.ts";

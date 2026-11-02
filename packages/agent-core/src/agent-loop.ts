@@ -890,18 +890,29 @@ async function executePreparedToolCall(
 	} catch (error) {
 		acceptingUpdates = false;
 		await idle;
+		// A typed execution failure already carries its own diagnostic as
+		// `result.content[0]`, so only a second cause (event delivery) may be
+		// prepended; repeating the tool's message would duplicate the output.
+		if (error instanceof ToolExecutionError) {
+			const deliveryCause = deliveryFailure && deliveryFailure.error !== error ? deliveryFailure.error : undefined;
+			const result = deliveryCause
+				? createErrorToolResult(
+						deliveryCause instanceof Error ? deliveryCause.message : String(deliveryCause),
+						error.result,
+					)
+				: error.result;
+			return { result, isError: true };
+		}
 		// The tool's own failure is what stopped the call; a listener failure is a
 		// second cause and must not be hidden by it (or repeat it).
 		const causes = deliveryFailure && deliveryFailure.error !== error ? [error, deliveryFailure.error] : [error];
-		const retained = error instanceof ToolExecutionError ? error.result : completedResult;
-		const result =
-			error instanceof ToolExecutionError && causes.length === 1
-				? error.result
-				: createErrorToolResult(
-						causes.map((cause) => (cause instanceof Error ? cause.message : String(cause))).join("\n"),
-						retained,
-					);
-		return { result, isError: true };
+		return {
+			result: createErrorToolResult(
+				causes.map((cause) => (cause instanceof Error ? cause.message : String(cause))).join("\n"),
+				completedResult,
+			),
+			isError: true,
+		};
 	}
 }
 
