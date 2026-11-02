@@ -483,6 +483,11 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 			break;
 		}
 
+		case "incomplete_turn_recovery_failed":
+			// The interactive path reports this failure through the prompt rejection;
+			// the event exists for hosts that record post-acceptance session events.
+			break;
+
 		case "summarization_retry_finished": {
 			ctx.clearStatusIndicator("retry");
 			ctx.redraw.requestRender();

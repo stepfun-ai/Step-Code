@@ -359,12 +359,28 @@ describe("runPrintMode same-session completion check", () => {
 		},
 	);
 
-	it("leaves default-off behavior unchanged without Git or a final answer", async () => {
+	it("uses the generic recovery when completion checking is not enabled", async () => {
 		const { harness, run } = await setup({}, false);
-		harness.setResponses([fauxAssistantMessage(fauxThinking("thinking only")), fauxAssistantMessage("unused")]);
+		harness.setResponses([
+			fauxAssistantMessage(fauxThinking("thinking only")),
+			fauxAssistantMessage("recovered without completion check"),
+		]);
 		expect(await run({ completionCheck: undefined })).toBe(0);
-		expect(harness.faux.state.callCount).toBe(1);
+		expect(harness.faux.state.callCount).toBe(2);
+		expect(stdout).toBe("recovered without completion check\n");
 		expect(console.error).not.toHaveBeenCalled();
+	});
+
+	it("exits 1 when a second incomplete turn is marked as an error", async () => {
+		const { harness, run } = await setup({}, false);
+		harness.setResponses([
+			fauxAssistantMessage(fauxThinking("thinking only")),
+			fauxAssistantMessage(fauxThinking("thinking only again")),
+		]);
+		expect(await run({ completionCheck: undefined })).toBe(1);
+		expect(harness.faux.state.callCount).toBe(2);
+		expect(stdout).toBe("");
+		expect(console.error).toHaveBeenCalledWith("The model returned no visible answer or executable tool call.");
 	});
 
 	it("fails non-Git preflight before binding extensions or calling the model and cleans up", async () => {

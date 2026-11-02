@@ -261,20 +261,7 @@ async function runLoop(
 			}
 
 			// Stream assistant response
-			let message = await streamAssistantResponse(currentContext, config, signal, emit, streamFunction);
-
-			// Serving-side tool parsers can fail and leak the model's tool-call
-			// markup into plain text: the turn then carries no executable call
-			// and the loop would end even though the model meant to act.
-			// Resample the identical context a bounded number of times; the
-			// leaked attempt is dropped from the request context while its
-			// message events above remain for observability.
-			const leakRetryLimit = config.toolCallLeakRetries ?? DEFAULT_TOOL_CALL_LEAK_RETRIES;
-			for (let attempt = 0; attempt < leakRetryLimit && isToolCallMarkupLeak(message); attempt++) {
-				if (currentContext.messages[currentContext.messages.length - 1] !== message) break;
-				currentContext.messages.pop();
-				message = await streamAssistantResponse(currentContext, config, signal, emit, streamFunction);
-			}
+			const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFunction);
 			newMessages.push(message);
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
@@ -348,32 +335,6 @@ async function runLoop(
  * Stream an assistant response from the LLM.
  * This is where AgentMessage[] gets transformed to Message[] for the LLM.
  */
-/** Bounded default for resampling turns whose tool call leaked into text. */
-const DEFAULT_TOOL_CALL_LEAK_RETRIES = 2;
-
-const TOOL_CALL_MARKUP_RE = /<tool_call>|<function=/u;
-
-/**
- * True when an assistant turn carries no executable tool call but its text
- * contains raw tool-call markup — the signature of a serving-side tool-parser
- * failure. Error and aborted turns keep their own retry/exit semantics.
- */
-function isToolCallMarkupLeak(message: AssistantMessage): boolean {
-	if (message.stopReason === "error" || message.stopReason === "aborted") {
-		return false;
-	}
-	let sawMarkup = false;
-	for (const block of message.content) {
-		if (block.type === "toolCall") {
-			return false;
-		}
-		if (block.type === "text" && TOOL_CALL_MARKUP_RE.test(block.text)) {
-			sawMarkup = true;
-		}
-	}
-	return sawMarkup;
-}
-
 async function streamAssistantResponse(
 	context: AgentContext,
 	config: AgentLoopConfig,

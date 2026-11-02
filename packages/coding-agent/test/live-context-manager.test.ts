@@ -184,6 +184,20 @@ describe("live context manager", () => {
 		expect(JSON.stringify(restored.project(withError))).toContain("survives retry and resume");
 		expect(JSON.stringify(restored.project(withError))).not.toContain("OLD DETAIL");
 	});
+	it("keeps a host-projected omission across a retried provider error", async () => {
+		const { manager, raw, session, directory } = fixture(true);
+		const projected = raw.filter((_message, index) => index !== 2);
+		await manager.prepare(projected, raw);
+		edit(manager, "OLD DETAIL to replace", "host omission survived");
+		expect((await manager.accept(raw))?.accepted).toBe(true);
+
+		const restored = new LiveContextManager(session, { directory });
+		const failed = fauxAssistantMessage("", { stopReason: "error", errorMessage: "transient", timestamp: 0 });
+		const withError = [failed, ...raw];
+		expect(JSON.stringify(restored.project(withError))).toContain("host omission survived");
+		expect(JSON.stringify(restored.project(withError))).not.toContain("OLD DETAIL");
+	});
+
 	it("restores edits and readable archives after closing and reopening a JSONL session", async () => {
 		const { manager, raw, session, directory } = fixture(true);
 		await manager.prepare(raw);

@@ -42,8 +42,8 @@ type JsonAgentEndEvent = {
 	 * Length of the run's `messages` array — what this event used to carry.
 	 *
 	 * Informational, not a checksum: the loop can emit more `message_end` events
-	 * than it lists here (a resampled tool-call leak, a throwing
-	 * `shouldStopAfterTurn`), so a reader must not use it to detect truncation.
+	 * than it lists here (a throwing `shouldStopAfterTurn`), so a reader must not
+	 * use it to detect truncation.
 	 * A missing final message is visible as a message that never got its
 	 * `message_end`.
 	 */

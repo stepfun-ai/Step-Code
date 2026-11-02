@@ -70,6 +70,7 @@ describe("lax message content handling", () => {
 			},
 		];
 		const harness = await createHarness({ extensionFactories });
+		harness.session.setIncompleteTurnRecoveryEnabled(false);
 
 		try {
 			harness.setResponses([fauxAssistantMessage("hello")]);

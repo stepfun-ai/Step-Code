@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Agent } from "@step-harness/agent-core";
+import { Agent, type StreamFn } from "@step-harness/agent-core";
 import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
@@ -75,6 +75,13 @@ function createAssistantMessage(text: string): AssistantMessage {
 	};
 }
 
+function createThinkingOnlyMessage(): AssistantMessage {
+	return {
+		...createAssistantMessage(""),
+		content: [{ type: "thinking", thinking: "I should run a command." }],
+	};
+}
+
 type ParsedOutputLine = Record<string, unknown>;
 
 function parseOutputLines(outputLines: string[]): ParsedOutputLine[] {
@@ -94,7 +101,13 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: number; model?: Model<any> }): Promise<{
+async function createRuntimeHost(options: {
+	withAuth: boolean;
+	responseDelayMs: number;
+	model?: Model<any>;
+	streamFn?: StreamFn;
+	settingsOverrides?: Parameters<SettingsManager["applyOverrides"]>[0];
+}): Promise<{
 	runtimeHost: AgentSessionRuntime;
 	cleanup: () => Promise<void>;
 }> {
@@ -113,20 +126,23 @@ async function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: 
 			systemPrompt: "Test",
 			tools: [],
 		},
-		streamFn: (_model, _context, _options) => {
-			const stream = new MockAssistantStream();
-			queueMicrotask(() => {
-				stream.push({ type: "start", partial: createAssistantMessage("") });
-				setTimeout(() => {
-					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("done") });
-				}, options.responseDelayMs);
-			});
-			return stream;
-		},
+		streamFn:
+			options.streamFn ??
+			((_model, _context, _options) => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: createAssistantMessage("") });
+					setTimeout(() => {
+						stream.push({ type: "done", reason: "stop", message: createAssistantMessage("done") });
+					}, options.responseDelayMs);
+				});
+				return stream;
+			}),
 	});
 
 	const sessionManager = SessionManager.inMemory();
 	const settingsManager = SettingsManager.create(tempDir, tempDir);
+	if (options.settingsOverrides) settingsManager.applyOverrides(options.settingsOverrides);
 	const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 	const modelRegistry = await createInMemoryModelRegistry(authStorage);
 	registerTestStepProvider(getModelRuntime(modelRegistry));
@@ -170,7 +186,13 @@ async function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: 
 	};
 }
 
-async function startRpcMode(options: { withAuth: boolean; responseDelayMs: number; model?: Model<any> }): Promise<{
+async function startRpcMode(options: {
+	withAuth: boolean;
+	responseDelayMs: number;
+	model?: Model<any>;
+	streamFn?: StreamFn;
+	settingsOverrides?: Parameters<SettingsManager["applyOverrides"]>[0];
+}): Promise<{
 	lineHandler: (line: string) => void;
 	cleanup: () => Promise<void>;
 }> {
@@ -281,6 +303,65 @@ describe("RPC prompt response semantics", () => {
 			});
 
 			await sleep(150);
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it("reports a post-acceptance recovery failure through the event stream only", async () => {
+		let calls = 0;
+		const streamFn: StreamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (calls++ === 0) {
+					const base = createThinkingOnlyMessage();
+					const message = {
+						...base,
+						usage: { ...base.usage, input: 2_000, totalTokens: 2_000 },
+					};
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+					return;
+				}
+				stream.push({
+					type: "error",
+					reason: "error",
+					error: { ...createAssistantMessage(""), stopReason: "error", errorMessage: "invalid_api_key" },
+				});
+			});
+			return stream;
+		};
+		const { lineHandler, cleanup } = await startRpcMode({
+			withAuth: true,
+			responseDelayMs: 0,
+			model: { ...stepModel()!, contextWindow: 1_000, maxTokens: 100 },
+			settingsOverrides: {
+				compaction: { enabled: true, contextProjection: "off", keepRecentTokens: 1, reserveTokens: 0 },
+			},
+			streamFn,
+		});
+
+		try {
+			lineHandler(JSON.stringify({ id: "b4", type: "prompt", message: "Hello" }));
+
+			await vi.waitFor(() => {
+				const failures = parseOutputLines(rpcIo.outputLines).filter(
+					(record) => record.type === "incomplete_turn_recovery_failed",
+				);
+				expect(failures).toHaveLength(1);
+				expect(failures[0]).toMatchObject({
+					reason: "no_visible_output",
+					overflowKind: "context",
+				});
+				expect(failures[0].errorMessage).toContain(
+					"Cannot recover an incomplete assistant turn because automatic compaction did not complete",
+				);
+				expect(failures[0].errorMessage).toContain("Context overflow recovery failed");
+			});
+
+			const responses = getPromptResponses(rpcIo.outputLines, "b4");
+			expect(responses).toHaveLength(1);
+			expect(responses[0]).toMatchObject({ success: true });
 		} finally {
 			await cleanup();
 		}

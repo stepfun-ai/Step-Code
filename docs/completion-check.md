@@ -108,10 +108,13 @@ review is not sent. Budget exhaustion and final-output exit codes are unchanged.
 After the follow-up budget is exhausted, a valid final answer still returns exit
 code **0** even if Git conditions remain unsatisfied. The canonical task verifier
 owns the score; an ordinary failed task must not become an infrastructure error
-that resamples the attempt. Missing/thinking-only final output returns **2** with
-an explicit incomplete diagnostic. Existing terminal denials and final assistant
-errors keep exit code **1**. A successful external-approval handoff produced by the
-latest prompt keeps exit code **0** even when the last message is its tool result.
+that reruns the attempt. Missing/thinking-only final output returns **2** with
+an explicit incomplete diagnostic. When either completion feature is enabled,
+print mode disables the generic incomplete-turn recovery so the checker's
+bounded follow-up budget remains the only recovery path. Existing terminal
+denials and final assistant errors keep exit code **1**. A successful
+external-approval handoff produced by the latest prompt keeps exit code **0**
+even when the last message is its tool result.
 An earlier handoff does not excuse missing output from a later explicit prompt:
 that prompt must provide final text or a fresh handoff, otherwise the exit code is
 **2**. Automatic follow-ups stay blocked for the rest of the invocation.

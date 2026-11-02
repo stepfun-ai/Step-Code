@@ -179,6 +179,9 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
 		session = nextSession;
+		// completion-check owns the bounded follow-up for missing output. Running the
+		// generic recovery too would add a second model call and consume its budget.
+		session.setIncompleteTurnRecoveryEnabled(completionAttempts === undefined);
 		// The handoff flags describe the previous session's last prompt. A rebound
 		// session has run nothing yet, so keeping them would print a stale proposal
 		// if this run ends without a new assistant message.

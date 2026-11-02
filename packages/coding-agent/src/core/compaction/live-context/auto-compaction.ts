@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { AgentContext, AgentMessage, StreamFn, ThinkingLevel } from "@step-harness/agent-core";
+import {
+	type AgentContext,
+	type AgentMessage,
+	isIncompleteAssistantTurn,
+	type StreamFn,
+	type ThinkingLevel,
+} from "@step-harness/agent-core";
 import type { Context, Model, SimpleStreamOptions, Usage } from "@step-harness/providers";
 import { raceWithAbortSignal } from "../../../utils/abort.ts";
 import { convertToLlm } from "../../messages.ts";
@@ -91,10 +97,10 @@ export class AutoClmController {
 			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 			const message = entry.message;
 			if (message.stopReason !== "stop" && message.stopReason !== "toolUse") continue;
+			if (isIncompleteAssistantTurn(message)) continue;
 			const calls = message.content.filter((part) => part.type === "toolCall");
 			if (calls.length === 0) {
-				if (!message.content.some((part) => part.type === "text" && /<tool_call>|<function=/u.test(part.text)))
-					turns++;
+				turns++;
 			} else {
 				const completed = new Set<string>();
 				for (let next = index + 1; next < branch.length; next++) {

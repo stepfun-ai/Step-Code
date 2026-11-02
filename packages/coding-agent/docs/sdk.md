@@ -112,6 +112,9 @@ interface AgentSession {
   sessionFile: string | undefined;
   sessionId: string;
 
+  // Suppress the generic incomplete-turn recovery when the host owns completion.
+  setIncompleteTurnRecoveryEnabled(enabled: boolean): void;
+
   // Model control
   setModel(model: Model): Promise<void>;
   setThinkingLevel(level: ThinkingLevel): void;
@@ -139,6 +142,8 @@ interface AgentSession {
   dispose(): void;
 }
 ```
+
+`setIncompleteTurnRecoveryEnabled()` defaults to `true`. Print mode sets it to `false` when either completion feature (`--completion-check` or `--completion-review`) owns the bounded follow-up for missing output, so the two paths do not each make a model call. Reapply the setting after a runtime replaces the active session.
 
 Session replacement APIs such as new-session, resume, fork, and import live on `AgentSessionRuntime`, not on `AgentSession`.
 
@@ -353,6 +358,9 @@ session.subscribe((event) => {
     case "summarization_retry_scheduled":
     case "summarization_retry_attempt_start":
     case "summarization_retry_finished":
+      break;
+    case "incomplete_turn_recovery_failed":
+      // A post-acceptance recovery failure; reported as an event, not a second prompt response.
       break;
   }
 });

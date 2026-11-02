@@ -353,6 +353,8 @@ Fields:
 - `display`: `true` = show in TUI with distinct styling, `false` = hidden
 - `details`: Optional extension-specific metadata (not sent to LLM)
 
+Step uses a hidden `step-incomplete-turn-recovery` custom message when a normal assistant response contains neither visible text nor an executable tool call, or reports `toolUse` without a tool call. The incomplete assistant message remains in the transcript, and the recovery message becomes a user-role message for the next model request. A top-level run permits one such recovery, shared with its steering and tool continuations; a later incomplete assistant response in the same run is marked as an error with an `incomplete_turn` diagnostic, including after intervening tool calls. A response that also exceeded the context window is compacted before recovery; if compaction cannot complete, the run fails without rewriting the assistant message that `message_end` already published. If automatic compaction is disabled for that overflow, the assistant message is instead marked as an error immediately with the `incomplete_turn` diagnostic; the run emits no recovery message or `incomplete_turn_recovery_failed` event and settles normally after any already-queued input. The classifier reads only stop reasons and content-block types; it does not parse thinking or text contents.
+
 ### LabelEntry
 
 User-defined bookmark/marker on an entry.

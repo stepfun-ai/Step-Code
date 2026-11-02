@@ -1305,6 +1305,8 @@ Overflow is checked before retryable error, so an oversized request compacts rat
 
 An overflow classification never produces a tool plan. A *genuine* `length` that carries tool calls does produce the full plan, executes nothing, and appends one `isError: true` result per call explaining that truncation may have corrupted the arguments — those results then require another assistant turn.
 
+**Incomplete responses are a product decision.** A response that stops normally while carrying neither visible text nor a structured tool call, or that reports `toolUse` without one, is structurally incomplete. `classifyIncompleteAssistantTurn()` classifies it from `stopReason` and content-block types only; the Agent Loop does not inspect thinking or text, discard the response, or retry it. A product session owns any bounded recovery, such as appending a hidden recovery prompt and continuing once, and must turn a repeated incomplete response into a terminal error rather than loop. If that session rewrites the completed response to `stopReason: "error"` during `message_end`, the loop takes its normal error early-exit path: `shouldStopAfterTurn` does not run for that turn, and the session itself must continue any queued input it still wants to deliver.
+
 ## 3.8 Tools
 
 | From | Trigger | Transaction | To |

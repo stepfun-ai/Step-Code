@@ -398,7 +398,8 @@ function getSessionContextSettings(path: SessionEntry[]): Pick<SessionContext, "
 
 /**
  * Project one selected session entry into LLM/runtime messages.
- * Plain custom entries are display/state entries and do not participate in context.
+ * Message and custom_message entries participate in context; summary/state-only
+ * entries are projected by their own paths or omitted here.
  */
 export function sessionEntryToContextMessages(entry: SessionEntry): AgentMessage[] {
 	if (entry.type === "message") {

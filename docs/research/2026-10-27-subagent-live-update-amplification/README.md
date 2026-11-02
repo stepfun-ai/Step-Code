@@ -182,9 +182,9 @@ the boundary says where the turn and the run ended, not what they contained, and
 a reader reconstructs the transcript from `message_end` exactly as before.
 
 `messageCount` is not a checksum. It is the length of that run's `messages` array,
-and the loop can emit more `message_end` events than it lists (a resampled
-tool-call leak, a throwing `shouldStopAfterTurn`). A reader detects a truncated
-run by a message that never got its `message_end`, not by comparing counts.
+and the loop can emit more `message_end` events than it lists (for example, a
+throwing `shouldStopAfterTurn`). A reader detects a truncated run by a message
+that never got its `message_end`, not by comparing counts.
 
 This is boundary-payload deduplication, **not** an exactly-once record. What still
 repeats, and why it stays:

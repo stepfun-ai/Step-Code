@@ -897,6 +897,7 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 | `compaction_end` | Compaction completes |
 | `auto_retry_start` | Auto-retry begins (after transient error) |
 | `auto_retry_end` | Auto-retry completes (success or final failure) |
+| `incomplete_turn_recovery_failed` | An incomplete turn could not recover because required automatic compaction did not complete; carries the reason and error message. Not emitted when automatic compaction is disabled: that path marks the assistant message as an error, resolves normally, and still lets already-queued input run. |
 | `summarization_retry_scheduled` | Retry scheduled for a transient compaction or branch-summary summarization error |
 | `summarization_retry_attempt_start` | Retried summarization request starts |
 | `summarization_retry_finished` | Summarization retry loop completes |
@@ -920,9 +921,9 @@ What only this event says is that the run ended and whether it will be retried,
 so the record carries `messageCount` instead of the array.
 
 `messageCount` is the length of the run's `messages` array, **not** a checksum: a
-resampled tool-call leak or a throwing `shouldStopAfterTurn` can make the loop
-emit more `message_end` events than it lists. Detect a truncated run by a message
-that never got its `message_end`, not by comparing counts.
+throwing `shouldStopAfterTurn` can make the loop emit more `message_end` events
+than it lists. Detect a truncated run by a message that never got its
+`message_end`, not by comparing counts.
 
 ```json
 {

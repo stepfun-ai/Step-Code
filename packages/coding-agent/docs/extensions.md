@@ -618,7 +618,7 @@ Fired for message lifecycle updates.
 
 - `message_start` and `message_end` fire for user, assistant, and toolResult messages.
 - `message_update` fires for assistant streaming updates.
-- `message_end` handlers can return `{ message }` to replace the finalized message. The replacement must keep the same `role`.
+- `message_end` handlers can return `{ message }` to replace the finalized message. The replacement must keep the same `role`. The replacement runs before the session finalizes terminal turn state. Extension `message_end` handlers observe the provider's stop reason; session listeners (including their own `message_end` callbacks), `turn_end`, and persistence observe any later classification such as an incomplete turn marked as an error.
 
 ```typescript
 pi.on("message_start", async (event, ctx) => {

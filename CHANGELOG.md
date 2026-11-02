@@ -4,6 +4,7 @@
 
 ### Changed
 
+- `AgentLoopConfig.toolCallLeakRetries` is removed. The low-level loop no longer guesses a tool intent from markup in text; hosts classify completed assistant turns by stop reason and content-block types instead.
 - Plan mode is now entered only by the user, with `/plan` or `--plan`; the `enter_plan_mode` tool is removed. The default system prompt no longer carries a `# Planning` section. Entering plan mode appends one hidden `<collaboration_mode>` block with the plan method and plan path, and leaving it appends a short Default block, so the system prompt and tool block stay byte-identical across a plan cycle. Sessions recorded with an agent-initiated plan still restore. See [plan approval](docs/plan-approval.md#mode-announcements).
 - Subagents are no longer an automatic escalation. The `subagent` tool description now carries an explicit-request gate and a delegation method (critical path first, self-contained briefs, disjoint write sets, no redoing delegated work), replacing the system prompt's `# Delegation` section; `# Coordination primitives` only routes between authorized primitives. Session-standing `/ultracode on` also authorizes proactive delegation. See [orchestration lifecycle](docs/orchestration-lifecycle.md#subagent-delegation-authorization).
 - `--mode json` and `--mode rpc` now write only session **facts**: `message_update` and `tool_execution_update` are live frames — each superseded by `message_end` / `tool_execution_end` — and no longer appear in that stream. A harness that redirects one of them to a file therefore gets a record proportional to the work done, not to the tokens streamed; a subagent call that wrote 4,992 MiB of repeated child transcripts now writes a few KiB. Pass the new `--include-live-events` flag to get the frames back: a live viewer wants them, a log does not. See [JSON output](packages/coding-agent/docs/json.md) and [RPC](packages/coding-agent/docs/rpc.md).
@@ -11,6 +12,8 @@
 
 ### Fixed
 
+- Recover a normal assistant response that contains neither visible text nor an executable tool call: keep the original message in history, append one hidden user-role recovery prompt, and continue once. A second incomplete response in the same run is recorded as an error with an `incomplete_turn` diagnostic. Steering, tool continuations, and aborts share the same single-recovery budget, and automatic compaction runs first when the response also exceeded the context window.
+- Hosts can observe a recovery that fails after the prompt was already accepted through the new `incomplete_turn_recovery_failed` session and wire event. It carries the reason, error text, and overflow kind; post-run failures are never reported as a second response to the same prompt.
 - Summary requests now use the provider's model output limit and remaining-context sizing instead of fixed compaction/branch caps or reserve-derived budgets. Existing reserve arguments remain accepted for call compatibility; automatic trigger and branch source-selection settings are unchanged.
 - Compaction and branch-summary inputs omit provider thinking blocks while retaining visible replies, tool calls, diagnostic output, and existing skill-retention rules. Original session history is unchanged. These changes adapt Pi commits `15e7bdc` and `6fcb486` (upstream PR #11036).
 

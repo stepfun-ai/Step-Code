@@ -76,10 +76,18 @@ over messages reports the boundary instead of repeating them.
   `{ messageRole, toolResultCount }` and `{ willRetry, messageCount }`: what only
   the boundary says is where it fell, not what it contained.
 
-`messageCount` is the length of that run's `messages` array, not a checksum: the
-loop can emit more `message_end` events than it lists (a resampled tool-call
-leak, a throwing `shouldStopAfterTurn`), so do not use it to detect a truncated
-run. A message that never got its `message_end` is the reliable signal.
+`messageCount` is the length of that run's `messages` array, not a checksum: a
+throwing `shouldStopAfterTurn` can make the loop emit more `message_end` events
+than it lists, so do not use it to detect a truncated run. A message that never
+got its `message_end` is the reliable signal.
+
+An incomplete assistant turn that cannot recover because required automatic
+compaction did not complete emits `incomplete_turn_recovery_failed` before the
+run fails. The existing `message_end` remains authoritative for the assistant
+message; this event reports the run-level recovery failure. When automatic
+compaction is disabled for an overflowed incomplete turn, the assistant message
+is marked as an error immediately instead; no `incomplete_turn_recovery_failed`
+event is emitted, and the run settles normally after any already-queued input.
 
 What the record still repeats, deliberately:
 
