@@ -24,5 +24,4 @@ Inherits the [root rules](../AGENTS.md). This directory contains public built-in
 
 - From `packages/coding-agent`, run `pnpm exec vitest --run test/step-plugins.test.ts`; MCP integration changes also select corresponding mock regressions.
 - Check JSON syntax, supported fields, and consistency between both forms of built-in declarations. Tests must not connect to real MCP services or automatically download / run installers.
-- Run root `pnpm run check` after product-code changes. Stage new files before running `pnpm run check:public-boundary`.
 - Update [MCP catalogs](../packages/coding-agent/docs/mcp-catalog.md) and [Step integration](../packages/coding-agent/docs/step-integration.md).

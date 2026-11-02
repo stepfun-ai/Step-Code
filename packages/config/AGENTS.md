@@ -20,6 +20,6 @@ Inherits the [root rules](../../AGENTS.md). This package is `@step-harness/confi
 
 ## Validation and documentation
 
-- Run `pnpm exec vitest --run test/migrations.test.ts` here; run root `pnpm run check` after code changes.
+- Run `pnpm exec vitest --run test/migrations.test.ts` here.
 - Migration changes cover first startup, repeated execution, existing targets, malformed inputs, and explicit non-default directories. Tests must not use real user configuration.
 - Update the [package overview](README.md); update [configuration guidance](../../docs/step-configuration.md) when Step startup or storage behavior changes.

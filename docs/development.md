@@ -2,12 +2,10 @@
 
 This guide adds coding and collaboration practices to the [root agent instructions](../AGENTS.md). Module responsibilities remain in their local `AGENTS.md` files; [CONTRIBUTING.md](../CONTRIBUTING.md) owns submission and review requirements, and [testing.md](testing.md) explains validation selection.
 
-## Environment and source of truth
+## Source of truth
 
-- Use Node.js `>=22.19.0` and the pnpm version declared in the root [manifest](../package.json). Install locked dependencies with `pnpm install --frozen-lockfile --ignore-scripts`.
 - Verify behavior against current source, installed dependency types, manifests, and tests. Research and historical design notes do not establish current behavior.
-- Read the root and affected local instructions before editing. Check working-tree state and keep the change within the agreed scope.
-- Root `pnpm run check` applies Biome fixes to its configured files, then runs type and repository checks. Inspect the resulting diff; a successful command does not imply tests ran.
+- Check working-tree state and keep the change within the agreed scope. Inspect the formatter diff left by root `pnpm run check`.
 
 ## Coding conventions
 

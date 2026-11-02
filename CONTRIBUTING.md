@@ -1,13 +1,13 @@
 # Contributing to StepCode
 
-This guide exists to save both sides time.
-
 ## Contribution access and required reviews
 
 StepCode accepts pull requests from invited collaborators. Keep pull request
 creation set to **Collaborators only**. Invited external developers receive
 **Write** access to this repository and may work in a fork or a development
-branch, then open a pull request targeting `main`.
+branch, then open a pull request targeting `main`. Claiming an issue does not
+grant access; without an invitation, agree on a submission method with a
+maintainer in the issue.
 
 The four maintainers listed in [.github/CODEOWNERS](.github/CODEOWNERS) form the
 fixed internal review pool for all repository paths. Each pull request requires
@@ -28,11 +28,7 @@ settings.
 
 ## Philosophy
 
-First things first: **StepCode's core is minimal**.
-
-If your feature does not belong in the core, it should be an extension. PRs that bloat the core will likely be rejected.
-
-StepCode's core exists to be minimal and to be extensible so that it can be influenced and manipulated by extensions.  Even hook points for extensions however should be well considered and discussed to avoid adding unmaintainable bloat and complex interactions.
+**StepCode's core is minimal.** Features that do not belong in the core should be extensions; PRs that bloat the core will likely be rejected. Even new extension hook points need discussion first, to avoid unmaintainable bloat and complex interactions.
 
 ## The One Rule
 
@@ -42,37 +38,38 @@ Using AI to write code is fine. Submitting AI-generated slop without understandi
 
 ## Commit Attribution
 
-AI tools may assist with a change, but they must not be recorded as commit co-authors. Keep the author and committer as the human contributor's verified GitHub identity, and do not add `Co-authored-by` or `Co-Authored-By` trailers for Claude, Claude Code, Codex, ChatGPT, OpenAI, Anthropic, or another AI client. The `Commit attribution` check rejects these trailers and identities on pull requests.
+Follow the [commit attribution policy](AGENTS.md#commit-attribution): AI tools may assist, but the author and committer remain the human contributor's verified GitHub identity, with no AI co-author trailers. The `Commit attribution` check rejects these trailers and identities on pull requests.
 
 If you use an agent, run it from the repository root directory so it picks up `AGENTS.md` automatically. Your agent must follow the rules and guidelines in that file.
 
-## Issue Review
+## Before You Start
 
-Issues submitted Friday through Sunday are not guaranteed to be reviewed. If something is urgent, say so at the top of the issue and explain the impact.
+- Read the issue and its discussion, then comment with your proposed approach and ask a maintainer to confirm the work is available and the direction is right. An open issue is not necessarily unclaimed.
+- For problems reported outside GitHub, confirm the background, owner, and expected outcome with a maintainer, and whether an issue should be created first, to avoid duplicate implementations.
+- Existing pull requests can help you reproduce or evaluate a problem, but they are not automatic merge candidates. Do not reuse another contributor's code without confirming that is appropriate.
+- Discuss unclear requirements, broad changes, and public interface changes before implementation. Report security vulnerabilities according to [SECURITY.md](SECURITY.md).
+- Start a working branch from the latest `main`. Keep each PR focused on one problem, without unrelated refactoring.
 
-## Quality Bar For Issues
+## Issues
 
-If you open an issue, you must use one of the two GitHub issue templates.
-
-If you open an issue, keep it short, concrete, and worth reading.
+Use one of the two GitHub issue templates, and keep the issue short, concrete, and worth reading:
 
 - Keep it concise. If it does not fit on one screen, it is too long.
-- Write in your own voice (do not use an LLM to generate text, if you must, follow up with a clearly AI labeled comment).
-- State the bug or request clearly.
-- Explain why it matters.
+- Write in your own voice (do not use an LLM to generate text; if you must, follow up with a clearly AI-labeled comment).
+- State the bug or request clearly, and explain why it matters.
 - If you want to implement the change yourself, say so.
+
+Issues submitted Friday through Sunday are not guaranteed to be reviewed (see the [FAQ](#why-are-weekend-issues-lower-priority)). If something is urgent, say so at the top of the issue and explain the impact.
 
 ## Blocking
 
-If you ignore this document twice, or if you spam the tracker with agent-generated issues, your GitHub account will be permanently blocked.
-
-If you send a large volume of issues through automation, your GitHub account will be permanently blocked. No taksies backsies.
+If you ignore this document twice, spam the tracker with agent-generated issues, or send a large volume of issues through automation, your GitHub account will be permanently blocked.
 
 ## Commit and PR Conventions
 
-Write commit subjects and bodies, PR/MR titles and descriptions, public issues, and review comments in English. Commit and PR/MR titles follow Conventional Commits: `type(scope): summary`, with an optional scope. Use a concrete summary such as `fix(session): preserve queued input after cancellation`.
+Write commit subjects and bodies, PR titles and descriptions, public issues, and review comments in English. Commit and PR titles follow Conventional Commits: `type(scope): summary`, with an optional scope. Use a concrete summary such as `fix(session): preserve queued input after cancellation`.
 
-Keep each commit focused on one coherent responsibility. Separate independent changes so reviewers can inspect them; do not add empty or artificial commits to increase the count. The author and committer remain the human contributor, as required by the attribution policy above.
+Keep each commit focused on one coherent responsibility. Separate independent changes so reviewers can inspect them; do not add empty or artificial commits to increase the count.
 
 Follow the [development and collaboration guide](docs/development.md) for coding practices, concurrent ownership, error handling, and Git workflow. Use the [testing policy](docs/testing.md) to select behavior-level evidence while developing.
 
@@ -89,6 +86,8 @@ Use the [PR template](.github/pull_request_template.md) and replace its guidance
 - Explain user-visible snapshot changes and verify actual files, persisted state, or protocol output rather than only an agent's success message.
 - Confirm the diff contains only intended files, public examples use neutral data, and temporary handoff notes, private infrastructure, credentials, and AI attribution are absent.
 
+Respond to each review concern and explain how you addressed it.
+
 ## Before Submitting a PR
 
 Before submitting a PR:
@@ -100,7 +99,7 @@ pnpm run check
 
 Both must pass.
 
-These are repository-wide submission checks. During development, run focused checks for the changed behavior; do not repeat a passing check solely because a commit or push follows, unless files or relevant inputs changed. Inspect any modifications made by the formatter before staging or publishing.
+These are repository-wide submission checks. During development, run focused checks for the changed behavior; do not repeat a passing check solely because a commit or push follows, unless files or relevant inputs changed. Inspect any modifications made by the formatter before staging or publishing. If environment constraints prevent validation, state exactly what failed or was not run in the PR.
 
 If you are adding a new provider to `packages/providers`, see [packages/providers/AGENTS.md](packages/providers/AGENTS.md#validation-and-documentation) for required tests.
 
@@ -108,7 +107,7 @@ If you are adding a new provider to `packages/providers`, see [packages/provider
 
 ### Why are weekend issues lower priority?
 
-We triage the tracker during working hours. That means more issues can accumulate over the weekend. Anything submitted Friday through Sunday may be missed or given lower priority in the Monday review queue. If a problem is urgent, flag it in the issue and include the short version, a repro, and the relevant logs.
+We triage the tracker during working hours, so issues accumulate over the weekend. Anything submitted Friday through Sunday may be missed or given lower priority in the Monday review queue. If a problem is urgent, flag it in the issue and include the short version, a repro, and the relevant logs.
 
 ### Why do some issues get no reply?
 

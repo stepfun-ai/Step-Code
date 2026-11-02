@@ -136,7 +136,7 @@ Dependencies flow from product entry points toward foundational capabilities. Fo
 - If the working directory contains another task's changes, use a separate worktree or touch only your files. Do not stash, clean, or revert other contributors' changes.
 - Do not use `git reset --hard`, `git checkout .`, `git clean -fd`, skip hooks, or raw `--force`. Rewrite a published task branch only when explicitly requested; record its live remote OID, use an exact `--force-with-lease`, and abort on remote movement. If a Git operation conflicts with unrelated files, stop that operation and explain the conflict.
 - Write commit subjects and bodies, PR/MR titles and descriptions, public issues, and review comments in English. Commit and PR/MR titles follow Conventional Commits; split commits by coherent responsibility, not to inflate the history.
-- Commits, PR/MR descriptions, issues, and comments must not include AI-client attribution, bot co-authors, or generated-by footers. Keep author / committer as the current human contributor's Git identity.
+- PR descriptions, issues, and comments follow the same [commit attribution](#commit-attribution) policy: no AI-client attribution or generated-by footers.
 - Report the changes, validation evidence, and anything still unverified. Keep delivery notes concise and specific.
 
 ## 7. Public source and support directories
