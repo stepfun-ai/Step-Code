@@ -15,7 +15,13 @@ import { Icon, IconButton, type IconName, Menu, MenuItem, Popover, ResizeHandle,
 import { BrowserPanel } from "../browser";
 import { ChildAgentView } from "../conversation";
 import { PreviewPanel } from "../files";
-import { applyPreviewWidth, defaultPreviewWidth, PREVIEW_DEFAULT, restorePreviewWidth } from "../files/actions";
+import {
+	applyPreviewWidth,
+	choosePreviewWidth,
+	defaultPreviewWidth,
+	PREVIEW_DEFAULT,
+	restorePreviewWidth,
+} from "../files/actions";
 import { useActiveTab } from "../files/PreviewBody";
 import { toggleTerminalDock } from "../terminal/actions";
 import { ContextPanel } from "./ContextPanel";
@@ -176,9 +182,9 @@ export function RightPanel() {
 				direction={-1}
 				getSize={() => ref.current?.getBoundingClientRect().width ?? PREVIEW_DEFAULT}
 				onResize={(width) => applyPreviewWidth(width, false)}
-				onCommit={(width) => applyPreviewWidth(width)}
+				onCommit={(width) => choosePreviewWidth(width)}
 				// Reset means the friendly default, the same even split a first open uses.
-				onReset={() => applyPreviewWidth(defaultPreviewWidth())}
+				onReset={() => choosePreviewWidth(defaultPreviewWidth())}
 				onDraggingChange={(resizing) => setUi({ resizing })}
 				hidden={summary}
 			/>
