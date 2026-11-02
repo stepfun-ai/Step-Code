@@ -1,11 +1,14 @@
 /**
  * The plan review handoff as a session fact.
  *
- * A handoff leaves plan mode and ends its turn, so the proposal is no longer in
- * an assistant message: it lives in the `exit_plan_mode` tool result. Hosts that
- * report a final answer, print text mode, or decide whether to continue on their
- * own all need the same reading of that result, and a second spelling would
- * drift from the tool that writes it.
+ * A handoff ends its turn, so the proposal is no longer in an assistant message:
+ * it lives in the `exit_plan_mode` tool result. Hosts that report a final answer
+ * or print text mode need the same reading of that result, and a second spelling
+ * would drift from the tool that writes it.
+ *
+ * Whether the user has answered is a separate session fact (the `step-plan`
+ * entry's `pendingProposalHash`), because this scan cannot tell an answer from a
+ * question and cannot see a decision that wrote no user message.
  */
 
 import type { AgentMessage } from "@step-harness/agent-core";
@@ -69,25 +72,11 @@ export function findPendingExternalPlanApproval(messages: readonly AgentMessage[
 }
 
 /**
- * {@link findPendingExternalPlanApproval} for a persisted session branch.
+ * There is deliberately no branch variant of the pending check.
  *
- * Walks entries backwards and examines message entries in place, stopping at the
- * first user message or at a summary. A compaction or branch summary is a
- * boundary: the entries it replaced are no longer in the model's context, so a
- * handoff behind it is not something the user can answer any more.
+ * Deciding whether work may continue past a handoff is the `step-plan`
+ * extension's `pendingProposalHash`, which a decision clears explicitly. A walk
+ * over the branch would answer "is a handoff near the tail" and be taken for "is
+ * the user's decision still outstanding" — the same two questions this file's
+ * header warns against conflating.
  */
-export function hasPendingExternalPlanApproval(manager: {
-	getBranch(): readonly { type: string; message?: AgentMessage }[];
-}): boolean {
-	const branch = manager.getBranch();
-	for (let index = branch.length - 1; index >= 0; index--) {
-		const entry = branch[index]!;
-		if (entry.type === "compaction" || entry.type === "branch_summary") return false;
-		if (entry.type !== "message" || !entry.message) continue;
-		const message = entry.message;
-		if (message.role === "user") return false;
-		if (message.role !== "toolResult" || message.toolName !== "exit_plan_mode" || message.isError) continue;
-		if (readExternalPlanHandoff(message)) return true;
-	}
-	return false;
-}
