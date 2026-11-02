@@ -114,7 +114,11 @@ describe("Step command runtime recovery", () => {
 				expect(watchdogFired).toBe(false);
 				expect(performance.now() - startedAt).toBeLessThan(3_000);
 				expect(current.faux.state.callCount).toBe(2);
-				expect(observed).toMatchObject({ isError: true, toolName: "run_command" });
+				expect(observed).toMatchObject({
+					isError: false,
+					toolName: "run_command",
+					details: { execution: { timedOut: true, status: "timed_out" } },
+				});
 				expect(getMessageText(observed)).toContain("owned-child-ready");
 				expect(getMessageText(observed)).toContain("Command timed out after 1 seconds");
 				expect(getMessageText(observed)).not.toContain("terminated by signal");
@@ -182,7 +186,7 @@ describe("Step command runtime recovery", () => {
 
 	describe.skipIf(process.platform === "win32")("signal termination", () => {
 		it.each(["SIGTERM", "SIGKILL"])(
-			"reports %s and captured output as an error in the next faux request",
+			"reports %s and captured output as an execution result in the next faux request",
 			async (signal) => {
 				const current = await setup();
 				const command = `exec ${shellQuote(process.execPath)} ${shellQuote(fixturePath)} signal ${shellQuote(directory)} ${signal}`;
@@ -201,7 +205,7 @@ describe("Step command runtime recovery", () => {
 				]);
 				await current.session.prompt("Run the local signal fixture.");
 				expect(current.faux.state.callCount).toBe(2);
-				expect(observed).toMatchObject({ isError: true });
+				expect(observed).toMatchObject({ isError: false, details: { execution: { signal, status: "signaled" } } });
 				expect(getMessageText(observed)).toContain("test-runner-started");
 				expect(getMessageText(observed)).toContain(`Command terminated by signal ${signal}`);
 				expect(current.eventsOfType("tool_execution_end")[0]?.result.terminate).not.toBe(true);
@@ -223,8 +227,8 @@ describe("Step command runtime recovery", () => {
 					const split = bytes.indexOf(Buffer.from("\u00e9")) + 1;
 					onData(bytes.subarray(0, split));
 					onData(bytes.subarray(split));
-					if (outcome === "timeout") throw new Error("timeout:1");
-					if (outcome === "abort") throw new Error("aborted");
+					if (outcome === "timeout") return { exitCode: null, signal: "SIGTERM", timedOut: true };
+					if (outcome === "abort") return { exitCode: null, signal: "SIGTERM", aborted: true };
 					return { exitCode: outcome === "exit" ? 7 : 0 };
 				},
 			};
@@ -234,7 +238,11 @@ describe("Step command runtime recovery", () => {
 			let fullOutputPath: string | undefined;
 			current.setResponses([
 				fauxAssistantMessage(
-					fauxToolCall("run_command", { command: "fake-test", max_output_chars: 1_000 }, { id: "capped-command" }),
+					fauxToolCall(
+						"run_command",
+						{ command: "fake-test", max_output_chars: 1_000, timeout_ms: 1_000 },
+						{ id: "capped-command" },
+					),
 					{ stopReason: "toolUse" },
 				),
 				(context) => {
@@ -262,7 +270,7 @@ describe("Step command runtime recovery", () => {
 			]);
 			await current.session.prompt("Run the test and inspect the complete log when truncated.");
 			expect(fullOutputPath).toBeDefined();
-			expect(observed?.isError).toBe(outcome !== "success");
+			expect(observed?.isError).toBe(outcome === "abort");
 			expect(getMessageText(observed).length).toBeLessThanOrEqual(1_000);
 			expect(getMessageText(observed)).not.toContain(marker);
 			expect(getMessageText(observed)).toContain("EOF_DIAGNOSTIC");

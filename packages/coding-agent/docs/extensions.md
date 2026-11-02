@@ -2049,6 +2049,8 @@ pi.registerTool({
 
 **Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
 
+`isError` means the invocation failed. A command that ran and reported a nonzero exit, a deadline, or a signal is a *result*: read `details.execution` (or `details.thenRun.execution`) to decide how to present it. Throw `ToolExecutionError` from `@step-harness/agent-core` to fail the invocation while keeping the observed content and details.
+
 **Early termination:** Return `terminate: true` from `execute()` to hint that the automatic follow-up LLM call should be skipped after the current tool batch. This only takes effect when every finalized tool result in that batch is terminating. See [examples/extensions/structured-output.ts](../examples/extensions/structured-output.ts) for a minimal example where the agent ends on a final structured-output tool call.
 
 ```typescript
@@ -2175,6 +2177,18 @@ pi.registerTool({
 **Operations interfaces:** `ReadOperations`, `WriteOperations`, `EditOperations`, `BashOperations`, `PowerShellOperations`, `LsOperations`, `GrepOperations`, `FindOperations`
 
 For `user_bash`, extensions can reuse step's local shell backend via `createLocalBashOperations()` instead of reimplementing local process spawning, shell resolution, and process-tree termination.
+
+`BashOperations.exec` returns command facts: `exitCode`, and optional `signal`,
+`timedOut`, `aborted`, and `timeoutSeconds`. Throw only for an invocation fault,
+such as a failed spawn or executor connection. Adapters that previously threw
+strings such as `timeout:5` or `aborted` after execution must return these facts
+instead; textual status exceptions are no longer interpreted as command state.
+Report `aborted` when the command did not run to completion, whether the
+executor stopped it or the caller cancelled it; caller cancellation also reaches
+the adapter through its `signal` argument. The existing
+`{ exitCode }` result remains supported. Command tools retain the facts in
+`details.execution`; `user_bash` records them as the optional
+`BashExecutionMessage.execution`. See [command outcomes](session-format.md#command-tool-outcomes).
 
 The `bash` and `powershell` tools also support a spawn hook to adjust the command, cwd, or env before execution:
 

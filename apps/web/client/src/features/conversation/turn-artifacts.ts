@@ -37,7 +37,11 @@ export function turnArtifacts(
 	const keyOf = (path: string) => (windows ? path.toLowerCase() : path);
 	for (let index = Math.max(0, start); index <= footer.lastIndex; index++) {
 		const item = items[index];
-		if (item.kind !== "tool" || item.state !== "completed" || item.imported) continue;
+		if (item.kind !== "tool" || item.imported) continue;
+		if (item.state === "pending") continue;
+		// A call whose command check failed still wrote its file: the row reads
+		// "failed", but the change it recorded is real and must stay listed.
+		if (item.state !== "completed" && !item.change) continue;
 		if (!["edit", "write", "edit_file", "write_file", "apply_patch"].includes(item.toolName)) continue;
 		const raw = item.change?.path ?? item.args?.path;
 		const path = raw ? workspaceFilePath(cwd, raw) : undefined;

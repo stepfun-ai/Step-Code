@@ -3,6 +3,7 @@ import { registerFauxProvider, streamSimple } from "@step-harness/providers/comp
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Agent } from "../src/agent.ts";
+import { ToolExecutionError } from "../src/tool-error.ts";
 import type { AgentEvent, AgentTool, AgentToolResult, ToolExecutionMode } from "../src/types.ts";
 
 const providers: ReturnType<typeof registerFauxProvider>[] = [];
@@ -116,6 +117,84 @@ describe.each<ToolExecutionMode>(["sequential", "parallel"])("final tool result 
 			details: { kept: true },
 			content: [{ type: "text", text: expect.stringContaining("cannot retain output") }],
 		});
+	});
+
+	it("retains typed execution failure output and details through events and messages", async () => {
+		const failed: AgentTool = {
+			...tool("observed-failure"),
+			execute: async () => {
+				throw new ToolExecutionError("executor unavailable", {
+					content: [{ type: "text", text: "observed output" }],
+					details: { fullOutputPath: "/fixture/output.log", execution: { exitCode: 7 } },
+				});
+			},
+		};
+		const { provider, agent, events } = setup(mode, [failed]);
+		provider.setResponses([
+			fauxAssistantMessage(fauxToolCall("observed-failure", { count: 1 }), { stopReason: "toolUse" }),
+			fauxAssistantMessage("inspect the observed state"),
+		]);
+		await agent.prompt("run");
+		expect(agent.state.messages.find((message) => message.role === "toolResult")).toMatchObject({
+			isError: true,
+			content: [
+				{ type: "text", text: "executor unavailable" },
+				{ type: "text", text: "observed output" },
+			],
+			details: { fullOutputPath: "/fixture/output.log", execution: { exitCode: 7 } },
+		});
+		expect(events.find((event) => event.type === "tool_execution_end")).toMatchObject({
+			isError: true,
+			result: { isError: true, details: { execution: { exitCode: 7 } } },
+		});
+	});
+
+	it("does not discard completed observations when an after-tool hook fails", async () => {
+		const done: AgentTool = {
+			...tool("applied"),
+			execute: vi.fn(async () => ({
+				content: [{ type: "text" as const, text: "mutation applied" }],
+				details: { changed: true },
+				terminate: true,
+			})),
+		};
+		const { provider, agent, events } = setup(mode, [done]);
+		agent.afterToolCall = async () => {
+			throw new Error("result hook unavailable");
+		};
+		provider.setResponses([fauxAssistantMessage(fauxToolCall("applied", { count: 1 }), { stopReason: "toolUse" })]);
+		await agent.prompt("run");
+		expect(done.execute).toHaveBeenCalledTimes(1);
+		expect(agent.state.messages.at(-1)).toMatchObject({
+			isError: true,
+			details: { changed: true },
+			content: [
+				{ type: "text", text: expect.stringContaining("check its effects") },
+				{ type: "text", text: "mutation applied" },
+			],
+		});
+		expect(events.find((event) => event.type === "tool_execution_end")).toMatchObject({
+			result: { terminate: true, isError: true },
+		});
+	});
+
+	it.each([false, true])("publishes one consistent isError=%s after hook replacement", async (isError) => {
+		const command: AgentTool = {
+			...tool("command"),
+			execute: async () => ({ isError: !isError, content: [{ type: "text", text: "result" }], details: {} }),
+		};
+		const { provider, agent, events } = setup(mode, [command]);
+		agent.afterToolCall = async () => ({ isError });
+		provider.setResponses([
+			fauxAssistantMessage(fauxToolCall("command", { count: 1 }), { stopReason: "toolUse" }),
+			fauxAssistantMessage("done"),
+		]);
+		await agent.prompt("run");
+		expect(events.find((event) => event.type === "tool_execution_end")).toMatchObject({
+			isError,
+			result: { isError },
+		});
+		expect(agent.state.messages.find((message) => message.role === "toolResult")).toMatchObject({ isError });
 	});
 });
 

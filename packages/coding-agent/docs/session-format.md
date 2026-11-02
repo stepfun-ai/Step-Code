@@ -51,6 +51,8 @@ Source on GitHub ([step-harness](https://github.com/stepfun-ai/step-harness)):
 - [`packages/providers/src/types.ts`](https://github.com/stepfun-ai/step-harness/blob/main/packages/providers/src/types.ts) - Base message types (UserMessage, AssistantMessage, ToolResultMessage)
 - [`packages/agent/src/types.ts`](https://github.com/stepfun-ai/step-harness/blob/main/packages/agent/src/types.ts) - AgentMessage union type
 
+`BashExecutionMessage` now lives in [`packages/agent-core/src/harness/messages.ts`](https://github.com/stepfun-ai/step-harness/blob/main/packages/agent-core/src/harness/messages.ts); the coding-agent module re-exports it.
+
 For TypeScript definitions in your project, inspect `node_modules/@step-harness/coding-agent/dist/` and `node_modules/@step-harness/providers/dist/`.
 
 ## Message Types
@@ -136,6 +138,65 @@ interface Usage {
 
 The exported `StopReason` type also includes `"pending"`, but that value is reserved for partial messages in streaming events. Terminal `done`/`error` messages replace it with a completion reason before step persists the assistant message, so `"pending"` should never appear in session JSONL.
 
+### Command tool outcomes
+
+For `run_command`, `bash`, and `powershell`, `isError` describes whether the tool
+invocation failed, not whether the command met the user's objective. A nonzero
+exit code, an execution deadline, or termination by a signal returns an ordinary
+tool result with `isError: false`, and `details.execution` carries the
+observations:
+
+```typescript
+interface CommandExecutionOutcome {
+  status: "exited" | "timed_out" | "signaled" | "canceled" | "unknown";
+  exitCode: number | null;
+  signal: string | null;
+  timedOut: boolean;
+  aborted: boolean;
+  timeoutSeconds?: number;
+}
+```
+
+Model-visible text states the outcome only when it is worth stating. A clean
+`exited` result with exit code 0 adds no status line; a nonzero exit, deadline,
+signal, cancellation, or unknown exit appends one sentence. Consumers must read
+`details.execution` rather than parse that sentence.
+
+Timeout and cancellation facts remain independent of the exit code: a command
+that exits with zero after a deadline still has `timedOut: true`. Missing exit
+information is `unknown`, not a fabricated zero. Caller cancellation continues
+to stop the agent and retains available execution facts in its error result.
+Unknown tools, invalid arguments, denied calls, startup failures, and output
+processing faults remain tool errors. An error after execution does not imply
+that effects were rolled back; verify state before repeating a mutation.
+
+An embedded `then_run` retains the same facts under
+`details.thenRun.execution`, alongside its existing summary fields. A nonzero
+exit or deadline does not undo the edit or write. A check that could not be
+invoked is recorded as `details.thenRun.invocationError`; the enclosing result
+stays successful because the file mutation already applied, and the check's
+diagnostic remains in the result text.
+
+Producers also declare their display framing in `details.outputFooter`
+(`{ notice, status }`): `notice` is the truncation or full-output reference and
+`status` is the trailing outcome sentence. It is presentation metadata, not a
+source of execution facts; `details.execution` is authoritative.
+
+Provider dialects differ in what they can express. `openai-responses` and
+`openai-completions` send only the result text, so this classification does not
+change the model request at all. `anthropic-messages` sends `is_error`, which now
+reports only an invocation failure; the command's outcome still reaches the model
+through the same trailing sentence.
+
+Existing records without `details.execution` remain readable and are not
+reclassified by parsing their output. The JSONL format version is unchanged.
+
+User-initiated bash executions keep the same optional facts in
+`BashExecutionMessage.execution`. They survive session recording and are shown
+in the next model request, including deadlines whose observed exit code is zero.
+A user-initiated command has no deadline of its own, so `timeoutSeconds` is
+present only when an executing adapter reported one.
+
 Session totals and the cost breakdown use the shared [`usage-totals.ts`](../src/core/usage-totals.ts) ledger. It includes assistant, tool, compaction, branch-summary and incremental `step-auto-clm-usage` records; cumulative maintenance summaries are excluded. Token increments must contain nonnegative safe integers and must not overflow the accumulated total. A missing/invalid cost does not hide valid tokens. `SessionStats.tokens.input` excludes caches, which are reported separately; the [Account summary](account-usage.md) combines them into complete input.
 
 ### Extended Message Types (from the coding agent)
@@ -149,6 +210,7 @@ interface BashExecutionMessage {
   cancelled: boolean;
   truncated: boolean;
   fullOutputPath?: string;
+  execution?: CommandExecutionOutcome;
   excludeFromContext?: boolean;  // true for !! prefix commands
   timestamp: number;
 }

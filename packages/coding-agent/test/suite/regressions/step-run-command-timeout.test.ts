@@ -53,7 +53,7 @@ describe("Step run_command timeout recovery through the agent loop", () => {
 	});
 
 	it.skipIf(process.platform === "win32")(
-		"returns a 1s foreground timeout as a failed tool result and completes the next command",
+		"returns a 1s foreground deadline as an execution result and completes the next command",
 		async () => {
 			harness = await createHarness({
 				tools: [],
@@ -89,7 +89,11 @@ describe("Step run_command timeout recovery through the agent loop", () => {
 					const failed = context.messages.find(
 						(message) => message.role === "toolResult" && message.toolCallId === "owned-timeout",
 					);
-					expect(failed).toMatchObject({ toolName: "run_command", isError: true });
+					expect(failed).toMatchObject({
+						toolName: "run_command",
+						isError: false,
+						details: { execution: { status: "timed_out", timedOut: true, aborted: false } },
+					});
 					expect(getMessageText(failed)).toContain("owned-child-ready");
 					expect(getMessageText(failed)).toContain("Command timed out after 1 seconds");
 					return fauxAssistantMessage(
@@ -126,7 +130,7 @@ describe("Step run_command timeout recovery through the agent loop", () => {
 				expect(getAssistantTexts(harness)).toContain("continued after the timed-out command");
 				const ends = harness.eventsOfType("tool_execution_end");
 				expect(ends.map((event) => [event.toolCallId, event.isError])).toEqual([
-					["owned-timeout", true],
+					["owned-timeout", false],
 					["after-timeout", false],
 				]);
 				expect(ends[0]?.result.terminate).not.toBe(true);

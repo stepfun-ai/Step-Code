@@ -7,6 +7,7 @@ import { canonicalizePath, normalizePath, resolvePath } from "../../utils/paths.
 import type { ToolDefinition } from "../extensions/types.ts";
 import type { SessionEntry } from "../session-manager.ts";
 import { SessionManager } from "../session-manager.ts";
+import { readCommandExecutionOutcome, readToolCommandNotice } from "../tools/command-outcome.ts";
 
 /**
  * Interface for rendering custom tools to HTML.
@@ -211,6 +212,42 @@ const TEMPLATE_RENDERED_TOOLS = new Set(["bash", "read", "write", "edit", "ls"])
 /**
  * Pre-render custom tools to HTML using their TUI renderers.
  */
+/**
+ * Drop command facts the template cannot describe.
+ *
+ * The template cannot import the agent-core validator, so an invalid persisted
+ * observation must be removed here; otherwise a hand-edited record could render
+ * a claim such as "Command exited with code null".
+ */
+function withValidatedCommandOutcomes(entries: SessionEntry[]): SessionEntry[] {
+	return entries.map((entry) => {
+		if (entry.type !== "message") return entry;
+		const msg = entry.message;
+		if (msg.role === "bashExecution") {
+			if (msg.execution === undefined || readCommandExecutionOutcome(msg.execution)) return entry;
+			return { ...entry, message: { ...msg, execution: undefined } };
+		}
+		if (msg.role !== "toolResult") return entry;
+		const details = msg.details;
+		if (!details || typeof details !== "object") return entry;
+		const record = details as { execution?: unknown; thenRun?: unknown };
+		let next: Record<string, unknown> | undefined;
+		if (record.execution !== undefined && readCommandExecutionOutcome(record.execution) === undefined) {
+			next = { ...record };
+			delete next.execution;
+		}
+		const thenRun = record.thenRun;
+		if (thenRun && typeof thenRun === "object") {
+			const run = thenRun as { execution?: unknown };
+			if (run.execution !== undefined && readCommandExecutionOutcome(run.execution) === undefined) {
+				next ??= { ...record };
+				next.thenRun = { ...run, execution: undefined };
+			}
+		}
+		return next ? { ...entry, message: { ...msg, details: next } } : entry;
+	});
+}
+
 function preRenderCustomTools(
 	entries: SessionEntry[],
 	toolRenderer: ToolHtmlRenderer,
@@ -239,13 +276,11 @@ function preRenderCustomTools(
 			// Only render if we have a pre-rendered call OR it's not template-rendered
 			const existing = renderedTools[msg.toolCallId];
 			if (existing || !TEMPLATE_RENDERED_TOOLS.has(toolName)) {
-				const rendered = toolRenderer.renderResult(
-					msg.toolCallId,
-					toolName,
-					msg.content,
-					msg.details,
-					msg.isError || false,
-				);
+				// A failed command (including a failed embedded check) is a result
+				// fact, not an invocation failure; the renderer still needs it to
+				// style the card as unsuccessful.
+				const isError = msg.isError === true || readToolCommandNotice(msg.details) !== undefined;
+				const rendered = toolRenderer.renderResult(msg.toolCallId, toolName, msg.content, msg.details, isError);
 				if (rendered) {
 					renderedTools[msg.toolCallId] = {
 						...existing,
@@ -313,7 +348,7 @@ export async function exportSessionToHtml(
 		throw new Error("Nothing to export yet - start a conversation first");
 	}
 
-	const entries = sm.getEntries();
+	const entries = withValidatedCommandOutcomes(sm.getEntries());
 
 	// Pre-render custom tools if a tool renderer is provided
 	let renderedTools: Record<string, RenderedToolHtml> | undefined;
@@ -363,7 +398,7 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 
 	const sessionData: SessionData = {
 		header: sm.getHeader(),
-		entries: sm.getEntries(),
+		entries: withValidatedCommandOutcomes(sm.getEntries()),
 		leafId: sm.getLeafId(),
 		systemPrompt: undefined,
 		tools: undefined,

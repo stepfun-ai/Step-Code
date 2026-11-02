@@ -90,6 +90,7 @@ describe("createAgentSession session manager defaults", () => {
 			.join("");
 
 		expect(realpathSync(output.trim())).toBe(realpathSync(sessionCwd));
+		expect(result.details).toMatchObject({ execution: { status: "exited", exitCode: 0 } });
 
 		session.dispose();
 	});
