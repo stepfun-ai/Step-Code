@@ -23,6 +23,7 @@ import type {
 	ExtensionWidgetOptions,
 	WorkingIndicatorOptions,
 } from "../core/extensions/types.ts";
+import { isToolCommandFailure } from "../core/tools/command-outcome.ts";
 import type { Theme } from "../theme/theme.ts";
 import { STEP_DEFAULT_PROVIDER } from "./defaults.ts";
 import { listStepSessions } from "./session.ts";
@@ -1077,7 +1078,9 @@ export class StepStdioHost {
 							type: "tool_result",
 							tool_use_id: event.toolCallId,
 							content: toolResultText(event.result),
-							is_error: event.isError,
+							// Preserve the wire meaning: external callers use this flag to
+							// decide whether a result looked successful.
+							is_error: event.isError || isToolCommandFailure(event.result?.details),
 						},
 					],
 				},
@@ -1135,7 +1138,9 @@ export class StepStdioHost {
 							type: "tool_result",
 							tool_use_id: message.toolCallId,
 							content: toolResultText(message),
-							is_error: message.isError,
+							// Same derivation as the live event path; a recorded result
+							// must not report a different `is_error` than its event did.
+							is_error: message.isError || isToolCommandFailure(message.details),
 						},
 					],
 				},

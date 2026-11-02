@@ -410,7 +410,7 @@ export interface AgentState {
 
 /** Final or partial result produced by a tool. */
 export interface AgentToolResult<T> {
-	/** A failed tool result may retain successful partial output and structured details. */
+	/** Tool or invocation failure, not a business outcome such as a command's exit code. Failed results may retain observed output and details. */
 	isError?: boolean;
 	/** Text or image content returned to the model. */
 	content: (TextContent | ImageContent)[];

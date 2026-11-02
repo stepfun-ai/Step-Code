@@ -4,6 +4,7 @@ import {
 	createAllToolDefinitions,
 	getTextOutput as getRenderedTextOutput,
 	keyHint,
+	readToolCommandNotice,
 	renderDiff,
 	renderToolPath,
 	replaceTabs,
@@ -880,13 +881,25 @@ export class ToolExecutionComponent extends Container {
 		return this.result?.content.some((content) => content.type === "text" && Boolean(content.text?.trim())) ?? false;
 	}
 
+	/**
+	 * A command's exit status is a result fact, not an invocation failure, so the
+	 * card's success/failure presentation must read `details.execution` too.
+	 */
+	private commandNotice(): string | undefined {
+		return readToolCommandNotice(this.result?.details);
+	}
+
+	private showsFailure(): boolean {
+		return this.result?.isError === true || this.commandNotice() !== undefined;
+	}
+
 	private renderStepFallbackOutput(existing?: string[]): string[] {
 		if (!this.result) return existing ?? [];
 		const output = this.getTextOutput();
 		if (!output) return existing ?? [];
 		// Failed runs paint their output with the error color so the why is
 		// scannable at a glance, mirroring the ✗ glyph in the header row.
-		const paint = this.result.isError
+		const paint = this.showsFailure()
 			? (line: string) => theme.fg("error", line)
 			: (line: string) => theme.fg("toolOutput", line);
 		return output.split(/\r?\n/u).map(paint);
@@ -935,7 +948,7 @@ export class ToolExecutionComponent extends Container {
 
 	private presentationGlyph(): string {
 		if (this.isPartial || !this.result) return theme.fg("accent", this.spinner?.frame ?? "⠋");
-		if (this.result.isError) return theme.fg("error", "✗");
+		if (this.showsFailure()) return theme.fg("error", "✗");
 		return theme.fg("success", "●");
 	}
 
@@ -953,7 +966,7 @@ export class ToolExecutionComponent extends Container {
 				? undefined
 				: this.isPartial
 					? (text: string) => theme.bg("toolPendingBg", text)
-					: this.result?.isError
+					: this.showsFailure()
 						? (text: string) => theme.bg("toolErrorBg", text)
 						: (text: string) => theme.bg("toolSuccessBg", text);
 

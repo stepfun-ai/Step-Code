@@ -210,6 +210,73 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).not.toContain("[Showing lines 2001-4000 of 4000. Full output:");
 	});
 
+	test("shows a failed command as a failure even though the invocation succeeded", async () => {
+		const operations: BashOperations = {
+			exec: async () => ({ exitCode: 1 }),
+		};
+		const tool = createBashToolDefinition(process.cwd(), { operations });
+		const result = await tool.execute("tool-bash-failed", { command: "false" }, undefined, undefined, {} as never);
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-bash-failed",
+			{ command: "false" },
+			{ presentation: "step" },
+			tool,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ ...result, isError: false }, false);
+
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(result.isError).toBe(false);
+		expect(rendered).toContain("✗");
+		expect(rendered).toContain("Command exited with code 1");
+	});
+
+	test("styles an applied mutation whose embedded check failed as a failed check", () => {
+		const args = { path: "sample.txt", search: "a", replace: "b", then_run: "check" };
+		const result = {
+			content: [{ type: "text", text: "Successfully replaced 1 occurrence(s) in sample.txt.\n\nthen_run: $ check\nboom" }],
+			details: {
+				changed: true,
+				thenRun: {
+					command: "check",
+					exitCode: 3,
+					timedOut: false,
+					stepTruncated: false,
+					execution: {
+						status: "exited",
+						exitCode: 3,
+						signal: null,
+						timedOut: false,
+						aborted: false,
+					},
+				},
+			},
+		};
+		const component = new ToolExecutionComponent(
+			"edit_file",
+			"then-run-failed",
+			args,
+			{ presentation: "step" },
+			createBaseToolDefinition("edit_file"),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(result as never, false);
+
+		const rendered = component.render(120).join("\n");
+		const plain = stripAnsi(rendered);
+		// The call itself succeeded (the file was written); the card still shows
+		// that its embedded check failed rather than a green success dot.
+		expect((result as { isError?: boolean }).isError).toBeFalsy();
+		expect(plain).toContain("✗ edit_file(sample.txt)");
+		expect(plain).not.toContain("● edit_file(sample.txt)");
+		expect(plain).toContain("then_run: $ check");
+		// Styling is applied (the plain text differs from the styled render).
+		expect(rendered).not.toBe(plain);
+	});
+
 	test("does not duplicate built-in headers when passed the active built-in definition", () => {
 		const component = new ToolExecutionComponent(
 			"read",

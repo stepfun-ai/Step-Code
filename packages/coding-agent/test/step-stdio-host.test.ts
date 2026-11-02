@@ -326,6 +326,69 @@ describe("StepStdioHost", () => {
 		await running;
 	});
 
+	test("reports a failed command as is_error on both the live and recorded paths", async () => {
+		const input = new PassThrough();
+		const output = new PassThrough();
+		const decoder = new StepStdioFrameDecoder();
+		const frames: ReturnType<StepStdioFrameDecoder["push"]> = [];
+		output.on("data", (chunk: Buffer) => frames.push(...decoder.push(chunk)));
+		const waitFor = async (predicate: () => boolean): Promise<void> => {
+			const deadline = Date.now() + 1_000;
+			while (!predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+			expect(predicate()).toBe(true);
+		};
+		const { runtime, session, emit } = createFakeRuntime(true);
+		const execution = {
+			status: "exited",
+			exitCode: 3,
+			signal: null,
+			timedOut: false,
+			aborted: false,
+		};
+		const toolResult = {
+			role: "toolResult",
+			toolCallId: "call-1",
+			toolName: "run_command",
+			content: [{ type: "text", text: "Command exited with code 3" }],
+			details: { execution },
+			isError: false,
+			timestamp: 1,
+		};
+		(session as unknown as { messages: unknown[] }).messages = [toolResult];
+
+		const host = new StepStdioHost({ runtimeHost: runtime, input, output });
+		const running = host.run();
+		const envelope = (id: string, method: string, payload: unknown): Buffer =>
+			encodeStepStdioFrame({ protocol: "step-agent-sdk", version: 1, kind: "request", id, method, payload });
+
+		input.write(envelope("init", "initialize", { protocolRange: { min: 1, max: 1 } }));
+		await waitFor(() => frames.some((frame) => frame.kind === "response" && frame.replyTo === "init"));
+		input.write(envelope("query", "query.start", { streamingInput: true }));
+		await waitFor(() => frames.some((frame) => frame.kind === "response" && frame.replyTo === "query"));
+
+		// Live path: the same facts arrive as a tool-execution event.
+		emit({
+			type: "tool_execution_end",
+			toolCallId: "call-1",
+			toolName: "run_command",
+			result: { content: toolResult.content, details: toolResult.details, isError: false },
+			isError: false,
+		} as AgentSessionEvent);
+		await waitFor(() =>
+			frames.some((frame) => frame.kind === "event" && JSON.stringify(frame.payload).includes('"is_error":true')),
+		);
+
+		// Recorded path: the session projection must agree with the event.
+		input.write(envelope("messages", "session.messages", { sessionId: session.sessionId }));
+		await waitFor(() => frames.some((frame) => frame.kind === "response" && frame.replyTo === "messages"));
+		const response = frames.find((frame) => frame.kind === "response" && frame.replyTo === "messages");
+		const projected = JSON.stringify(response?.payload);
+		expect(projected).toContain('"is_error":true');
+
+		await host.close();
+		await running;
+	});
+
 	test("routes permission and hook decisions through reverse RPC", async () => {
 		const input = new PassThrough();
 		const output = new PassThrough();

@@ -477,37 +477,47 @@ describe("AgentHarness tools", () => {
 			expect(textOutput(result)).toContain("err");
 		});
 
-		it("reports nonzero exits and timeouts", async () => {
+		it("reports nonzero exits and deadlines as execution results", async () => {
 			const context = createContext();
 			const tool = createBashTool();
 
-			await expect(
-				tool.execute("bash-2", { command: "printf failed; exit 7" }, undefined, undefined, context),
-			).rejects.toThrow(/failed[\s\S]*Command exited with code 7/);
-			await expect(
-				tool.execute("bash-3", { command: "sleep 2", timeout: 0.01 }, undefined, undefined, context),
-			).rejects.toThrow(/Command timed out after 0.01 seconds/);
+			const failed = await tool.execute(
+				"bash-2",
+				{ command: "printf failed; exit 7" },
+				undefined,
+				undefined,
+				context,
+			);
+			expect(failed.isError).toBeFalsy();
+			expect(textOutput(failed)).toContain("failed");
+			expect(textOutput(failed)).toContain("Command exited with code 7");
+			expect(failed.details).toMatchObject({ execution: { status: "exited", exitCode: 7 } });
+
+			const timedOut = await tool.execute(
+				"bash-3",
+				{ command: "sleep 2", timeout: 0.01 },
+				undefined,
+				undefined,
+				context,
+			);
+			expect(timedOut.isError).toBeFalsy();
+			expect(textOutput(timedOut)).toContain("Command timed out after 0.01 seconds");
+			expect(timedOut.details).toMatchObject({ execution: { status: "timed_out", timedOut: true } });
 		});
 
 		it("preserves truncated output when a command times out", async () => {
 			const context = { env: new TimeoutOutputExecutionEnv({ cwd: createTempDir() }) };
-			let error: unknown;
-			try {
-				await createBashTool().execute(
-					"bash-timeout-output",
-					{ command: "emit-output-then-time-out", timeout: 0.05 },
-					undefined,
-					undefined,
-					context,
-				);
-			} catch (cause) {
-				error = cause;
-			}
+			const result = await createBashTool().execute(
+				"bash-timeout-output",
+				{ command: "emit-output-then-time-out", timeout: 0.05 },
+				undefined,
+				undefined,
+				context,
+			);
 
-			expect(error).toBeInstanceOf(Error);
-			const message = (error as Error).message;
-			expect(message).toContain("Command timed out after 0.05 seconds");
-			const fullOutputPath = message.match(/Full output: ([^\]\n]+)/)?.[1];
+			expect(textOutput(result)).toContain("Command timed out after 0.05 seconds");
+			const details = result.details as { fullOutputPath?: string } | undefined;
+			const fullOutputPath = details?.fullOutputPath;
 			expect(fullOutputPath).toBeDefined();
 			const fullOutput = getOrThrow(await context.env.readTextFile(fullOutputPath!));
 			expect(fullOutput).toContain("line-1\nline-2");

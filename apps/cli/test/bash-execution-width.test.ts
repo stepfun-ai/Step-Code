@@ -107,6 +107,48 @@ describe("BashExecutionComponent width handling (#2569)", () => {
 		expect(failedLines.join("\n")).toContain("└ exit 2");
 	});
 
+	it("reports an interrupted or unknown command through its execution facts", () => {
+		const { stub } = createTuiStub(100);
+
+		const signaled = new BashExecutionComponent("kill -9 $$", stub, false, "step");
+		signaled.setComplete(undefined, false, undefined, undefined, {
+			status: "signaled",
+			exitCode: null,
+			signal: "SIGKILL",
+			timedOut: false,
+			aborted: false,
+		});
+		const signaledLines = signaled.render(80).map(stripTerminalSequences);
+		expect(signaledLines[0]).toContain("✗ $ kill -9 $$");
+		expect(signaledLines.join("\n")).toContain("Command terminated by signal SIGKILL");
+
+		// A deadline that coexists with exit code zero is still an interruption.
+		const deadline = new BashExecutionComponent("sleep 5", stub, false, "step");
+		deadline.setComplete(undefined, false, undefined, undefined, {
+			status: "timed_out",
+			exitCode: 0,
+			signal: null,
+			timedOut: true,
+			aborted: false,
+			timeoutSeconds: 1,
+		});
+		const deadlineLines = deadline.render(80).map(stripTerminalSequences);
+		expect(deadlineLines[0]).toContain("✗ $ sleep 5");
+		expect(deadlineLines.join("\n")).toContain("Command timed out after 1 seconds");
+
+		const canceled = new BashExecutionComponent("fixture", stub, false, "step");
+		canceled.setComplete(undefined, true, undefined, undefined, {
+			status: "canceled",
+			exitCode: null,
+			signal: null,
+			timedOut: false,
+			aborted: true,
+		});
+		const canceledLines = canceled.render(80).map(stripTerminalSequences);
+		expect(canceledLines[0]).toContain("■ $ fixture");
+		expect(canceledLines.join("\n")).toContain("Command aborted");
+	});
+
 	it("wraps CJK output within the Step rail at narrow widths", () => {
 		const { stub } = createTuiStub(100);
 		const component = new BashExecutionComponent("printf cjk", stub, false, "step");

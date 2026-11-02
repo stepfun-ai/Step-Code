@@ -6,7 +6,7 @@ Inherits the [CLI rules](../../AGENTS.md). This directory presents session event
 
 - `index.ts`: the shell's single UI facade. `interactive-mode.ts`: interactive host and component composition.
 - `startup-ui.ts` and selectors: startup login, trust, configuration, and session selection.
-- `runtime/context.ts`: host injection interfaces. `runtime/session-events.ts`: events to views. `runtime/input-dispatch.ts`: input and actions. `runtime/redraw.ts`: redraw facade.
+- `runtime/context.ts`: host injection interfaces. `runtime/session-events.ts`: events to views. `runtime/input-dispatch.ts`: input and actions. `runtime/redraw.ts`: redraw facade. `runtime/lark-connection.ts` and `runtime/lark-projection.ts`: Feishu/Lark connection and session projection.
 - `view/chrome/`, `view/dialogs/`, `view/editor/`, `view/transcript/`: presentation components.
 
 ## Boundaries and invariants

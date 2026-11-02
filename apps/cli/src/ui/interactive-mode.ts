@@ -88,6 +88,7 @@ import {
 	parseSkillBlock,
 	type ReadonlyFooterDataProvider,
 	rawKeyHint,
+	readCommandExecutionOutcome,
 	readStepLoginCredential,
 	readStepLoginProfile,
 	resolveModelScopeFromModels,
@@ -3556,6 +3557,7 @@ export class InteractiveMode {
 					message.cancelled,
 					message.truncated ? ({ truncated: true } as TruncationResult) : undefined,
 					message.fullOutputPath,
+					readCommandExecutionOutcome(message.execution),
 				);
 				this.chatContainer.addChild(component);
 				break;
@@ -6757,6 +6759,7 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 				result.cancelled,
 				result.truncated ? ({ truncated: true, content: result.output } as TruncationResult) : undefined,
 				result.fullOutputPath,
+				result.execution,
 			);
 
 			// Record the result in session
@@ -6798,6 +6801,7 @@ ${followUpRow}| \`${dequeue}\` | Restore queued messages |
 					result.cancelled,
 					result.truncated ? ({ truncated: true, content: result.output } as TruncationResult) : undefined,
 					result.fullOutputPath,
+					result.execution,
 				);
 			}
 		} catch (error) {
