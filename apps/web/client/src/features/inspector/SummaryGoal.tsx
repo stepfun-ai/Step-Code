@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
 import { apiSend, errorMessage } from "../../lib/api";
+import { splitAttachedFiles } from "../../lib/attached-files";
 import { refreshCurrent, showError } from "../../state/session";
 import { useAppStore } from "../../state/store";
 import type { GoalState } from "../../state/types";
@@ -32,6 +33,15 @@ function statusKey(status: GoalState["status"]): string {
 		case "complete":
 			return "goalComplete";
 	}
+}
+
+/**
+ * The objective as the user wrote it: a goal sent with files carries the host's
+ * file blocks (`lib/attached-files`), which name the files here instead.
+ */
+function goalText(objective: string): string {
+	const { text, files } = splitAttachedFiles(objective);
+	return text || files.map((file) => file.name).join(" ");
 }
 
 /**
@@ -79,6 +89,7 @@ export function SummaryGoal() {
 	}, [active]);
 
 	if (!goal) return null;
+	const objective = goalText(goal.objective);
 	const elapsed = active
 		? goal.timeUsedSeconds + Math.floor((Date.now() - syncedAt.current) / 1_000)
 		: goal.timeUsedSeconds;
@@ -176,8 +187,8 @@ export function SummaryGoal() {
 			</div>
 			{/* The one-line summary is the objective here: showing both it and the
 			 * clamped full text reads as saying the same thing twice. */}
-			<p className="sb-goal-summary" title={goal.objective}>
-				{summarizeGoal(goal.objective)}
+			<p className="sb-goal-summary" title={objective}>
+				{summarizeGoal(objective)}
 			</p>
 			<p className="sb-goal-stats">
 				{t("goalRounds", { rounds: goal.rounds })}

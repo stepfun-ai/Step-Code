@@ -77,6 +77,7 @@ import {
 	removeSlashToken,
 	replaceFileQuery,
 	restoreFailedPrompt,
+	setPromptMessage,
 	setPromptText,
 	snapshotPrompt,
 	waitForUploads,
@@ -305,11 +306,11 @@ function ComposerInput({
 		editLoaded.current = true;
 		const editor = prompt.current;
 		if (!editor) return;
-		// Focus before filling: setPromptText parks the caret at the end only when
+		// Focus before filling: setPromptMessage parks the caret at the end only when
 		// the editor already holds focus, so a fill-then-focus leaves it at the start.
 		editor.focus();
-		setPromptText(editor, editingPrompt.text);
-		setHasText(Boolean(editingPrompt.text.trim()));
+		setPromptMessage(editor, editingPrompt.text);
+		setHasText(Boolean(promptText(editor).trim()));
 	}, [edit, editingPrompt]);
 
 	const menu = (name: ComposerMenu) => ({

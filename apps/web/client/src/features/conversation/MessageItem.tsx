@@ -25,7 +25,7 @@ import { MessageAttachments } from "./TurnArtifacts";
 import type { TurnArtifact } from "./turn-artifacts";
 
 /** Same markup as the composer's chip (`prompt-editor.ts` `createChip`), so a sent message reads like its draft. */
-function MessageFileChip({ file }: { readonly file: AttachedFile | undefined }) {
+export function MessageFileChip({ file }: { readonly file: AttachedFile | undefined }) {
 	if (!file) return null;
 	return (
 		<span className="message-file" title={`${file.path} · ${formatBytes(file.bytes)}`}>

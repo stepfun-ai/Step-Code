@@ -5,6 +5,7 @@
 
 import { t } from "../../i18n";
 import { api, apiSend, errorMessage } from "../../lib/api";
+import { splitAttachedFiles } from "../../lib/attached-files";
 import {
 	DRAFT_SELECTION_ID,
 	draftFullAccessQuestion,
@@ -376,6 +377,18 @@ const SESSION_CONTEXT_MAX_CHARS = 4000;
 const SESSION_CONTEXT_MAX_MESSAGES = 20;
 
 /**
+ * A quoted user message with each attached file reduced to its name and stored
+ * path. A whole file block would read as the new message's own attachment and
+ * spend the transcript cap on file content; the path lets the model read the
+ * file itself when it needs it.
+ */
+function quotedUserText(content: string): string {
+	const { text, files } = splitAttachedFiles(content);
+	const references = files.map((file) => `[文件 ${file.name}，路径：${file.path}]`).join("\n");
+	return [text.trim(), references].filter(Boolean).join("\n");
+}
+
+/**
  * Package another session's conversation as a prompt tail block:
  * a `# userselect:` heading naming the source session and a fenced
  * transcript of its user/assistant messages, oldest first, capped. The block
@@ -392,7 +405,9 @@ export function packageSessionContext(title: string, entries: readonly TimelineI
 		)
 		.slice(-SESSION_CONTEXT_MAX_MESSAGES);
 	let transcript = messages
-		.map((message) => `${message.role === "user" ? "用户" : "助手"}: ${message.content.trim()}`)
+		.map((message) =>
+			message.role === "user" ? `用户: ${quotedUserText(message.content)}` : `助手: ${message.content.trim()}`,
+		)
 		.join("\n\n");
 	if (transcript.length > SESSION_CONTEXT_MAX_CHARS) {
 		transcript = `${transcript.slice(0, SESSION_CONTEXT_MAX_CHARS)}\n…（超出部分已截断）`;
