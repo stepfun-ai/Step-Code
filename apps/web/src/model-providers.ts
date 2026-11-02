@@ -39,15 +39,17 @@ import { importStepgoModels, type StepgoModelImportResult } from "./stepgo-impor
  * injects, so the models page is filled without typing anything. It writes the
  * same `models.json` / `auth.json` this module manages, into the paths this
  * host reads, and runs once: afterwards the providers are ordinary custom
- * providers the user maintains here. Never throws; one line is logged when
- * something was imported or went wrong, and never a key.
+ * providers the user maintains here. Without stepgo's launch config it falls
+ * back to the models stepgo's `config.json` names. Never throws; one line is
+ * logged when something was imported or went wrong, and never a key.
  */
 export async function importLocalStepgoModels(
 	log: (line: string) => void = (line) => console.log(line),
 ): Promise<StepgoModelImportResult> {
 	const result = await importStepgoModels({ modelsPath: modelsJsonPath(), authPath: modelsAuthPath() });
 	if (result.status === "imported") {
-		const parts = [`imported ${result.providers.length} provider(s) from stepgo`];
+		const from = result.source === "config" ? "stepgo config.json (no launch config yet)" : "stepgo";
+		const parts = [`imported ${result.providers.length} provider(s) from ${from}`];
 		if (result.providers.length > 0) parts.push(result.providers.join(", "));
 		if (result.existing.length > 0) parts.push(`kept existing: ${result.existing.join(", ")}`);
 		log(`[models] ${parts.join("; ")}`);

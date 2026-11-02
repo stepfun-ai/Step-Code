@@ -845,6 +845,34 @@ through coding-agent's public `models.json` / `auth.json` APIs.
 - Sources, read-only: `~/.stepgo/config/config.json` (`apiKey`, `baseUrl`) and  
   `~/.stepgo/config/agent/managed/config.json` (one provider per API dialect with  
   its model catalog). `STEPGO_HOME` / `STEPCODE_HOME` relocate the stepgo home.
+- stepgo writes the managed file only on a launch that reaches Step, so a
+  launcher whose `step` command is missing never writes it. Without it the
+  import falls back to `config.json` alone: the models stepgo launches Step with
+  (`agentModels.stepcli.model` and `smallModel`, else the top-level `model`; a
+  model without its own `modelSupportApis` inherits the top-level list). Each
+  model goes under the provider id stepgo gives its dialect — `stepcode-anthropic`
+  for `claude_native`, else `stepcode-responses` for `responses`, else
+  `stepcode-chat` for `chat` — at the `config.json` address. A model with no
+  supported API is reported and skipped. `config.json` carries no
+  capabilities, so each model takes its dialect's fallback values, all editable
+  on the model settings page:
+
+  | Provider | `contextWindow` | `maxTokens` | `compat` |
+  | --- | --- | --- | --- |
+  | `stepcode-anthropic` | 1000000 | 128000 | `{ "forceAdaptiveThinking": true }` |
+  | `stepcode-responses` | 1000000 | 128000 | — |
+  | `stepcode-chat` | kernel default (128000) | kernel default (16384) | — |
+
+  The Anthropic values are those of the current Claude models in stepgo's model
+  metadata, which refuse the budget thinking format; remove the flag for a model
+  that needs it. The Responses values are those of the current GPT-5.x / 6.x
+  models; lower the context of a smaller-window variant (the 272K Codex ones)
+  on the model settings page, or a long session overflows it. The managed file
+  states these per model and is kept as written.
+- A model whose source does not state `reasoning` or `input` is imported with
+  `reasoning: true` (thinking levels off/low/medium/high, default medium) and
+  `input: ["text", "image"]`, instead of the kernel's text-only, no-reasoning
+  defaults for a bare entry. A value stepgo did state is kept as written.
 - Each provider becomes a `models.json` declaration under its own id  
   (`tokens.maxContext` / `tokens.maxOutput` become `contextWindow` / `maxTokens`).  
   Its key becomes an `api_key` entry in `auth.json` under the same id; the  
@@ -854,8 +882,10 @@ through coding-agent's public `models.json` / `auth.json` APIs.
 - A completed import writes `<agent dir>/stepgo-model-import.json`. While that  
   file exists stepgo is not read again: the imported providers are ordinary  
   custom providers the user edits or deletes on the model settings page. Delete  
-  the marker to import again. Without stepgo installed, or when a provider fails  
-  to write, no marker is written and the next start retries.
+  the marker to import again. A fallback import records the marker too, so a
+  managed file stepgo writes later is not read. Without stepgo installed, with
+  nothing importable, or when a provider fails to write, no marker is written
+  and the next start retries.
 - `STEPCODE_STEPGO_IMPORT=0` (or `false` / `off` / `no`) disables the import; the  
   web e2e suite and `scripts/check-web-runtime.mjs` set it.
 - Failures never stop the host; the host logs one `[models]` line when it  

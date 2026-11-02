@@ -19,6 +19,19 @@
  *   discovered model catalog. It carries no key; stepgo passes the key through
  *   `STEP_API_KEY` instead.
  *
+ * stepgo writes the managed file only on a launch that gets as far as starting
+ * Step; a launcher whose `step` command is missing never writes it. Without it
+ * the import falls back to `config.json` alone: the models stepgo is configured
+ * to launch Step with (`agentModels.stepcli.model` / `smallModel`, else the
+ * top-level `model`), each placed under the provider id stepgo would give its
+ * dialect, as judged from the model's declared support APIs. That file carries
+ * no capabilities, so these models take their dialect's fallback context,
+ * output and compat values and the import defaults below.
+ *
+ * A model that does not state whether it reasons or reads images is imported
+ * as doing both, rather than inheriting the kernel's text-only, no-reasoning
+ * defaults for a bare entry.
+ *
  * Each provider becomes a `models.json` declaration and its key an `api_key`
  * entry in `auth.json` under the same provider id, which is the id the kernel
  * resolves the credential by. The declaration never holds the key, matching how
@@ -68,6 +81,62 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
 
 const DISABLED_VALUES: ReadonlySet<string> = new Set(["0", "false", "off", "no"]);
 
+/**
+ * How a `config.json` model's declared support APIs pick a dialect and the
+ * provider id stepgo gives it, in stepgo's own order of preference: a model
+ * that speaks Anthropic Messages goes there even when it also speaks Chat.
+ *
+ * `config.json` states no capabilities, so the fallback declares each model
+ * with its dialect's `fallback` values; the launch config states them per
+ * model and does not use these. They are stepgo's own model metadata for the
+ * families its gateways route to each dialect:
+ *
+ * - Anthropic Messages: current Claude models (Opus / Sonnet / Haiku 5.x,
+ *   Fable) have a 1M context, 128K output, and accept only adaptive thinking
+ *   (`thinking.type: "adaptive"` with an effort); the budget format the adapter
+ *   sends otherwise is refused.
+ * - OpenAI Responses: current GPT-5.x / 6.x models have a 1M context and output
+ *   up to 128K. A smaller-window variant (the 272K Codex ones) needs its
+ *   context lowered on the model settings page, or a long session overflows it.
+ *
+ * Without these the kernel defaults (128K context, 16K output) would cut long
+ * replies, whose adaptive thinking counts against the same output cap. Each
+ * value is editable on the model settings page; remove `forceAdaptiveThinking`
+ * for a Claude model that needs the budget format.
+ */
+const CONFIG_DIALECTS: readonly {
+	readonly supportApis: readonly string[];
+	readonly api: string;
+	readonly providerId: string;
+	readonly fallback: Omit<ImportedModel, "id">;
+}[] = [
+	{
+		supportApis: ["claude_native", "anthropic-messages"],
+		api: "anthropic-messages",
+		providerId: "stepcode-anthropic",
+		fallback: { contextWindow: 1_000_000, maxTokens: 128_000, compat: { forceAdaptiveThinking: true } },
+	},
+	{
+		supportApis: ["responses"],
+		api: "openai-responses",
+		providerId: "stepcode-responses",
+		fallback: { contextWindow: 1_000_000, maxTokens: 128_000 },
+	},
+	{ supportApis: ["chat"], api: "openai-completions", providerId: "stepcode-chat", fallback: {} },
+];
+
+/** Which stepgo file the imported providers came from. */
+export type StepgoImportSource = "managed" | "config";
+
+/**
+ * Capabilities an imported model gets when stepgo did not state them. The
+ * kernel's own defaults for a bare `models.json` entry are text-only and no
+ * reasoning, which would leave a stepgo model the user already runs with
+ * thinking (a `reasoning: true` model defaults to medium) and images unable to
+ * do either. A value stepgo did write, such as a text-only model, is kept.
+ */
+const IMPORTED_MODEL_DEFAULTS = { reasoning: true, input: ["text", "image"] } as const;
+
 /** Where the import reads and writes. Every path can be overridden for tests and embedders. */
 export interface StepgoModelImportOptions {
 	readonly env?: NodeJS.ProcessEnv;
@@ -91,6 +160,8 @@ export type StepgoModelImportResult =
 	| { readonly status: "skipped"; readonly reason: string }
 	| {
 			readonly status: "imported";
+			/** `managed`: stepgo's launch config; `config`: the fallback from `config.json` alone. */
+			readonly source: StepgoImportSource;
 			/** Providers written to `models.json`. */
 			readonly providers: readonly string[];
 			/** Providers left alone because `models.json` already declared them. */
@@ -196,8 +267,14 @@ function providerKey(raw: Record<string, unknown>, sharedKey: string | undefined
 	return sharedKey;
 }
 
-/** Read both stepgo files into the providers to import, or the reason there are none. */
-function readStepgoProviders(stepgoHome: string): { providers: ImportedProvider[]; warnings: string[] } | string {
+interface StepgoProviders {
+	readonly source: StepgoImportSource;
+	readonly providers: ImportedProvider[];
+	readonly warnings: string[];
+}
+
+/** Read stepgo's files into the providers to import, or the reason there are none. */
+function readStepgoProviders(stepgoHome: string): StepgoProviders | string {
 	const configPath = join(stepgoHome, "config", "config.json");
 	const managedPath = join(stepgoHome, "config", "agent", "managed", "config.json");
 	let config: Record<string, unknown> | undefined;
@@ -208,7 +285,22 @@ function readStepgoProviders(stepgoHome: string): { providers: ImportedProvider[
 	} catch (error) {
 		return `stepgo configuration is unreadable: ${error instanceof Error ? error.message : String(error)}`;
 	}
-	if (!managed) return config ? `${managedPath} does not exist yet` : "stepgo is not installed";
+	const found = managed
+		? readManagedProviders(managed, managedPath, config)
+		: config
+			? readConfigProviders(config, configPath, managedPath)
+			: "stepgo is not installed";
+	if (typeof found === "string") return found;
+	found.providers.sort((left, right) => left.id.localeCompare(right.id));
+	return found;
+}
+
+/** The providers of stepgo's launch config, with `config.json` supplying the shared key and address. */
+function readManagedProviders(
+	managed: Record<string, unknown>,
+	managedPath: string,
+	config: Record<string, unknown> | undefined,
+): StepgoProviders | string {
 	if (!isRecord(managed.providers)) return `${managedPath} has no providers`;
 
 	const sharedKey = stringOf(config?.apiKey);
@@ -247,9 +339,87 @@ function readStepgoProviders(stepgoHome: string): { providers: ImportedProvider[
 		const apiKey = providerKey(raw, sharedKey);
 		providers.push({ id, api, baseUrl, models, ...(apiKey ? { apiKey } : {}) });
 	}
-	providers.sort((left, right) => left.id.localeCompare(right.id));
 	if (providers.length === 0) return warnings.length > 0 ? warnings.join("; ") : `${managedPath} has no providers`;
-	return { providers, warnings };
+	return { source: "managed", providers, warnings };
+}
+
+/** Support API ids as stepgo stores them: `{ id }` objects, or bare strings. */
+function supportApiIds(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	const ids: string[] = [];
+	for (const entry of value) {
+		const id = isRecord(entry) ? stringOf(entry.id) : stringOf(entry);
+		if (id) ids.push(id);
+	}
+	return ids;
+}
+
+interface ConfiguredModel {
+	readonly id: string;
+	readonly supportApis: readonly string[];
+}
+
+/**
+ * The models stepgo launches Step with, resolved the way stepgo resolves them:
+ * the `stepcli` agent's own `model` wins over the top-level one, and a model
+ * without its own support APIs inherits the top-level list. The small model
+ * shares the main model's list only when it is the same model.
+ */
+function configuredModels(config: Record<string, unknown>): ConfiguredModel[] {
+	const agents = isRecord(config.agentModels) ? config.agentModels : {};
+	const scoped = isRecord(agents.stepcli) ? agents.stepcli : {};
+	const models: ConfiguredModel[] = [];
+	const mainId = stringOf(scoped.model) ?? stringOf(config.model);
+	const scopedApis = supportApiIds(scoped.modelSupportApis);
+	const mainApis = scopedApis.length > 0 ? scopedApis : supportApiIds(config.modelSupportApis);
+	if (mainId) models.push({ id: mainId, supportApis: mainApis });
+	const smallId = stringOf(scoped.smallModel);
+	if (smallId && smallId !== mainId) {
+		models.push({ id: smallId, supportApis: supportApiIds(scoped.smallModelSupportApis) });
+	}
+	return models;
+}
+
+/**
+ * The fallback when stepgo never wrote its launch config: one provider per
+ * dialect for the models `config.json` names, at the user's gateway address,
+ * with the shared key. A model whose support APIs name no dialect Step serves
+ * is reported, not guessed at.
+ */
+function readConfigProviders(
+	config: Record<string, unknown>,
+	configPath: string,
+	managedPath: string,
+): StepgoProviders | string {
+	const typedUrl = stringOf(config.baseUrl);
+	if (!typedUrl) return `${managedPath} does not exist yet and ${configPath} has no baseUrl`;
+	const models = configuredModels(config);
+	if (models.length === 0) return `${managedPath} does not exist yet and ${configPath} names no model`;
+
+	const apiKey = stringOf(config.apiKey);
+	const byId = new Map<string, ImportedProvider>();
+	const warnings: string[] = [];
+	for (const model of models) {
+		const dialect = CONFIG_DIALECTS.find((candidate) =>
+			candidate.supportApis.some((id) => model.supportApis.includes(id)),
+		);
+		if (!dialect) {
+			const declared = model.supportApis.length > 0 ? model.supportApis.join(", ") : "none declared";
+			warnings.push(`model '${model.id}' supports no API Step serves (${declared})`);
+			continue;
+		}
+		const existing = byId.get(dialect.providerId);
+		const imported: ImportedModel = { id: model.id, ...dialect.fallback };
+		byId.set(dialect.providerId, {
+			id: dialect.providerId,
+			api: dialect.api,
+			baseUrl: normalizeProviderBaseUrl(typedUrl, dialect.api),
+			models: [...(existing?.models ?? []), imported],
+			...(apiKey ? { apiKey } : {}),
+		});
+	}
+	if (byId.size === 0) return warnings.join("; ");
+	return { source: "config", providers: [...byId.values()], warnings };
 }
 
 function writeMarker(path: string, providers: readonly string[], now: Date): void {
@@ -290,6 +460,11 @@ export function isStepgoModelImportDisabled(env: NodeJS.ProcessEnv = process.env
  * where some provider failed to write records no marker, so the next start
  * retries; providers written by the earlier run are then already declared and
  * are left as they are.
+ *
+ * A completed fallback import from `config.json` records the marker too: a
+ * launch config stepgo writes later would declare the same provider ids, which
+ * are then the user's to keep, and importing again would bring back a provider
+ * the user deleted.
  */
 export async function importStepgoModels(options: StepgoModelImportOptions = {}): Promise<StepgoModelImportResult> {
 	const env = options.env ?? process.env;
@@ -322,7 +497,15 @@ export async function importStepgoModels(options: StepgoModelImportOptions = {})
 					// Under the lock: a concurrent host or the user may have created it.
 					if (current) return current;
 					written = true;
-					return { baseUrl: provider.baseUrl, api: provider.api, models: provider.models.map((m) => ({ ...m })) };
+					return {
+						baseUrl: provider.baseUrl,
+						api: provider.api,
+						models: provider.models.map((m) => ({
+							...m,
+							reasoning: m.reasoning ?? IMPORTED_MODEL_DEFAULTS.reasoning,
+							input: [...(m.input ?? IMPORTED_MODEL_DEFAULTS.input)],
+						})),
+					};
 				});
 			} catch (error) {
 				failed = true;
@@ -344,7 +527,7 @@ export async function importStepgoModels(options: StepgoModelImportOptions = {})
 		}
 
 		if (!failed) writeMarker(statePath, imported, options.now?.() ?? new Date());
-		return { status: "imported", providers: imported, existing, credentials, warnings };
+		return { status: "imported", source: source.source, providers: imported, existing, credentials, warnings };
 	} catch (error) {
 		return { status: "skipped", reason: error instanceof Error ? error.message : String(error) };
 	}

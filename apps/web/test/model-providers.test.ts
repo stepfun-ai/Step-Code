@@ -688,7 +688,8 @@ test("a local stepgo launcher is imported once and then listed like any custom p
 		name: "stepgo-chat",
 		baseUrl: "https://gw.example/v1",
 		api: "openai-completions",
-		models: [{ id: "m1", contextWindow: 200000, maxTokens: 8192, input: ["text"] }],
+		// The stated input is kept; the unstated reasoning flag takes the import default.
+		models: [{ id: "m1", contextWindow: 200000, maxTokens: 8192, input: ["text"], reasoning: true }],
 		credential: "stored",
 	});
 	assert.deepEqual((await authOnDisk())["stepgo-chat"], { type: "api_key", key: "ak-fixture-stepgo" });

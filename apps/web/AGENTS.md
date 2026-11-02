@@ -58,7 +58,7 @@ apps/web/
     directory-picker.ts  server-side folder chooser
     settings.ts          settings back end: MCP servers, plugins/marketplaces, skills
     model-providers.ts   model settings back end: models.json declarations, auth.json keys, model discovery
-    stepgo-import.ts     one-time import of a local stepgo launcher's providers and key (first start only)
+    stepgo-import.ts     one-time import of a local stepgo launcher's providers and key (first start only; falls back to config.json's models)
     attachments.ts, feedback.ts, banner.ts, bootstrap.ts, writer-lease.ts
   client/
     index.html           <div id="root">, loads /src/main.tsx
