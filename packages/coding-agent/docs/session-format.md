@@ -165,6 +165,12 @@ Producers also declare their display framing in `details.outputFooter`
 `status` is the trailing outcome sentence. It is presentation metadata, not a
 source of execution facts; `details.execution` is authoritative.
 
+Provider dialects differ in what they can express. `openai-responses` and
+`openai-completions` send only the result text, so this classification does not
+change the model request at all. `anthropic-messages` sends `is_error`, which now
+reports only an invocation failure; the command's outcome still reaches the model
+through the same trailing sentence.
+
 Existing records without `details.execution` remain readable and are not
 reclassified by parsing their output. The JSONL format version is unchanged.
 
