@@ -1,10 +1,7 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { build } from "esbuild"
 
-const outputPath = join(tmpdir(), "pi-browser-smoke.js")
-const errorLogPath = join(tmpdir(), "pi-browser-smoke-errors.log")
 const generatedCatalogDataDir = join(
   process.cwd(),
   "packages/providers/src/providers/data",
@@ -188,13 +185,16 @@ try {
   // any Node-only runtime import leaking into them. The Step-only build has no
   // built-in providers, so the former selective-provider tree-shake assertions
   // (which required the deleted anthropic catalog) no longer apply.
+  // Only whether the bundle builds matters, so it stays in memory: the check
+  // writes nothing to disk, in particular not to the machine's temp directory.
   await build({
     entryPoints: ["scripts/browser-smoke-entry.ts"],
     bundle: true,
     platform: "browser",
     format: "esm",
     logLevel: "silent",
-    outfile: outputPath,
+    write: false,
+    outfile: "browser-smoke.js",
     plugins: [generatedCatalogDataPlugin],
   })
 
@@ -219,11 +219,10 @@ try {
 
   const baseError =
     error instanceof Error ? (error.stack ?? error.message) : String(error)
-  writeFileSync(
-    errorLogPath,
-    [detailedErrors, baseError].filter(Boolean).join("\n\n"),
-    "utf-8",
+  console.error(
+    ["Browser smoke check failed.", detailedErrors, baseError]
+      .filter(Boolean)
+      .join("\n\n"),
   )
-  console.error(`Browser smoke check failed. See ${errorLogPath}`)
   process.exit(1)
 }
