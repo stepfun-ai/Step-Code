@@ -81,6 +81,30 @@ test("recognizes bounded turn outputs from explicit references and successful st
 	assert.equal(artifactKind("song.mp3"), "audio");
 });
 
+test("a failed call still delivers the file it wrote before its check failed", () => {
+	// A failing `then_run` check leaves the row "failed" while the edit already
+	// landed; the delivery card must keep listing what the turn produced.
+	const items: TimelineItem[] = [
+		{ kind: "message", itemId: "u1", role: "user", content: "Write then check" },
+		{
+			kind: "tool",
+			itemId: "t1",
+			toolName: "edit_file",
+			state: "failed",
+			inputSummary: "",
+			outputSummary: "",
+			args: { path: "output/report.md" },
+			change: { path: "output/report.md", patch: "--- a\n+++ b\n" },
+		},
+		{ kind: "tool", itemId: "t2", toolName: "write", state: "failed", inputSummary: "", outputSummary: "", args: { path: "output/failure.md" } },
+		{ kind: "message", itemId: "a1", role: "assistant", content: "Done; see `report.md`." },
+	];
+	const [footer] = collectTurnFooters(items, "idle", false);
+	assert.deepEqual(turnArtifacts(items, footer, "D:/Work"), [
+		{ path: "output/report.md", label: "report.md", kind: "document", turnId: "u1" },
+	]);
+});
+
 test("ambiguous basenames are not guessed and outputs do not leak between turns", () => {
 	const items: TimelineItem[] = [
 		{ kind: "message", itemId: "u1", role: "user", content: "Create" },
