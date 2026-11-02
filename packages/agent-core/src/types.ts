@@ -77,6 +77,7 @@ export interface BeforeToolCallResult {
  * - `isError`: if provided, replaces the tool result error flag
  * - `usage`: if provided, replaces the tool result usage
  * - `terminate`: if provided, replaces the early-termination hint
+ * - `stopTurn`: if provided, replaces the single-result turn barrier
  *
  * Omitted fields keep the original executed tool result values.
  * There is no deep merge for `content`, `details`, or `usage`.
@@ -89,9 +90,16 @@ export interface AfterToolCallResult {
 	usage?: Usage;
 	/**
 	 * Hint that the agent should stop after the current tool batch.
-	 * Early termination only happens when every finalized tool result in the batch sets this to true.
+	 * `stopTurn` on any finalized result also stops the batch; every result setting
+	 * `terminate` is the older, all-or-nothing form.
 	 */
 	terminate?: boolean;
+	/**
+	 * End the turn when this result settles, regardless of sibling results.
+	 * Queued steering and follow-up input is not drained; it stays for the next
+	 * turn the caller starts. Decision barriers should also run sequentially.
+	 */
+	stopTurn?: boolean;
 }
 
 /** Context passed to `beforeToolCall`. */
@@ -420,6 +428,12 @@ export interface AgentToolResult<T> {
 	usage?: Usage;
 	/** Names of tools introduced by this result and available from this transcript point onward. */
 	addedToolNames?: string[];
+	/**
+	 * End this turn regardless of sibling results. In a sequential batch, later
+	 * calls receive skipped results instead of executing; parallel calls already
+	 * in flight still settle. Use sequential execution for decision barriers.
+	 */
+	stopTurn?: boolean;
 	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.

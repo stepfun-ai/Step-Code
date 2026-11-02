@@ -70,6 +70,8 @@ export interface PlanReviewOptions {
 	planContents: string;
 	theme: Theme;
 	onResult: (result: PlanReviewResult) => void;
+	/** Close the dialog when the turn is cancelled or the mode changes. */
+	signal?: AbortSignal;
 	/** Called whenever the rendered content changes so the host can repaint. */
 	onChange?: () => void;
 }
@@ -84,6 +86,8 @@ export class PlanReviewComponent implements Component, Focusable {
 	private readonly planContents: string;
 	private readonly theme: Theme;
 	private readonly onResult: (result: PlanReviewResult) => void;
+	private readonly signal: AbortSignal | undefined;
+	private readonly onAbort = () => this.onResult({ action: "dismissed" });
 	private readonly onChange: (() => void) | undefined;
 	private readonly input: Input;
 	/** The plan, rendered as markdown rather than a flat wall of muted text. */
@@ -102,6 +106,13 @@ export class PlanReviewComponent implements Component, Focusable {
 		// The row's numbered head is drawn by renderOptionRow; the label is a
 		// placeholder that disappears once the user types, not part of the value.
 		this.input = new Input({ prompt: "" });
+		this.signal = options.signal;
+		if (this.signal?.aborted) this.onAbort();
+		else this.signal?.addEventListener("abort", this.onAbort, { once: true });
+	}
+
+	dispose(): void {
+		this.signal?.removeEventListener("abort", this.onAbort);
 	}
 
 	get focused(): boolean {

@@ -1557,6 +1557,168 @@ describe("agentLoop with AgentMessage", () => {
 		]);
 	});
 
+	it.each([false, true])(
+		"a control result stops the turn and closes skipped tool calls (hook failure=%s)",
+		async (hookFailure) => {
+			const executed: string[] = [];
+			const tools: AgentTool[] = ["read", "gate", "write"].map((name) => ({
+				name,
+				label: name,
+				description: name,
+				parameters: Type.Object({}),
+				executionMode: name === "gate" ? "sequential" : "parallel",
+				async execute() {
+					executed.push(name);
+					return { content: [{ type: "text", text: name }], details: {}, stopTurn: name === "gate" };
+				},
+			}));
+			let llmCalls = 0;
+			let steeringRead = false;
+			const stream = agentLoop(
+				[createUserMessage("do work")],
+				{ systemPrompt: "", messages: [], tools },
+				{
+					model: createModel(),
+					convertToLlm: identityConverter,
+					getSteeringMessages: async () => {
+						if (!executed.includes("gate") || steeringRead) return [];
+						steeringRead = true;
+						return [createUserMessage("queued input")];
+					},
+					afterToolCall: async ({ toolCall }) => {
+						if (hookFailure && toolCall.name === "gate") throw new Error("hook failed");
+						return undefined;
+					},
+				},
+				undefined,
+				() => {
+					const output = new MockAssistantStream();
+					const first = llmCalls++ === 0;
+					queueMicrotask(() => {
+						const message = first
+							? createAssistantMessage(
+									["read", "gate", "write"].map((name) => ({
+										type: "toolCall",
+										id: name,
+										name,
+										arguments: {},
+									})),
+									"toolUse",
+								)
+							: createAssistantMessage([{ type: "text", text: "continued" }]);
+						output.push({ type: "done", reason: first ? "toolUse" : "stop", message });
+					});
+					return output;
+				},
+			);
+			const events: AgentEvent[] = [];
+			for await (const event of stream) events.push(event);
+			expect(executed).toEqual(["read", "gate"]);
+			expect(steeringRead).toBe(false);
+			expect(llmCalls).toBe(1);
+			expect((await stream.result()).filter((message) => message.role === "toolResult")).toHaveLength(3);
+			expect(events.filter((event) => event.type === "tool_execution_end")).toHaveLength(3);
+			// A skipped call is not a policy denial: it must not carry `terminate`,
+			// which callers use to decide that the run failed.
+			const skipped = events.find((event) => event.type === "tool_execution_end" && event.toolName === "write");
+			if (skipped?.type !== "tool_execution_end") throw new Error("missing skipped tool result");
+			expect(skipped.result).toMatchObject({
+				content: [{ text: expect.stringContaining("skipped") }],
+			});
+			expect((skipped.result as { terminate?: boolean }).terminate).toBeUndefined();
+		},
+	);
+
+	it("afterToolCall can request stopTurn", async () => {
+		const toolSchema = Type.Object({});
+		let runs = 0;
+		const tool: AgentTool = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute() {
+				runs++;
+				return { content: [{ type: "text", text: "echoed" }], details: {} };
+			},
+		};
+		let llmCalls = 0;
+		const stream = agentLoop(
+			[createUserMessage("echo")],
+			{ systemPrompt: "", messages: [], tools: [tool] },
+			{
+				model: createModel(),
+				convertToLlm: identityConverter,
+				afterToolCall: async () => ({ stopTurn: true }),
+			},
+			undefined,
+			() => {
+				const output = new MockAssistantStream();
+				const first = llmCalls++ === 0;
+				queueMicrotask(() => {
+					const message = first
+						? createAssistantMessage([{ type: "toolCall", id: "echo-1", name: "echo", arguments: {} }], "toolUse")
+						: createAssistantMessage([{ type: "text", text: "continued" }]);
+					output.push({ type: "done", reason: first ? "toolUse" : "stop", message });
+				});
+				return output;
+			},
+		);
+		const events: AgentEvent[] = [];
+		for await (const event of stream) events.push(event);
+		expect(runs).toBe(1);
+		expect(llmCalls).toBe(1);
+		expect(events.filter((event) => event.type === "tool_execution_end")).toHaveLength(1);
+	});
+
+	it("a parallel batch settles in-flight calls and stops after the barrier", async () => {
+		const executed: string[] = [];
+		const tools: AgentTool[] = ["a", "gate", "c"].map((name) => ({
+			name,
+			label: name,
+			description: name,
+			parameters: Type.Object({}),
+			executionMode: "parallel",
+			async execute() {
+				executed.push(name);
+				return {
+					content: [{ type: "text", text: name }],
+					details: {},
+					...(name === "gate" ? { stopTurn: true } : {}),
+				};
+			},
+		}));
+		let llmCalls = 0;
+		const stream = agentLoop(
+			[createUserMessage("do work")],
+			{ systemPrompt: "", messages: [], tools },
+			{
+				model: createModel(),
+				convertToLlm: identityConverter,
+			},
+			undefined,
+			() => {
+				const output = new MockAssistantStream();
+				const first = llmCalls++ === 0;
+				queueMicrotask(() => {
+					const message = first
+						? createAssistantMessage(
+								["a", "gate", "c"].map((name) => ({ type: "toolCall", id: name, name, arguments: {} })),
+								"toolUse",
+							)
+						: createAssistantMessage([{ type: "text", text: "continued" }]);
+					output.push({ type: "done", reason: first ? "toolUse" : "stop", message });
+				});
+				return output;
+			},
+		);
+		const events: AgentEvent[] = [];
+		for await (const event of stream) events.push(event);
+		expect(executed.sort()).toEqual(["a", "c", "gate"]);
+		expect(llmCalls).toBe(1);
+		expect(events.filter((event) => event.type === "tool_execution_end")).toHaveLength(3);
+	});
+
 	it("should stop after a tool batch when every tool result sets terminate=true", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {

@@ -171,7 +171,7 @@ test.each([false, true])(
 			hasCommittedChanges: false,
 			trackedDirty: false,
 			untrackedFiles: !external,
-			hasFinalText: true,
+			hasFinalText: false,
 			status: "follow_up",
 			willFollowUp: true,
 		});
@@ -231,7 +231,7 @@ test.each([false, true])(
 		const { harness, planPath, run } = await setup(external, false);
 		expect(await run()).toBe(0);
 		expect(getUserTexts(harness)).toHaveLength(1);
-		expect(harness.getPendingResponseCount()).toBe(1);
+		expect(harness.getPendingResponseCount()).toBe(2);
 		expect(readFileSync(planPath, "utf8")).toBe("# Proposal\nCheck the parser and tests.\n");
 		const exit = harness.eventsOfType("tool_execution_end").find((event) => event.toolName === "exit_plan_mode");
 		expect(exit?.result.details).toMatchObject({
