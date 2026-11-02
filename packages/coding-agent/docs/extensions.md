@@ -2176,6 +2176,15 @@ pi.registerTool({
 
 For `user_bash`, extensions can reuse step's local shell backend via `createLocalBashOperations()` instead of reimplementing local process spawning, shell resolution, and process-tree termination.
 
+`BashOperations.exec` returns command facts: `exitCode`, and optional `signal`,
+`timedOut`, `aborted`, and `timeoutSeconds`. Throw only for an invocation fault,
+such as a failed spawn or executor connection. Adapters that previously threw
+strings such as `timeout:5` or `aborted` after execution must return these facts
+instead; textual status exceptions are no longer interpreted as command state.
+The existing `{ exitCode }` result remains supported. Command tools retain the
+facts in `details.execution`; `user_bash` records them as the optional
+`BashExecutionMessage.execution`. See [command outcomes](session-format.md#command-tool-outcomes).
+
 The `bash` and `powershell` tools also support a spawn hook to adjust the command, cwd, or env before execution:
 
 ```typescript

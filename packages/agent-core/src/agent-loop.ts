@@ -13,6 +13,7 @@ import {
 	validateToolArguments,
 } from "@step-harness/providers";
 import { getDefaultStreamFn } from "./stream-fn.ts";
+import { ToolExecutionError } from "./tool-error.ts";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -835,6 +836,7 @@ async function executePreparedToolCall(
 	let idle: Promise<void> | undefined;
 	// Wrapped so a listener that throws `undefined` is still recorded as a failure.
 	let deliveryFailure: { error: unknown } | undefined;
+	let completedResult: AgentToolResult<any> | undefined;
 
 	const deliver = async (): Promise<void> => {
 		delivering = true;
@@ -878,6 +880,7 @@ async function executePreparedToolCall(
 
 	try {
 		const result = await prepared.tool.execute(prepared.toolCall.id, prepared.args as never, signal, forward);
+		completedResult = result;
 		// Stop accepting frames, then let the last one land before returning the
 		// result, so a consumer sees progress and then completion, not the reverse.
 		acceptingUpdates = false;
@@ -890,12 +893,15 @@ async function executePreparedToolCall(
 		// The tool's own failure is what stopped the call; a listener failure is a
 		// second cause and must not be hidden by it (or repeat it).
 		const causes = deliveryFailure && deliveryFailure.error !== error ? [error, deliveryFailure.error] : [error];
-		return {
-			result: createErrorToolResult(
-				causes.map((cause) => (cause instanceof Error ? cause.message : String(cause))).join("\n"),
-			),
-			isError: true,
-		};
+		const retained = error instanceof ToolExecutionError ? error.result : completedResult;
+		const result =
+			error instanceof ToolExecutionError && causes.length === 1
+				? error.result
+				: createErrorToolResult(
+						causes.map((cause) => (cause instanceof Error ? cause.message : String(cause))).join("\n"),
+						retained,
+					);
+		return { result, isError: true };
 	}
 }
 
@@ -934,7 +940,7 @@ async function finalizeExecutedToolCall(
 				isError = afterResult.isError ?? isError;
 			}
 		} catch (error) {
-			result = createErrorToolResult(error instanceof Error ? error.message : String(error));
+			result = createErrorToolResult(error instanceof Error ? error.message : String(error), result);
 			isError = true;
 		}
 	}
@@ -946,10 +952,20 @@ async function finalizeExecutedToolCall(
 	};
 }
 
-function createErrorToolResult(message: string): AgentToolResult<any> {
+function createErrorToolResult(message: string, observed?: AgentToolResult<any>): AgentToolResult<any> {
 	return {
-		content: [{ type: "text", text: message }],
-		details: {},
+		...observed,
+		isError: true,
+		content: [
+			{
+				type: "text",
+				text: observed
+					? `${message}\nThe tool may already have run; check its effects before repeating a state-changing call.`
+					: message,
+			},
+			...(observed?.content ?? []),
+		],
+		details: observed?.details ?? {},
 	};
 }
 
@@ -980,6 +996,7 @@ async function emitToolExecutionEnd(
 			finalized.isError = true;
 		}
 	}
+	finalized.result = { ...finalized.result, isError: finalized.isError };
 	await emit({
 		type: "tool_execution_end",
 		toolCallId: finalized.toolCall.id,

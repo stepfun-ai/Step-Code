@@ -44,6 +44,7 @@ export * from "./agent.ts";
 // Loop functions
 export * from "./agent-loop.ts";
 export * from "./harness/agent-harness.ts";
+export * from "./harness/command-outcome.ts";
 export {
 	type BranchPreparation,
 	type BranchSummaryDetails,
@@ -157,5 +158,6 @@ export * from "./proxy.ts";
 export * from "./search/index.ts";
 // Stream defaults
 export { setDefaultStreamFn } from "./stream-fn.ts";
+export * from "./tool-error.ts";
 // Types
 export * from "./types.ts";

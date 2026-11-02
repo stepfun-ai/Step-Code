@@ -438,7 +438,16 @@ describe("Agent", () => {
 		const end = events.find((event) => event.type === "tool_execution_end");
 		expect(end).toMatchObject({
 			isError: true,
-			result: { content: [{ type: "text", text: "frame subscriber failed" }] },
+			result: {
+				isError: true,
+				content: [
+					{
+						type: "text",
+						text: "frame subscriber failed\nThe tool may already have run; check its effects before repeating a state-changing call.",
+					},
+					{ type: "text", text: "done" },
+				],
+			},
 		});
 		expect(events.at(-1)?.type).toBe("agent_end");
 	});

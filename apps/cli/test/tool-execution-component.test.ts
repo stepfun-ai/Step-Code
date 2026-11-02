@@ -207,6 +207,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toMatch(/line-4000[^\n]*\n[^\S\n]*\n \[Full output:/);
 		expect(rendered).not.toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\n \[Full output:/);
 		expect(rendered).toContain("Truncated: showing 2000 of 4000 lines");
+		expect(rendered).toContain("Command exited with code 0");
 		expect(rendered).not.toContain("[Showing lines 2001-4000 of 4000. Full output:");
 	});
 

@@ -391,6 +391,8 @@ export {
 } from "./core/tools/edit-diff.ts";
 // Tools
 export {
+	type BashExecutionOutcome,
+	type BashExecutionResult,
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,

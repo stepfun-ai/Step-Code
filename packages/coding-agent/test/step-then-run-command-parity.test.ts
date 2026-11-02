@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionContext } from "../src/core/extensions/types.ts";
 import type { BashOperations } from "../src/core/tools/bash.ts";
 import { createStepToolProfile, type StepThenRunDetails } from "../src/step/tool-profile.ts";
+import { initTheme, theme } from "../src/theme/theme.ts";
 
 type Tool = ReturnType<typeof createStepToolProfile>[number];
 type Result = Awaited<ReturnType<Tool["execute"]>>;
@@ -166,20 +167,26 @@ describe("then_run uses run_command execution", () => {
 			undefined as never,
 		);
 		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("after\n");
-		expect(commandDetails(result)).toEqual({
+		expect(commandDetails(result)).toMatchObject({
 			command: "printf failed; exit 3",
 			exitCode: 3,
 			timedOut: false,
 			stepTruncated: false,
+			execution: {
+				status: "exited",
+				exitCode: 3,
+				timedOut: false,
+				aborted: false,
+				signal: null,
+				timeoutSeconds: 120,
+			},
 		});
 		expect(text(result)).toMatch(/Command exited with code 3$/u);
 		expect(result).not.toHaveProperty("isError", true);
 	});
 
-	it("keeps timeout failure distinct from caller cancellation", async () => {
-		const exec = vi.fn<BashOperations["exec"]>(async () => {
-			throw new Error("timeout:1");
-		});
+	it("keeps an execution deadline distinct from caller cancellation", async () => {
+		const exec = vi.fn<BashOperations["exec"]>(async () => ({ exitCode: null, signal: "SIGTERM", timedOut: true }));
 		const { write } = profile({ exec });
 		const context = { cwd: directory, commandTimeoutMs: 1_000 } as unknown as ExtensionContext;
 		const result = await write.execute(
@@ -190,7 +197,39 @@ describe("then_run uses run_command execution", () => {
 			context,
 		);
 		expect(commandDetails(result)).toMatchObject({ exitCode: null, timedOut: true });
+		expect(result).not.toHaveProperty("isError", true);
 		expect(text(result)).toContain("Command timed out after 1 seconds");
+		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("applied\n");
+	});
+
+	it("keeps the signal visible in an expanded embedded command result", async () => {
+		initTheme("dark", false);
+		const { write } = profile({
+			exec: async (_command, _cwd, { onData }) => {
+				onData(Buffer.from("fixture output"));
+				return { exitCode: null, signal: "SIGTERM" };
+			},
+		});
+		const args = { path: "sample.txt", content: "applied\n", then_run: "check" };
+		const result = await write.execute("write-signal", args, undefined, undefined, undefined as never);
+		const rendered = write.renderResult!(result, { expanded: true, isPartial: false }, theme, {
+			args,
+			toolCallId: "write-signal",
+			invalidate() {},
+			lastComponent: undefined,
+			state: {},
+			cwd: directory,
+			executionStarted: true,
+			argsComplete: true,
+			isPartial: false,
+			expanded: true,
+			showImages: false,
+			isError: false,
+		} as never)
+			.render(200)
+			.join("\n");
+		expect(rendered).toContain("fixture output");
+		expect(rendered).toContain("SIGTERM");
 		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("applied\n");
 	});
 
@@ -213,6 +252,25 @@ describe("then_run uses run_command execution", () => {
 		).rejects.toThrow(/Wrote 8 chars[\s\S]*then_run: \$ check[\s\S]*Command aborted/u);
 		expect(exec).toHaveBeenCalledTimes(1);
 		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("applied\n");
+	});
+
+	it("retains an applied mutation while reporting a real check executor fault", async () => {
+		const exec = vi.fn<BashOperations["exec"]>(async () => {
+			throw new Error("executor unavailable");
+		});
+		const { write } = profile({ exec });
+		const result = await write.execute(
+			"write-check-fault",
+			{ path: "sample.txt", content: "applied\n", then_run: "check" },
+			undefined,
+			undefined,
+			undefined as never,
+		);
+		expect(result.isError).toBe(true);
+		expect(result.details).toMatchObject({ changed: true, thenRun: { exitCode: null, timedOut: false } });
+		expect(text(result)).toContain("executor unavailable");
+		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("applied\n");
+		expect(exec).toHaveBeenCalledTimes(1);
 	});
 
 	it("skips empty checks, but executes a check after a no-op edit", async () => {

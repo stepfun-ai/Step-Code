@@ -1,4 +1,6 @@
 export {
+	type BashExecutionOutcome,
+	type BashExecutionResult,
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
