@@ -1595,7 +1595,7 @@ test("clarification pages restore after reload, preserve drafts and auto-submit 
   await browser.goto(`${origin}/`);
   await browser.run(`
     const row = await until(() => $("[data-session-id='${id}']"), "session row"); row.click();
-    await until(() => !$(".clarification-panel").hidden, "restored questions");
+    await until(() => $(".clarification-panel")?.hidden === false, "restored questions");
   `);
   const answered = await browser.run(`
     const page = () => $(".clarification-page").textContent.trim();
@@ -1621,7 +1621,7 @@ test("clarification pages restore after reload, preserve drafts and auto-submit 
     const original = window.fetch;
     window.fetch = (...args) => { if (String(args[0]).includes("/clarifications/response")) replies++; return original(...args); };
     const choice = $(".clarification-option"); choice.click(); choice.click();
-    await until(() => $(".clarification-panel").hidden, "automatic submission");
+    await until(() => $(".clarification-panel")?.hidden !== false, "automatic submission");
     window.fetch = original;
     await until(async () => (await (await fetch("/api/v1/sessions/${id}")).json()).status === "completed", "agent resume and write");
     return { first, draft, imePage, replies };
@@ -1640,17 +1640,17 @@ test("clarification close cancels the pending tool and a single freeform answer 
   await browser.run(`
     const active = $(".session-row.active").dataset.sessionId;
     await fetch("/api/v1/sessions/" + active + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "clarification fixture again" }) });
-    await until(() => !$(".clarification-panel").hidden, "new questions");
+    await until(() => $(".clarification-panel")?.hidden === false, "new questions");
     // The close control is targeted by its stable id, not its icon label.
     $("#clarificationClose").click();
-    await until(() => $(".clarification-panel").hidden, "cancelled card");
+    await until(() => $(".clarification-panel")?.hidden !== false, "cancelled card");
     await until(async () => (await (await fetch("/api/v1/sessions/" + active)).json()).status === "completed", "cancelled turn settles");
     await fetch("/api/v1/sessions/" + active + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "freeform-only" }) });
-    await until(() => !$(".clarification-panel").hidden && $(".clarification-custom textarea"), "freeform-only question");
+    await until(() => $(".clarification-panel")?.hidden === false && $(".clarification-custom textarea"), "freeform-only question");
     const editor = $(".clarification-custom textarea"); editor.value = "single answer"; editor.dispatchEvent(new Event("input"));
     await until(() => !$(".clarification-confirm").disabled, "custom input update");
     editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await until(() => $(".clarification-panel").hidden, "single automatic send");
+    await until(() => $(".clarification-panel")?.hidden !== false, "single automatic send");
     await until(async () => (await (await fetch("/api/v1/sessions/" + active)).json()).status === "completed", "single turn settles");
   `);
 });
@@ -1659,7 +1659,7 @@ test("paging ahead never submits unanswered questions, and failed auto-send can 
   const result = await browser.run(`
     const active = $(".session-row.active").dataset.sessionId;
     await fetch("/api/v1/sessions/" + active + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "clarification fixture retry" }) });
-    await until(() => !$(".clarification-panel").hidden, "questions");
+    await until(() => $(".clarification-panel")?.hidden === false, "questions");
     const page = () => $(".clarification-page").textContent.trim();
     $("[aria-label='下一题']").click(); await until(() => page() === "2 of 3", "second");
     $("[aria-label='下一题']").click(); await until(() => page() === "3 of 3", "third");
@@ -1673,8 +1673,8 @@ test("paging ahead never submits unanswered questions, and failed auto-send can 
     };
     $(".clarification-option").click();
     await until(() => !$(".clarification-confirm").disabled && $("#errorToast").textContent.includes("fixture retry"), "retryable failure");
-    const kept = !$(".clarification-panel").hidden;
-    $(".clarification-confirm").click(); await until(() => $(".clarification-panel").hidden, "retry succeeds");
+    const kept = $(".clarification-panel")?.hidden === false;
+    $(".clarification-confirm").click(); await until(() => $(".clarification-panel")?.hidden !== false, "retry succeeds");
     window.fetch = original;
     await until(async () => (await (await fetch("/api/v1/sessions/" + active)).json()).status === "completed", "turn settles");
     return { pending, kept, attempts };
@@ -3269,12 +3269,14 @@ test("plan mode's proposal keeps its review card after a reload and its approval
   const shown = await browser.run(`
     (await until(() => $("[data-session-id='${id}']"), "plan session")).click();
     const card = await until(() => $("#planReviewCard"), "review card");
-    const contents = card.textContent.includes("Read the fixture files");
+    // The card names the proposal and offers its full text; the body itself is
+    // read in the preview rail, so the card is not a wall of Markdown above the
+    // input area.
+    const contents = card.textContent.includes("Plan fixture") && Boolean(card.querySelector("#planReviewOpen"));
     const approve = Boolean($("#planApprove"));
-    // The proposal is submitted, not approved: plan mode stays on, so the strip
-    // is still there and the composer is blocked on this one decision.
-    const stripVisible = $("#planStrip").hidden === false;
-    const composerBlocked = $("#prompt").closest("[disabled]") !== null || $("#prompt").getAttribute("contenteditable") === "false";
+    // The decision replaces the composer rather than stacking above it, so "the
+    // session accepts no other input" is a rendered fact, not a flag.
+    const composerBlocked = !$(".composer-zone") && !$("#prompt");
     $("#planApprove").click();
     await until(() => !$("#planApprove"), "card settles after the decision");
     await until(async () => {
@@ -3284,17 +3286,16 @@ test("plan mode's proposal keeps its review card after a reload and its approval
     return {
       contents,
       approve,
-      stripVisible,
       composerBlocked,
       settled: !$("#planApprove"),
-      // The decision landed: the mode is off, so the strip is gone again.
-      decided: $("#planStrip").hidden === true,
+      // The decision landed: the input area is back, and the plan strip with it
+      // is gone because the mode is off.
+      decided: Boolean($(".composer-zone")) && $("#planStrip")?.hidden !== false,
     };
   `);
   assert.deepEqual(shown, {
     contents: true,
     approve: true,
-    stripVisible: true,
     composerBlocked: true,
     settled: true,
     decided: true,
