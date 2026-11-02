@@ -176,6 +176,30 @@ test("a caller handoff leaves the decision pending across a resume", async () =>
 	expect(harness.session.hasPendingUserDecision).toBe(false);
 });
 
+test("notes sent mid-run reach the model as they are, with no second message", async () => {
+	// The revision is one message: the user's notes. A hidden companion could not
+	// be kept in the same request — the follow-up queue delivers one message per
+	// request by default — and would tell the model to resubmit before it had
+	// read what to change.
+	const { harness } = await createPlanHarness("step-plan-gate-revision-");
+	const seen: string[][] = [];
+	harness.setResponses([
+		async () => {
+			await harness.session.sendUserMessage("NOTES", { deliverAs: "followUp" });
+			return fauxAssistantMessage("still running");
+		},
+		(context) => {
+			seen.push(context.messages.map((message) => JSON.stringify(message)));
+			return fauxAssistantMessage("revised");
+		},
+	]);
+	await harness.session.prompt("kick");
+
+	const request = seen.at(-1) ?? [];
+	expect(request.some((message) => message.includes("NOTES"))).toBe(true);
+	expect(request.some((message) => message.includes("call exit_plan_mode again"))).toBe(false);
+});
+
 test("a compaction does not leave a decision nobody can answer", async () => {
 	const { harness, planPath } = await createPlanHarness("step-plan-gate-compact-");
 	await handoff(harness, planPath);

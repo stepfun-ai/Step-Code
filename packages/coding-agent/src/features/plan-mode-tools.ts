@@ -44,8 +44,14 @@ export interface StepPlanModeController {
 	 * answered proposal cannot look pending.
 	 */
 	recordPendingProposal(planHash: string): void;
-	/** The hash of the proposal waiting for an answer, or undefined. */
-	pendingProposalHash(): string | undefined;
+	/**
+	 * Hand the proposal to a caller: record the wait and leave the mode together.
+	 *
+	 * One transition, not two: a caller that got only half of it would either
+	 * hold automatic work for a proposal it never received, or receive a proposal
+	 * the session does not hold a decision for.
+	 */
+	handOffProposal(planHash: string, outcome: StepPlanExitOutcome, extensionContext: ExtensionContext): void;
 	/** The proposal was answered (approved, revised, or left); nothing waits now. */
 	clearPendingProposal(): void;
 }
@@ -224,8 +230,7 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 			// answered by nobody still has to hold automatic starters back, so the
 			// handoff records it here too.
 			if (ctx.mode === "rpc") {
-				planMode.recordPendingProposal(planHash);
-				planMode.exitPlanMode("auto_rpc", ctx);
+				planMode.handOffProposal(planHash, "auto_rpc", ctx);
 				ctx.ui.notify(
 					"RPC host has no plan-review bridge; caller approval is required before execution.",
 					"warning",
@@ -237,8 +242,7 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				);
 			}
 			if (!ctx.hasUI) {
-				planMode.recordPendingProposal(planHash);
-				planMode.exitPlanMode("auto_headless", ctx);
+				planMode.handOffProposal(planHash, "auto_headless", ctx);
 				return reviewedResult(
 					`Plan mode exited. Plan file kept at ${planFilePath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show interactive prompt; caller must gate approval externally. This turn ends now.`,
 					reviewed("external_approval_required"),

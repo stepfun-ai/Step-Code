@@ -791,10 +791,11 @@ Response:
 
 #### get_last_assistant_text
 
-Get the text content of the last assistant message. When the run handed a plan
-proposal to the caller and no user message has answered it yet, this returns the
-handoff text (the proposal) instead, because the assistant message only
-introduces the submission.
+Get the text content of the last assistant message. While the session still
+holds an unanswered plan proposal (`pendingProposalHash` in the `step-plan`
+entry), this returns the handoff text for that exact snapshot instead, because
+the assistant message only introduces the submission. `/plan approve`, a request
+for changes, or `/plan off` clears the proposal and the assistant text returns.
 
 ```json
 {"type": "get_last_assistant_text"}

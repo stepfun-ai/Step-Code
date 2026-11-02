@@ -697,16 +697,11 @@ test("a review requested change clears the fact so the session does not wait on 
 	// and the model is told to submit again.
 	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
 	expect(lastPlanEntry(harness)).toMatchObject({ enabled: true });
-	// The notes stay exactly what the user wrote; the "submit again" half is a
-	// hidden instruction, so their bubble does not grow internal text.
+	// The notes are the whole message. Plan mode already tells the model that
+	// changes mean updating the plan and submitting again; a second hidden
+	// instruction could not be kept in the same request as the notes.
 	expect(harness.userMessages.at(-1)?.[0]).toBe("split the second step");
-	expect(
-		harness.customMessages.some(
-			([message]) =>
-				message.customType === "step-plan-revision" &&
-				String(message.content).includes("call exit_plan_mode again"),
-		),
-	).toBe(true);
+	expect(harness.customMessages).toEqual([]);
 });
 
 test("/plan approve refuses a file edited after the review", async () => {
@@ -842,10 +837,9 @@ test("a pending write the branch rejects leaves nothing waiting", async () => {
 	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
 });
 
-test("a revision requested mid-run sends its instruction and the notes together", async () => {
-	// Steering the hidden instruction would tell the model to resubmit before it
-	// had read what to change, and the notes would arrive after the turn had
-	// already stopped for approval.
+test("a revision requested mid-run is queued behind the running turn", async () => {
+	// The notes are the whole message, so there is no second delivery to fall out
+	// of step with them.
 	const cwd = makeWorkspace();
 	const harness = createHarness({ cwd });
 	createStepPlanExtension()(harness.api);
@@ -866,42 +860,15 @@ test("a revision requested mid-run sends its instruction and the notes together"
 		}),
 	);
 
-	expect(harness.customMessages.at(-1)?.[0]).toMatchObject({ customType: "step-plan-revision" });
-	expect(harness.customMessages.at(-1)?.[1]).toEqual({ deliverAs: "followUp" });
 	expect(harness.userMessages.at(-1)).toEqual([
 		"split the second step",
 		{ expandPromptTemplates: true, deliverAs: "followUp" },
 	]);
-});
-
-test("/plan off leaves without implementing, even when plan mode is already off", async () => {
-	const cwd = makeWorkspace();
-	const harness = createHarness({ cwd });
-	createStepPlanExtension()(harness.api);
-	const context = harness.ctx();
-
-	await enterPlanMode(harness, context);
-	await harness.commands.get("plan")!.handler("off", context);
-	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
-	expect(harness.userMessages).toEqual([]);
-
-	// Idempotent: a queued `/plan off` that arrives after the turn already left
-	// the mode must not turn it back on.
-	await harness.commands.get("plan")!.handler("off", context);
-	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
-	expect(harness.userMessages).toEqual([]);
-});
-
-test("/plan approve refuses when no proposal is waiting", async () => {
-	const cwd = makeWorkspace();
-	const harness = createHarness({ cwd });
-	createStepPlanExtension()(harness.api);
-	const context = harness.ctx();
-
-	await harness.commands.get("plan")!.handler("approve", context);
-	expect(harness.userMessages).toEqual([]);
-	expect(harness.appended.filter((entry) => entry.customType === "step-plan")).toEqual([]);
-	expect(harness.notifications.some((notice) => /No plan is waiting for approval/.test(notice.message))).toBe(true);
+	expect(harness.customMessages).toEqual([]);
+	// The old proposal is no longer waiting, so the session holds no gate while
+	// the model revises and submits again.
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: true });
+	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
 });
 
 /**

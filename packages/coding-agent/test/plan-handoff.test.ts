@@ -34,7 +34,23 @@ test("the session fact decides, not the shape of the transcript", () => {
 	expect(pendingHandoffText(undefined, messages)).toBeUndefined();
 });
 
-test("a user message after the handoff ends the scan", () => {
+test("a question typed past the proposal does not hide it", () => {
+	// A message is not a decision: the host's user is still deciding, and the
+	// caller still has to be shown what it would approve.
 	const messages = [handoff, user] as AgentMessage[];
-	expect(pendingHandoffText({ pendingProposalHash: "a".repeat(64) }, messages)).toBeUndefined();
+	expect(pendingHandoffText({ pendingProposalHash: "a".repeat(64) }, messages)).toBe(
+		"Review this plan.\n\n# Plan\n1. Do it",
+	);
+});
+
+test("a newer submission before its own result is not reported as the old text", () => {
+	// The fact names the snapshot; the transcript tail may still be the older
+	// round, whose text the user is no longer looking at.
+	const older = { ...handoff, details: { ...handoff.details, planHash: "a".repeat(64) } };
+	const newer = { ...handoff, details: { ...handoff.details, planHash: "b".repeat(64) } };
+	const messages = [older, newer] as AgentMessage[];
+	expect(pendingHandoffText({ pendingProposalHash: "b".repeat(64) }, messages)).toBe(
+		"Review this plan.\n\n# Plan\n1. Do it",
+	);
+	expect(pendingHandoffText({ pendingProposalHash: "c".repeat(64) }, messages)).toBeUndefined();
 });

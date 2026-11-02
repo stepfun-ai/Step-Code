@@ -186,12 +186,14 @@ the loop after the batch even when a sibling result does not set `terminate`:
 - Earlier calls in the batch are not rolled back.
 
 The barrier ends that Agent Loop invocation. The session may still start another
-turn for input queued after `agent_end` or for automatic context maintenance, so
-a host that must not proceed without approval keeps that gate on its own side —
-which is why the headless and RPC handoffs are gated by the caller.
+turn for input queued after `agent_end` or for automatic context maintenance. The
+proposal that a handoff left waiting is still recorded in the session, so the
+guard below holds those turns too; a caller that owns the approval also gates
+execution on its own side.
 
 Inside the session, the plan extension registers one automatic-turn guard with
-`ctx.registerAutomaticTurnGuard`: is a proposal still waiting for its decision.
+`ctx.registerAutomaticTurnGuard`, and it asks one question: is a proposal still
+waiting for its decision.
 The answer is the session fact `pendingProposalHash`, not the shape of the
 transcript. A decision clears it — `/plan approve`, a request for changes, or
 leaving plan mode — while a question typed past the proposal does not: on a host

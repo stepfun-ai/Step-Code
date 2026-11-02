@@ -205,6 +205,25 @@ export function getStepPlanState(
 	return undefined;
 }
 
+/**
+ * The wait recorded on a session's branch, tolerating a session without one.
+ *
+ * The protocol hosts accept lightweight session facades in tests and embeds, and
+ * a reply they owe the caller must not be the thing a missing branch breaks.
+ */
+export function pendingProposalOf(session: {
+	sessionManager?: { getBranch?: () => readonly { type: string; customType?: string; data?: unknown }[] };
+}): { pendingProposalHash?: string } | undefined {
+	let branch: readonly { type: string; customType?: string; data?: unknown }[];
+	try {
+		branch = session.sessionManager?.getBranch?.() ?? [];
+	} catch {
+		// A session that cannot report its branch has no recorded wait.
+		return undefined;
+	}
+	return getStepPlanState(branch);
+}
+
 export interface PlanModeToolCallDecision {
 	planFilePath: string;
 	targetPath: string;
@@ -510,6 +529,36 @@ export const createStepPlanExtension =
 			}
 		};
 		const recordPendingProposal = (planHash: string): void => writePendingProposal(planHash);
+		/**
+		 * Record the wait and leave the mode in one write.
+		 *
+		 * Two writes would leave a window where the branch says a proposal waits
+		 * but the caller never received one, or the reverse. The exit path is the
+		 * only place that can publish the mode change, so it is inlined here rather
+		 * than layered on top of `exit`.
+		 */
+		const handOffProposal = (planHash: string, outcome: StepPlanExitOutcome, ctx: ExtensionContext): void => {
+			if (!enabled) {
+				writePendingProposal(planHash);
+				return;
+			}
+			const previousPending = pendingProposal;
+			const previousSource = planSource;
+			pendingProposal = planHash;
+			enabled = false;
+			planSource = undefined;
+			try {
+				persistPlanState(undefined, false);
+			} catch (error) {
+				pendingProposal = previousPending;
+				enabled = true;
+				planSource = previousSource;
+				throw error;
+			}
+			recordPlanExit(options.telemetry, previousSource, outcome);
+			restoreTools();
+			updateStatus(ctx, enabled, planSource);
+		};
 		const clearPendingProposal = (): void => {
 			if (pendingProposal === undefined) return;
 			writePendingProposal(undefined);
@@ -519,7 +568,7 @@ export const createStepPlanExtension =
 			exitPlanMode: exit,
 			resolvePlanFilePath,
 			recordPendingProposal,
-			pendingProposalHash: () => pendingProposal,
+			handOffProposal,
 			clearPendingProposal,
 		};
 
@@ -530,7 +579,7 @@ export const createStepPlanExtension =
 		});
 		pi.registerCommand("plan", {
 			description:
-				"Toggle plan mode, `/plan <task>` to plan a task, `/plan off` to leave, or `/plan approve` to accept a submitted proposal",
+				"Toggle plan mode with `/plan`, or `/plan on` and `/plan off` to state it outright. `/plan <task>` plans a task, `/plan approve [hash]` accepts a submitted proposal",
 			handler: async (args, ctx) => {
 				const prompt = args.trim();
 				if (!prompt) {
@@ -610,43 +659,27 @@ export const createStepPlanExtension =
 					);
 					return;
 				}
-				// `/plan <task>` is "plan this", never "toggle": make sure plan mode is on,
-				// then hand the task to the model as an ordinary user turn. Tool
-				// restriction has already been applied by enter(), so the turn starts
-				// with the plan-mode tool set. Slash commands run even mid-stream; queue
-				// the task behind the current turn in that case instead of throwing.
-				if (!enabled) enter(ctx);
+				// `/plan <task>` is "plan this", never "toggle": make sure plan mode is
+				// on, then hand the task to the model as an ordinary user turn. Slash
+				// commands run even mid-stream; queue the task behind the current turn
+				// in that case instead of throwing.
+				//
 				// A note on a proposal under review replaces it: the old snapshot is no
-				// longer waiting for an answer, and the model has to submit again or the
-				// session would wait on a proposal nobody is looking at.
-				const revising = pendingProposal !== undefined;
+				// longer waiting for an answer, so the session does not hold a gate for
+				// a proposal nobody is looking at. The notes are the whole message —
+				// plan mode already tells the model that changes mean updating the plan
+				// file and submitting again. A second, hidden instruction could not be
+				// kept in the same request as the notes: the follow-up queue delivers
+				// one message per request by default, so it would arrive on its own and
+				// could send the model back to submit a plan it had not revised.
+				if (!enabled) enter(ctx);
 				clearPendingProposal();
-				// Both halves travel on the same channel. Left to the default, a hidden
-				// message sent mid-run is steered into the current request while the
-				// notes wait in the follow-up queue — the model would be told to
-				// resubmit before it had read what to change, and the notes would arrive
-				// after the turn had already stopped for approval.
-				const queued = !ctx.isIdle();
-				if (revising) {
-					// The "submit again" half is an instruction, not something the user
-					// typed: a hidden message keeps it out of their bubble, and going
-					// first keeps it ahead of the notes in the same request.
-					pi.sendMessage(
-						{
-							customType: "step-plan-revision",
-							display: false,
-							content:
-								"These notes revise the proposal under review. Update the plan file, then call exit_plan_mode again to submit the new proposal for approval.",
-						},
-						queued ? { deliverAs: "followUp" } : undefined,
-					);
-				}
 				// Expand a leading `/skill:` or prompt template in the task, as the same
 				// text sent without `/plan` would be (the web composer puts its plan
 				// prefix in front of a picked skill).
 				pi.sendUserMessage(prompt, {
 					expandPromptTemplates: true,
-					...(queued ? { deliverAs: "followUp" as const } : {}),
+					...(ctx.isIdle() ? {} : { deliverAs: "followUp" as const }),
 				});
 			},
 		});
@@ -749,6 +782,17 @@ export const createStepPlanExtension =
 			// session whose proposal nobody has answered.
 			if (restoredPlanState && (restoredPlanState.version ?? 2) < 3) {
 				pendingProposal = findLegacyUnansweredHandoff(ctx.sessionManager)?.planHash;
+				// Written back once, so every reader of the branch — the automatic-turn
+				// guard, the RPC and SDK replies, a host's card — sees one fact rather
+				// than a migrated memory next to an entry that still lacks it.
+				if (pendingProposal !== undefined) {
+					try {
+						persistPlanState();
+					} catch {
+						// The wait still holds this process; the next restore retries the
+						// migration because the entry stays below version 3.
+					}
+				}
 			}
 			if (legacyBaseline) {
 				const baseline = unique([...legacyBaseline, ...activePlanTaskTools]);

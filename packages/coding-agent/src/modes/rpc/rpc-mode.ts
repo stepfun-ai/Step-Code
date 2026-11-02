@@ -26,7 +26,7 @@ import {
 	writeRawStdout,
 } from "../../core/output-guard.ts";
 import { pendingHandoffText } from "../../features/plan-handoff.ts";
-import { getStepPlanState } from "../../features/step-plan.ts";
+import { pendingProposalOf } from "../../features/step-plan.ts";
 import { type Theme, theme } from "../../theme/theme.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { toJsonEvent } from "../json-event.ts";
@@ -667,7 +667,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntimeHost, options: 
 			case "get_last_assistant_text": {
 				// The caller needs the proposal it has to approve, not the line that
 				// introduced it — but only while the decision fact says one is waiting.
-				const pending = pendingHandoffText(getStepPlanState(session.sessionManager.getBranch()), session.messages);
+				const pending = pendingHandoffText(pendingProposalOf(session), session.messages);
 				const text = pending ?? session.getLastAssistantText();
 				return success(id, "get_last_assistant_text", { text });
 			}

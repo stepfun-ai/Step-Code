@@ -3018,7 +3018,7 @@ const highlighted = highlightCode(code, lang, theme);
 | Interactive | `"tui"` | `true` | `false` | Full TUI with terminal rendering; a plan review is answered inside the tool call |
 | RPC (`--mode rpc`) | `"rpc"` | `true` | set by the host | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`. See [rpc.md](rpc.md) |
 | JSON (`--mode json`) | `"json"` | `false` | `false` | Event stream to stdout; UI methods are no-ops |
-| Print (`-p`) | `"print"` | `false` | Extensions run but can't prompt |
+| Print (`-p`) | `"print"` | `false` | `false` | Extensions run but can't prompt |
 
 Use `ctx.mode === "tui"` before TUI-specific features (`custom()`, component factories, terminal input). Use `ctx.hasUI` before dialog and notification methods that work in both TUI and RPC modes.
 

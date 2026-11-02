@@ -54,42 +54,31 @@ export function readExternalPlanHandoff(result: unknown): ExternalPlanHandoff | 
 }
 
 /**
- * The handoff this session has not been answered for yet.
- *
- * Approval belongs to the caller, so a run that hands the proposal over must not
- * be continued by any automatic turn starter. The answer is the caller's next
- * user message: once one arrives, the trailing cluster no longer ends in a
- * handoff and continuation is allowed again.
- *
- * The scan is a reverse walk that stops at the first user message, so it reads
- * only the tail of the conversation.
- */
-export function findPendingExternalPlanApproval(messages: readonly AgentMessage[]): ExternalPlanHandoff | undefined {
-	for (let index = messages.length - 1; index >= 0; index--) {
-		const message = messages[index]!;
-		if (message.role === "user") return undefined;
-		if (message.role !== "toolResult" || message.toolName !== "exit_plan_mode" || message.isError) continue;
-		const handoff = readExternalPlanHandoff(message);
-		if (handoff) return handoff;
-	}
-	return undefined;
-}
-
-/**
  * The proposal a caller should be shown instead of the assistant's last line.
  *
  * A handoff ends the turn on its tool result, so the last assistant message only
- * introduces the submission. But "still unanswered" is the session fact, not the
- * shape of the transcript: an approval that writes no user message — a decision
- * made in a host that draws the card — would leave a scan reporting the old
- * proposal forever.
+ * introduces the submission. Which proposal is still waiting is the session
+ * fact: an approval that writes no user message — a decision made in a host that
+ * draws the card — would otherwise leave a transcript scan reporting it forever.
+ *
+ * The result is the one whose details carry that exact snapshot. "The tail ends
+ * in a handoff" cannot answer this: a question typed past the proposal is not an
+ * answer, and a newer submission recorded before its own result would be
+ * reported with the older text.
  */
 export function pendingHandoffText(
 	state: { pendingProposalHash?: string } | undefined,
 	messages: readonly AgentMessage[],
 ): string | undefined {
-	if (state?.pendingProposalHash === undefined) return undefined;
-	return findPendingExternalPlanApproval(messages)?.text;
+	const pending = state?.pendingProposalHash;
+	if (pending === undefined) return undefined;
+	for (const message of [...messages].reverse()) {
+		if (message.role !== "toolResult" || message.toolName !== "exit_plan_mode" || message.isError) continue;
+		const details = message.details as { planHash?: unknown } | undefined;
+		if (details?.planHash !== pending) continue;
+		return readExternalPlanHandoff(message)?.text;
+	}
+	return undefined;
 }
 
 /**
@@ -111,12 +100,13 @@ export function findLegacyUnansweredHandoff(manager: {
 	const branch = manager.getBranch();
 	for (let index = branch.length - 1; index >= 0; index--) {
 		const entry = branch[index]!;
-		if (entry.type === "compaction" || entry.type === "branch_summary") return undefined;
 		// A plan entry above the handoff is a later transition: the handoff's own
 		// exit is written before its result, so it is still below.
 		if (entry.type === "custom" && entry.customType === "step-plan") return undefined;
 		if (entry.type !== "message" || !entry.message) continue;
 		const message = entry.message;
+		// The old gate treated a trailing handoff as unanswered, so a user message
+		// above it is how those builds recorded the answer.
 		if (message.role === "user") return undefined;
 		if (message.role !== "toolResult" || message.toolName !== "exit_plan_mode" || message.isError) continue;
 		const handoff = readExternalPlanHandoff(message);

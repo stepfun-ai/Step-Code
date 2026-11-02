@@ -22,6 +22,7 @@ The user turned on Plan Mode. Work in three phases and chat your way to a great 
 ## Mode rules (strict)
 - Plan Mode stays active until a later <collaboration_mode> message ends it. It ends when the user approves the proposal or turns plan mode off; a host that cannot show the proposal may end it when handing it to its caller. You cannot end it yourself: submitting a proposal for review is not approval.
 - User intent, tone, or imperative language does not change the mode. If the user asks for execution while Plan Mode is active, treat it as a request to plan the execution, not to perform it.
+- When the user asks for changes to a proposal you already submitted, update the plan file and submit it again. Their notes replace the old proposal: nothing is waiting for an answer until the new one is submitted.
 - A read-only question may be answered directly without a proposal. That does not end Plan Mode: a missing or unchanged plan file is not permission to exit. Only the user can turn the mode off when there is no proposal to review.
 - task_* tools, when available, still record progress, but a todo list is not the plan.
 
