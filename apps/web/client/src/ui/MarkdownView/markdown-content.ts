@@ -111,7 +111,12 @@ function Destination({ destination, children }: { readonly destination: string; 
 	const { localFiles } = useSettings();
 	if (localFileReference(destination)) {
 		return localFiles
-			? h("button", { type: "button", className: "md-file-reference", "data-file-path": destination }, children)
+			? h(
+					"button",
+					{ type: "button", className: "md-file-reference", "data-file-path": destination },
+					FILE_ICON,
+					children,
+				)
 			: h(Fragment, null, children);
 	}
 	if (isWebDestination(destination)) {
@@ -121,10 +126,11 @@ function Destination({ destination, children }: { readonly destination: string; 
 }
 
 /**
- * The globe marks a web link at a glance. It references the shared sprite
- * directly, because this module stays free of CSS imports (and so of `Icon`).
+ * The globe marks a web link and the document a local file at a glance. They reference
+ * the shared sprite directly, because this module stays free of CSS imports (and so of `Icon`).
  */
 const LINK_ICON = h("svg", { className: "md-link-icon", "aria-hidden": "true" }, h("use", { href: "#i-globe" }));
+const FILE_ICON = h("svg", { className: "md-link-icon", "aria-hidden": "true" }, h("use", { href: "#i-file" }));
 
 function MarkdownLink({ href, children }: JSX.IntrinsicElements["a"] & ExtraProps) {
 	return h(Destination, { destination: typeof href === "string" ? href : "" }, children);
