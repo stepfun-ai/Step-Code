@@ -50,8 +50,9 @@
 
 /* The cards end the answer; the changes card below is a different thing and keeps its own distance. */
 .message:has(.message-attachments) + .turn-changes { margin-top: 12px; }
-.md-file-reference { display: inline; max-width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; text-align: inherit; overflow-wrap: anywhere; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
-.md-file-reference:hover { text-decoration-color: currentColor; }
+.md-file-reference { display: inline; max-width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--link); font: inherit; font-weight: 600; text-align: inherit; overflow-wrap: anywhere; text-decoration: none; text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer; }
+.md-file-reference:hover, .md-file-reference:focus-visible { color: var(--link-hover); text-decoration: underline; }
+.md-file-reference:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
 	.attachment-card, .attachment-more > .icon { transition: none; }
 }

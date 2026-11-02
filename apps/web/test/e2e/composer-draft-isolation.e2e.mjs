@@ -10,7 +10,8 @@ import { chromium } from "playwright-core";
 import { createServer } from "vite";
 
 const webRoot = fileURLToPath(new URL("../..", import.meta.url));
-const fixtureId = join(webRoot, "client", "composer-draft-fixture.tsx");
+// Vite hands `load` forward-slash ids, so a Windows path would never match.
+const fixtureId = join(webRoot, "client", "composer-draft-fixture.tsx").replaceAll("\\", "/");
 const chromePath = [process.env.CHROME_PATH, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 	"/usr/bin/google-chrome", "/usr/bin/chromium"].find((path) => path && existsSync(path));
 const skip = chromePath ? false : "No installed Chrome; set CHROME_PATH";
@@ -364,6 +365,25 @@ test("first-send adoption keeps input empty and does not restore the sent draft"
 		assert.equal(await value(page), "typed while sending");
 		await newDraft(page);
 		assert.equal(await value(page), "");
+	} finally { await page.close(); }
+});
+
+test("a pasted image alone sends without any typed text", { skip }, async () => {
+	const page = await pageFixture();
+	try {
+		await open(page, "A");
+		await pasteFile(page, "only.png", "image/png");
+		await page.waitForFunction(() => window.fixture.getState().attachments.length === 1);
+		assert.equal(await value(page), "");
+		const message = await deferredRoute(page, "**/api/v1/sessions/A/messages");
+		await page.locator("#prompt").press("Enter");
+		const body = (await message.ready).postDataJSON();
+		assert.equal(body.text, "");
+		assert.equal(body.attachments.length, 1);
+		assert.equal(body.attachments[0].name, "only.png");
+		message.release({ json: { ok: true } });
+		await settledSend(page, "session:A");
+		assert.equal(await page.evaluate(() => window.fixture.getState().attachments.length), 0);
 	} finally { await page.close(); }
 });
 

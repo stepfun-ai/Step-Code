@@ -9,6 +9,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { formatRelativeTime, useT } from "../../i18n";
 import { api, errorMessage } from "../../lib/api";
+import { splitAttachedFiles } from "../../lib/attached-files";
 import { sessionTitle } from "../../state/session";
 import { useAppStore } from "../../state/store";
 import type { SettingsSkill } from "../../state/types";
@@ -326,7 +327,7 @@ export function SessionsPanel({ onPick }: { readonly onPick: (id: string) => voi
 						key={session.id}
 						name={sessionTitle(session)}
 						hint={formatRelativeTime(session.modified)}
-						description={session.firstMessage}
+						description={splitAttachedFiles(session.firstMessage ?? "").text}
 						onClick={() => onPick(session.id)}
 					/>
 				));

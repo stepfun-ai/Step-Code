@@ -45,11 +45,17 @@ test("rejects unsafe schemes, network shares, malformed encodings and workspace 
 test("file references are opt-in keyboard buttons, not browser file navigation", () => {
 	const text = "[Report](<file:///D:/Work/report%20one.md>) and `Output/report.md:10`";
 	const html = renderMarkdown(text, { localFiles: true });
-	assert.match(html, /<button type="button" class="md-file-reference" data-file-path="file:\/\/\/D:\/Work\/report%20one.md">Report<\/button>/);
+	assert.match(html, /<button type="button" class="md-file-reference" data-file-path="file:\/\/\/D:\/Work\/report%20one.md"><svg class="md-link-icon" aria-hidden="true"><use href="#i-file"><\/use><\/svg>Report<\/button>/);
 	assert.match(html, /<code>Output\/report.md:10<\/code>/);
 	assert.doesNotMatch(html, /data-file-path="Output/);
 	assert.doesNotMatch(html, /href="file:/);
 	assert.doesNotMatch(renderMarkdown(text), /md-file-reference/);
+	// Markdown percent-encodes the backslashes of a bare Windows path; it is still a file reference.
+	const windows = renderMarkdown("[logo.ai](D:\\Work\\logo.ai)", { localFiles: true });
+	assert.match(windows, /class="md-file-reference" data-file-path="D:%5CWork%5Clogo.ai">/);
+	assert.equal(workspaceFileReference("D:/Work", "D:%5CWork%5Cout%5Clogo.ai"), "out/logo.ai");
+	assert.equal(localFileReference("D:%2Fx.ai"), "D:/x.ai");
+	assert.equal(localFileReference("D:%41x.ai"), undefined, "only an encoded separator may follow the drive");
 });
 
 test("delivery recognition shares renderer parsing and ignores complete or unfinished code fences", () => {

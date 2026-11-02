@@ -77,6 +77,7 @@ import {
 	removeSlashToken,
 	replaceFileQuery,
 	restoreFailedPrompt,
+	setPromptMessage,
 	setPromptText,
 	snapshotPrompt,
 	waitForUploads,
@@ -312,8 +313,11 @@ function ComposerInput({
 		[syncHasText],
 	);
 	const edit = variant === "edit";
+	/** Staged images are content on their own: a message may be just a pasted screenshot. */
+	const hasMainAttachments = useAppStore((state) => state.attachments.length > 0);
+	const hasAttachments = edit ? rewriteImages.length > 0 : hasMainAttachments;
 	// The in-place editor rewrites one message; it is never the run's stop button.
-	const stopMode = !edit && status === "running" && !hasText;
+	const stopMode = !edit && status === "running" && !hasText && !hasAttachments;
 	/* Rewriting: the edit instance starts from the message's text and submits a fork. */
 	const editingPrompt = useAppStore((state) => state.ui.editingPrompt);
 	const editLoaded = useRef(false);
@@ -322,11 +326,11 @@ function ComposerInput({
 		editLoaded.current = true;
 		const editor = prompt.current;
 		if (!editor) return;
-		// Focus before filling: setPromptText parks the caret at the end only when
+		// Focus before filling: setPromptMessage parks the caret at the end only when
 		// the editor already holds focus, so a fill-then-focus leaves it at the start.
 		editor.focus();
-		setPromptText(editor, editingPrompt.text);
-		setHasText(Boolean(editingPrompt.text.trim()));
+		setPromptMessage(editor, editingPrompt.text);
+		setHasText(Boolean(promptText(editor).trim()));
 	}, [edit, editingPrompt]);
 
 	const menu = (name: ComposerMenu) => ({
@@ -486,7 +490,8 @@ function ComposerInput({
 			// A command chip placed mid-text is sent first, where the kernel runs it.
 			const text = promptMessageText(editor).trim();
 			const files = promptFiles(editor);
-			if (!text) return;
+			const attachments = edit ? rewriteAttachments.current : getState().attachments;
+			if (!text && !attachments.length) return;
 			// A send starts from the draft, not from its render: the preview goes either way.
 			dismissPreview();
 			// `/btw` is a side question, not a message: it opens its own rail tab and
@@ -671,7 +676,7 @@ function ComposerInput({
 			form.current?.requestSubmit();
 			return;
 		}
-		if (promptText(editor).trim()) {
+		if (promptText(editor).trim() || (edit ? rewriteAttachments.current : getState().attachments).length) {
 			void submit(true);
 			return;
 		}

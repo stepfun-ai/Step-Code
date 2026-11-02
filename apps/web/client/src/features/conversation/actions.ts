@@ -159,7 +159,7 @@ export async function rewritePrompt(
 ): Promise<boolean> {
 	const state = getState();
 	const current = state.current;
-	if (!current || !text.trim()) return false;
+	if (!current || (!text.trim() && !attachments.length)) return false;
 	try {
 		const result = await apiSend<{ sessionId: string }>(`/api/v1/sessions/${current.id}/fork`, "POST", {
 			...(before ? { entryId: before } : {}),

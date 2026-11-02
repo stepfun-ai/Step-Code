@@ -90,12 +90,30 @@ test("a finished edit or write shows in the turn's changes before any snapshot",
 	]);
 });
 
-test("a failed, unchanged or unfinished call adds no change", () => {
+test("a failed call that changed the file still shows its change", () => {
 	open();
-	runTool("c1", "write_file", { path: "a.json" }, { details: { patch: patch("a.json") } }, true);
-	runTool("c2", "write_file", { path: "b.json" }, { details: { changed: false } });
-	agent({ type: "tool_execution_start", toolCallId: "c3", toolName: "edit_file", args: { path: "c.json" } });
-	agent({ type: "tool_execution_end", toolCallId: "c4", toolName: "run_command", result: { details: {} } });
+	// A cancelled then_run: the edit landed, the call reports an error.
+	runTool("c1", "edit_file", { path: "a.ts" }, { details: { patch: patch("a.ts") } }, true);
+	runTool("c2", "write_file", { path: "b.json" }, { details: { changed: true, patch: patch("b.json") } }, true);
+	assert.deepEqual(shownFiles(), [
+		["a.ts", 1],
+		["b.json", 1],
+	]);
+	// The change shows beside a row that still reads as failed; the two facts are separate.
+	const states = getState()
+		.timelineItems.filter((item) => item.kind === "tool")
+		.map((item) => item.state);
+	assert.deepEqual(states, ["failed", "failed"]);
+});
+
+test("a failed call that never wrote adds no change", () => {
+	open();
+	// The search string did not match, so the call recorded no change.
+	runTool("c1", "edit_file", { path: "a.ts" }, { details: { changed: false } }, true);
+	runTool("c2", "write_file", { path: "b.json" }, {}, true);
+	runTool("c3", "write_file", { path: "d.json" }, { details: { changed: false } });
+	agent({ type: "tool_execution_start", toolCallId: "c4", toolName: "edit_file", args: { path: "c.json" } });
+	agent({ type: "tool_execution_end", toolCallId: "c5", toolName: "run_command", result: { details: {} } });
 	assert.deepEqual(shownFiles(), []);
 });
 
