@@ -179,6 +179,7 @@ function createHarness(): Harness {
 		cwd: makeDirectory(),
 		isIdle: () => true,
 		hasPendingMessages: () => false,
+		hasPendingUserDecision: () => false,
 		isProjectTrusted: () => true,
 		ui: { notify: vi.fn() },
 		sessionManager: { getSessionId: () => "cron-session", getEntries: () => [] },
@@ -591,6 +592,35 @@ test("cron waits for pending user input and drains at agent_settled", async () =
 	vi.advanceTimersByTime(60_000);
 	expect(harness.sent).toEqual([]);
 	pending = false;
+	await emitCron(harness, "agent_settled");
+	expect(harness.sent).toHaveLength(1);
+	await emitCron(harness, "session_shutdown");
+});
+
+test("a due job stays due while a decision is pending", async () => {
+	vi.useFakeTimers();
+	vi.setSystemTime(new Date(2026, 0, 1, 12, 0));
+	const harness = createHarness();
+	let awaitingDecision = true;
+	Object.assign(harness.ctx, { hasPendingUserDecision: () => awaitingDecision });
+	createStepCronExtension({ enabled: true })(harness.api);
+	await emitCron(harness, "session_start");
+	await harness.tools
+		.get("cron_create")!
+		.execute("create", { cron: "* * * * *", prompt: "audit", recurring: false }, undefined, undefined, harness.ctx);
+	vi.advanceTimersByTime(60_000);
+	await emitCron(harness, "agent_settled");
+	// Deferred, not consumed: firing it would replay work the user may reject.
+	expect(harness.sent).toEqual([]);
+	expect(harness.tools.get("cron_create")).toBeDefined();
+	const listed = (await harness.tools
+		.get("cron_list")!
+		.execute("list", {} as never, undefined, undefined, harness.ctx)) as { content: Array<{ text: string }> };
+	expect(JSON.parse(listed.content[0]!.text)).toHaveLength(1);
+
+	// The decision is answered: the one-shot job still fires and then leaves.
+	awaitingDecision = false;
+	vi.advanceTimersByTime(60_000);
 	await emitCron(harness, "agent_settled");
 	expect(harness.sent).toHaveLength(1);
 	await emitCron(harness, "session_shutdown");

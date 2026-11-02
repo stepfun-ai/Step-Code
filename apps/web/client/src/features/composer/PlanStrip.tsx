@@ -6,6 +6,12 @@
  * disappears by itself when `exit_plan_mode` clears the state, which is what the
  * user expects after the plan review card appears.
  *
+ * The strip is also the user's way out. Leaving plan mode is the user's
+ * decision — a missing or unchanged plan file is not permission for the model to
+ * turn it off — so a host that only offers a composer has to give the user a
+ * control that says so. The button sends the same `/plan` toggle the terminal
+ * uses, so one command owns the transition on every host.
+ *
  * Stays mounted and toggles `hidden`, like every other strip here.
  */
 
@@ -13,6 +19,7 @@ import { useT } from "../../i18n";
 import { basename } from "../../lib/format";
 import { useAppStore } from "../../state/store";
 import { Icon, Tooltip } from "../../ui";
+import { sendMessage } from "./actions";
 
 export function PlanStrip() {
 	const t = useT();
@@ -32,6 +39,22 @@ export function PlanStrip() {
 			</Tooltip>
 			{path ? <span className="plan-strip-path">{name}</span> : null}
 			<span className="plan-strip-hint">{t("planStripHint")}</span>
+			{enabled ? (
+				// Leaving is the user's own command: the same `/plan` toggle the
+				// terminal and the slash menu dispatch, so there is one transition.
+				<Tooltip content={t("planStripExitHint")}>
+					<button
+						className="plan-strip-exit"
+						id="planStripExit"
+						type="button"
+						onClick={() => {
+							void sendMessage("/plan");
+						}}
+					>
+						{t("planStripExit")}
+					</button>
+				</Tooltip>
+			) : null}
 		</div>
 	);
 }

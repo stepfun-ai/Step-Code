@@ -95,6 +95,8 @@ describe("ExtensionRunner", () => {
 		getSignal: () => undefined,
 		abort: () => {},
 		hasPendingMessages: () => false,
+		hasPendingUserDecision: () => false,
+		registerAutomaticTurnGuard: () => () => {},
 		shutdown: () => {},
 		getContextUsage: () => undefined,
 		compact: () => {},

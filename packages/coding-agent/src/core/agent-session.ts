@@ -421,6 +421,10 @@ export class AgentSession {
 	private _extensionMode: ExtensionMode = "print";
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionAbortHandler?: () => void;
+	/** Predicates that block automatic turn starts until the user answers. */
+	private _automaticTurnGuards = new Set<() => boolean>();
+	/** Guards already reported as failing, so a timer read does not repeat the report. */
+	private _failingTurnGuards = new Set<() => boolean>();
 	private _extensionShutdownHandler?: ShutdownHandler;
 	private _extensionErrorListener?: ExtensionErrorListener;
 	private _extensionErrorUnsubscriber?: () => void;
@@ -440,6 +444,15 @@ export class AgentSession {
 	 * by an unrelated command but never lost — losing it is the bug being fixed.
 	 */
 	private _openCommandTurns: Promise<unknown>[][] = [];
+	/**
+	 * Source of the prompt that is currently running an extension command.
+	 *
+	 * A command handler forwards work with `sendUserMessage`, and whether that
+	 * text may answer a pending decision depends on who typed the command, not on
+	 * the API it used. Tracking the source here keeps every command — built-in or
+	 * third-party — from having to repeat it at each call site.
+	 */
+	private _commandSources: InputSource[] = [];
 
 	private _modelRuntime: ModelRuntime;
 	private _agentDir?: string;
@@ -929,7 +942,6 @@ export class AgentSession {
 		const interrupted = () =>
 			this.agent.hasQueuedMessages() ||
 			this.pendingMessageCount > 0 ||
-			this._pendingCustomMessages.length > 0 ||
 			!this.settingsManager.getCompactionEnabled() ||
 			!this.settingsManager.getAutoClmSettings().enabled ||
 			this.settingsManager.getContextProjectionMode() !== "clm-v1" ||
@@ -1599,6 +1611,8 @@ export class AgentSession {
 		this._liveContext?.dispose();
 		this._disconnectFromAgent();
 		this._eventListeners = [];
+		this._automaticTurnGuards.clear();
+		this._failingTurnGuards.clear();
 		cleanupSessionResources(this.sessionId);
 	}
 
@@ -1634,6 +1648,60 @@ export class AgentSession {
 	/** Current effective system prompt (includes any per-turn extension modifications) */
 	get systemPrompt(): string {
 		return this.agent.state.systemPrompt;
+	}
+
+	/**
+	 * Register a predicate that blocks automatic turn starts.
+	 *
+	 * A turn the user sends always runs: that message is how a pending decision
+	 * gets answered. Everything that would start a turn on the user's behalf —
+	 * an extension's `triggerTurn` message, cron, goal continuation, a background
+	 * lane waking its parent, post-run recovery — asks these predicates first, so
+	 * a feature does not have to know every other starter to keep its own gate.
+	 *
+	 * The predicate reads current session state, so it needs no clearing: once the
+	 * conversation no longer holds the pending decision, it returns false again.
+	 * A throwing guard counts as pending, because a guard that fails must not
+	 * authorize a turn the user has not approved; the error is reported so the
+	 * failure is not silent.
+	 *
+	 * Guards belong to the extension generation that registered them. A reload
+	 * drops them with the runner that owned their context, and the new generation
+	 * registers its own.
+	 *
+	 * @returns unregister function
+	 */
+	registerAutomaticTurnGuard(guard: () => boolean): () => void {
+		this._automaticTurnGuards.add(guard);
+		return () => {
+			this._automaticTurnGuards.delete(guard);
+			this._failingTurnGuards.delete(guard);
+		};
+	}
+
+	/** Whether any guard currently blocks an automatic turn start. */
+	get hasPendingUserDecision(): boolean {
+		for (const guard of this._automaticTurnGuards) {
+			try {
+				if (guard()) return true;
+			} catch (error) {
+				// Fail closed, but say so: a guard that always throws would otherwise
+				// stop every automatic turn with no visible cause. Report once per
+				// guard — the check runs on a timer path — and only while the runner
+				// that registered it is still the live one.
+				if (!this._failingTurnGuards.has(guard)) {
+					this._failingTurnGuards.add(guard);
+					this._extensionErrorListener?.({
+						extensionPath: "automatic-turn-guard",
+						event: "automatic_turn_guard",
+						error: error instanceof Error ? error.message : String(error),
+						stack: error instanceof Error ? error.stack : undefined,
+					});
+				}
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** Current retry attempt (0 if not retrying) */
@@ -1963,6 +2031,11 @@ export class AgentSession {
 			this._rateLimitRetryAttempt = 0;
 		}
 
+		// The turn ended on a decision the user has not answered yet. Continuing here
+		// would run a queued input, or a compaction recovery request, on the user's
+		// behalf; the recovered work starts from the user's next prompt instead.
+		if (this.hasPendingUserDecision) return false;
+
 		// CLM maintains context for a future request. A successful settled answer
 		// needs no extra model call; the next prompt/continuation performs the
 		// same threshold check with its new instructions. Explicit maintenance
@@ -1983,8 +2056,9 @@ export class AgentSession {
 			return true;
 		}
 
-		// The agent loop drains both queues before emitting agent_end. Any messages
-		// here were queued by agent_end extension handlers and need a continuation.
+		// The agent loop drains both queues before emitting agent_end, except when a
+		// tool result ended the turn first. Messages here were queued by `agent_end`
+		// handlers, or were still pending when a control barrier ended the run.
 		return this.agent.hasQueuedMessages();
 	}
 
@@ -2008,7 +2082,11 @@ export class AgentSession {
 			if (expandPromptTemplates && text.startsWith("/")) {
 				// A command is accepted as soon as its handler returns for prompt
 				// purposes, even though the turn it started may still be running.
-				const handled = await this._tryExecuteExtensionCommand(text, () => preflightResult?.(true));
+				const handled = await this._tryExecuteExtensionCommand(
+					text,
+					() => preflightResult?.(true),
+					options?.source ?? "interactive",
+				);
 				if (handled) {
 					// Extension command executed, no prompt to send
 					return;
@@ -2060,6 +2138,15 @@ export class AgentSession {
 				} else {
 					await this._queueSteer(expandedText, currentImages);
 				}
+				preflightResult?.(true);
+				return;
+			}
+
+			// An extension-started turn must not run past a decision the user has not
+			// answered; the message waits for the turn that answers it. A user's own
+			// message always runs, because that is how the decision gets answered.
+			if (options?.source === "extension" && this.hasPendingUserDecision) {
+				await this._queueFollowUp(expandedText, currentImages);
 				preflightResult?.(true);
 				return;
 			}
@@ -2168,7 +2255,11 @@ export class AgentSession {
 	/**
 	 * Try to execute an extension command. Returns true if command was found and executed.
 	 */
-	private async _tryExecuteExtensionCommand(text: string, onAccepted?: () => void): Promise<boolean> {
+	private async _tryExecuteExtensionCommand(
+		text: string,
+		onAccepted?: () => void,
+		source: InputSource = "interactive",
+	): Promise<boolean> {
 		// Parse command name and args
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
@@ -2187,6 +2278,7 @@ export class AgentSession {
 
 		const turns: Promise<unknown>[] = [];
 		this._openCommandTurns.push(turns);
+		this._commandSources.push(source);
 		try {
 			await command.handler(args, ctx);
 		} catch (err) {
@@ -2199,6 +2291,7 @@ export class AgentSession {
 		} finally {
 			const index = this._openCommandTurns.indexOf(turns);
 			if (index !== -1) this._openCommandTurns.splice(index, 1);
+			this._commandSources.pop();
 		}
 
 		// The handler may have handed work to the agent and returned. Acceptance is
@@ -2372,7 +2465,15 @@ export class AgentSession {
 				this.agent.steer(appMessage);
 			}
 		} else if (options?.triggerTurn) {
-			await this._runAgentPrompt(appMessage);
+			if (this.hasPendingUserDecision) {
+				// A decision the user has not answered blocks automatic starts. Hold the
+				// message in the pending set the session already owns, so it lands as
+				// context in the turn that answers the decision: queuing it on the agent
+				// would bypass the queue ledger and vanish on abort.
+				this._pendingCustomMessages.push(appMessage);
+			} else {
+				await this._runAgentPrompt(appMessage);
+			}
 		} else if (this.isStreaming) {
 			// Appending now would put the message between an assistant tool call and its
 			// result, which providers that validate message order reject on replay. Defer
@@ -2451,7 +2552,11 @@ export class AgentSession {
 			expandPromptTemplates: options?.expandPromptTemplates ?? false,
 			streamingBehavior: options?.deliverAs,
 			images,
-			source: options?.source ?? "extension",
+			// A command handler forwarding the user's own request passes that origin
+			// through: the user typed the command, so the text may answer a pending
+			// decision. Outside a command, the default keeps extension-generated
+			// text behind the gate.
+			source: options?.source ?? this._commandSources.at(-1) ?? "extension",
 		});
 	}
 
@@ -2465,6 +2570,9 @@ export class AgentSession {
 		const followUp = [...this._followUpMessages];
 		this._steeringMessages = [];
 		this._followUpMessages = [];
+		// Custom messages held behind a pending decision are queue entries too:
+		// leaving them would deliver content the caller believes it cleared.
+		this._pendingCustomMessages = [];
 		this.agent.clearAllQueues();
 		this._emitQueueUpdate();
 		return { steering, followUp };
@@ -2472,7 +2580,7 @@ export class AgentSession {
 
 	/** Number of pending messages (includes both steering and follow-up) */
 	get pendingMessageCount(): number {
-		return this._steeringMessages.length + this._followUpMessages.length;
+		return this._steeringMessages.length + this._followUpMessages.length + this._pendingCustomMessages.length;
 	}
 
 	/** Get pending steering messages (read-only) */
@@ -3581,6 +3689,8 @@ export class AgentSession {
 					this._extensionAbortHandler?.();
 				},
 				hasPendingMessages: () => this.pendingMessageCount > 0,
+				hasPendingUserDecision: () => this.hasPendingUserDecision,
+				registerAutomaticTurnGuard: (guard) => this.registerAutomaticTurnGuard(guard),
 				shutdown: () => {
 					this._extensionShutdownHandler?.();
 				},
@@ -3773,6 +3883,12 @@ export class AgentSession {
 		const previousFlagValues = oldRunner.getFlagValues();
 		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
 		oldRunner.invalidate();
+		// Guards close over the runner's context, which is now stale: reading it
+		// throws, and a failing guard blocks every automatic turn. Drop them with
+		// the generation that registered them; the new one registers its own when
+		// `session_start` fires below.
+		this._automaticTurnGuards.clear();
+		this._failingTurnGuards.clear();
 		await this.settingsManager.reload();
 		this.syncQueueModesFromSettings();
 		resetApiProviders();

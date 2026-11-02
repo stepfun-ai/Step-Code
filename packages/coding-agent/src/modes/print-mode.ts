@@ -11,6 +11,7 @@ import type { AssistantMessage, ImageContent } from "@step-harness/providers";
 import type { AgentSessionEvent } from "../core/agent-session.ts";
 import type { AgentSessionRuntimeHost } from "../core/agent-session-runtime.ts";
 import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
+import { type ExternalPlanHandoff, readExternalPlanHandoff } from "../features/plan-handoff.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 import {
 	type CompletionCheckOptions,
@@ -78,17 +79,16 @@ function getTerminatingBlock(event: AgentSessionEvent): TerminatingBlock | undef
 	return { toolName: event.toolName, reason: reason || "no reason given" };
 }
 
-/** A successful plan handoff is not approval to send automatic execution prompts. */
-function requiresExternalPlanApproval(event: AgentSessionEvent): boolean {
-	if (event.type !== "tool_execution_end" || event.isError || event.toolName !== "exit_plan_mode") return false;
-	const result: unknown = event.result;
-	if (typeof result !== "object" || result === null) return false;
-	const details = (result as { details?: unknown }).details;
-	return (
-		typeof details === "object" &&
-		details !== null &&
-		(details as { outcome?: unknown }).outcome === "external_approval_required"
-	);
+/**
+ * The reviewed proposal when a run handed approval to the caller.
+ *
+ * A successful plan handoff is not approval to send automatic execution
+ * prompts. The turn also ends on the tool result, so text mode has no assistant
+ * message to print; the handoff text is what the caller needs instead.
+ */
+function getExternalPlanHandoff(event: AgentSessionEvent): ExternalPlanHandoff | undefined {
+	if (event.type !== "tool_execution_end" || event.isError || event.toolName !== "exit_plan_mode") return undefined;
+	return readExternalPlanHandoff(event.result);
 }
 
 function getAssistantFailure(message: AgentMessage | undefined): AssistantMessage | undefined {
@@ -131,6 +131,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 	let externalApprovalRequired = false;
 	// Only a handoff from the latest prompt excuses missing final output.
 	let latestPromptHasExternalHandoff = false;
+	// The latest handoff's text, for a text-mode caller that has no event stream.
+	let latestExternalHandoffText = "";
 	const completionAbort = new AbortController();
 	let completionAttempts: number | undefined;
 	let reviewRequested = false;
@@ -177,12 +179,19 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
 		session = nextSession;
+		// The handoff flags describe the previous session's last prompt. A rebound
+		// session has run nothing yet, so keeping them would print a stale proposal
+		// if this run ends without a new assistant message.
+		latestPromptHasExternalHandoff = false;
+		latestExternalHandoffText = "";
 		unsubscribe = session.subscribe((event) => {
 			const block = getTerminatingBlock(event);
 			if (block) terminatingBlocks.push(block);
-			if (requiresExternalPlanApproval(event)) {
+			const handoff = getExternalPlanHandoff(event);
+			if (handoff) {
 				externalApprovalRequired = true;
 				latestPromptHasExternalHandoff = true;
+				latestExternalHandoffText = handoff.text;
 			}
 			if (event.type === "message_end") assistantFailure ??= getAssistantFailure(event.message);
 			if (mode === "json") {
@@ -402,6 +411,11 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 					}
 				}
 			}
+		} else if (mode === "text" && latestPromptHasExternalHandoff && latestExternalHandoffText) {
+			// The handoff ends the turn on the tool result, so the run stops before
+			// any assistant text. A text caller has no event stream to read the
+			// proposal from, and an empty stdout at exit 0 hides it entirely.
+			writeRawStdout(`${latestExternalHandoffText}\n`);
 		}
 
 		if (completionAttempts !== undefined && exitCode === 0 && !hasFinalAssistantText(lastMessage)) {

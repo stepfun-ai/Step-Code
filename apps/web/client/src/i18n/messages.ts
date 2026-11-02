@@ -297,6 +297,8 @@ const zhCN = {
 	planStripLabel: "计划模式",
 	planStripUnnamed: "正在撰写方案",
 	planStripHint: "只调研并产出方案，改代码需你确认",
+	planStripExit: "退出计划模式",
+	planStripExitHint: "退出计划模式，恢复正常的文件权限",
 	btwNotSaved: "旁问不进入主对话，也不写入会话记录；重启应用后会清空。",
 	btwClear: "清空旁问",
 	btwClearHint: "清空本会话的所有旁问",
@@ -1366,6 +1368,8 @@ const enUS: Record<MessageKey, string> = {
 	planStripLabel: "Plan mode",
 	planStripUnnamed: "Drafting a plan",
 	planStripHint: "Investigates and writes a plan; code changes wait for your approval",
+	planStripExit: "Exit plan mode",
+	planStripExitHint: "Leave plan mode and restore normal file permissions",
 	btwNotSaved:
 		"A side question stays out of the main conversation and the session file; it is cleared when the app restarts.",
 	btwClear: "Clear side questions",

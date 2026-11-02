@@ -25,6 +25,7 @@ import {
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
+import { findPendingExternalPlanApproval } from "../../features/plan-handoff.ts";
 import { type Theme, theme } from "../../theme/theme.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { toJsonEvent } from "../json-event.ts";
@@ -663,7 +664,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntimeHost, options: 
 			}
 
 			case "get_last_assistant_text": {
-				const text = session.getLastAssistantText();
+				// A plan handoff ends the turn on its tool result, so the last
+				// assistant message only introduces the submission. The caller needs
+				// the proposal it has to approve, not that line.
+				const pendingHandoff = findPendingExternalPlanApproval(session.messages);
+				const text = pendingHandoff ? pendingHandoff.text : session.getLastAssistantText();
 				return success(id, "get_last_assistant_text", { text });
 			}
 

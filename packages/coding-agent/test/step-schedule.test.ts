@@ -414,9 +414,14 @@ function extensionHarness(options: { telemetry?: StepTelemetryReporter; idle?: b
 		cwd: "/workspace",
 		isIdle: () => idle,
 		hasPendingMessages: () => false,
+		hasPendingUserDecision: () => false,
 		abort: vi.fn(),
 		ui: { notify: vi.fn(), input: vi.fn(async () => undefined), setStatus: vi.fn() },
-		sessionManager: { getSessionId: () => "session-1", getEntries: () => entries, getBranch: () => entries },
+		sessionManager: {
+			getSessionId: () => "session-1",
+			getEntries: () => entries,
+			getBranch: () => entries,
+		},
 	} as unknown as ExtensionContext;
 	const api = {
 		registerTool(tool: ToolDefinition) {
@@ -474,6 +479,45 @@ describe("Step goal extension", () => {
 			message: { customType: "step-goal", display: false },
 			options: { triggerTurn: true },
 		});
+	});
+
+	test("a continuation blocked by a pending decision is not a stale attempt later", () => {
+		// The goal cannot continue while a decision awaits the user. When the user
+		// pauses the goal and answers, their own turn must not be mistaken for the
+		// continuation that never started.
+		const harness = runtimeHarness({ pending: true, idle: true });
+		harness.runtime.start("Wait for approval", "session-1");
+		harness.runtime.onAgentStart();
+		harness.runtime.onAgentEnd([assistant()]);
+		harness.runtime.onAgentSettled();
+		expect(harness.continuations).toHaveLength(0);
+
+		harness.runtime.setUserStatus("paused");
+		harness.setPending(false);
+		harness.runtime.onAgentStart();
+		expect(harness.runtime.isStaleContinuationAttempt()).toBe(false);
+	});
+
+	test("a pending decision keeps a continuation from being sent", async () => {
+		const harness = extensionHarness();
+		let awaitingDecision = true;
+		Object.assign(harness.ctx, { hasPendingUserDecision: () => awaitingDecision });
+		await emit(harness, "session_start");
+		await emit(harness, "agent_start");
+		await harness.tools
+			.get("create_goal")
+			?.execute("call-1", { objective: "Implement the plan" }, undefined, undefined, harness.ctx);
+		await emit(harness, "agent_end", { messages: [assistant()] });
+		await emit(harness, "agent_settled");
+		// Sending here would replay an intent the user may reject.
+		expect(harness.sent).toHaveLength(0);
+
+		// Answering the decision lets the continuation through.
+		awaitingDecision = false;
+		await emit(harness, "agent_start");
+		await emit(harness, "agent_end", { messages: [assistant()] });
+		await emit(harness, "agent_settled");
+		expect(harness.sent).toHaveLength(1);
 	});
 
 	test("uses message_end as the token baseline when a tool creates a goal", async () => {

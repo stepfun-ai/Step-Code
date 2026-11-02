@@ -284,6 +284,8 @@ export class ExtensionRunner {
 	private waitForIdleFn: () => Promise<void> = async () => {};
 	private abortFn: () => void = () => {};
 	private hasPendingMessagesFn: () => boolean = () => false;
+	private hasPendingUserDecisionFn: () => boolean = () => false;
+	private registerAutomaticTurnGuardFn: (guard: () => boolean) => () => void = () => () => {};
 	private getContextUsageFn: () => ContextUsage | undefined = () => undefined;
 	private compactFn: (options?: CompactOptions) => void = () => {};
 	private getSystemPromptFn: () => string = () => "";
@@ -351,6 +353,8 @@ export class ExtensionRunner {
 		this.getSignalFn = contextActions.getSignal;
 		this.abortFn = contextActions.abort;
 		this.hasPendingMessagesFn = contextActions.hasPendingMessages;
+		this.hasPendingUserDecisionFn = contextActions.hasPendingUserDecision ?? (() => false);
+		this.registerAutomaticTurnGuardFn = contextActions.registerAutomaticTurnGuard ?? (() => () => {});
 		this.shutdownHandler = contextActions.shutdown;
 		this.getContextUsageFn = contextActions.getContextUsage;
 		this.compactFn = contextActions.compact;
@@ -822,6 +826,14 @@ export class ExtensionRunner {
 			hasPendingMessages: () => {
 				runner.assertActive();
 				return runner.hasPendingMessagesFn();
+			},
+			hasPendingUserDecision: () => {
+				runner.assertActive();
+				return runner.hasPendingUserDecisionFn();
+			},
+			registerAutomaticTurnGuard: (guard) => {
+				runner.assertActive();
+				return runner.registerAutomaticTurnGuardFn(guard);
 			},
 			shutdown: () => {
 				runner.assertActive();

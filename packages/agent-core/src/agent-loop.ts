@@ -287,6 +287,7 @@ async function runLoop(
 			const toolCalls = message.content.filter((c) => c.type === "toolCall");
 
 			const toolResults: ToolResultMessage[] = [];
+			let stopTurn = false;
 			hasMoreToolCalls = false;
 			if (toolCalls.length > 0) {
 				// A "length" stop means the output was cut off by the token limit, so
@@ -298,6 +299,7 @@ async function runLoop(
 						: await executeToolCalls(currentContext, message, config, signal, emit);
 				toolResults.push(...executedToolBatch.messages);
 				hasMoreToolCalls = !executedToolBatch.terminate;
+				stopTurn = executedToolBatch.stopTurn === true;
 
 				for (const result of toolResults) {
 					currentContext.messages.push(result);
@@ -314,7 +316,12 @@ async function runLoop(
 				newMessages,
 			};
 
-			if (await config.shouldStopAfterTurn?.(lastCompletedTurn)) {
+			// `shouldStopAfterTurn` still runs when the batch requested a barrier: it
+			// is the product's hook, and skipping it on exactly the control turns a
+			// product cares about would be a silent trap. A cancelled run behaves as
+			// it always has: the hook still runs, and `stopTurn` still ends the turn.
+			const stopAfterTurn = await config.shouldStopAfterTurn?.(lastCompletedTurn);
+			if (stopTurn || stopAfterTurn) {
 				await emit({ type: "agent_end", messages: newMessages });
 				return;
 			}
@@ -571,6 +578,7 @@ async function executeToolCalls(
 type ExecutedToolCallBatch = {
 	messages: ToolResultMessage[];
 	terminate: boolean;
+	stopTurn?: boolean;
 };
 
 async function executeToolCallsSequential(
@@ -583,6 +591,7 @@ async function executeToolCallsSequential(
 ): Promise<ExecutedToolCallBatch> {
 	const finalizedCalls: FinalizedToolCallOutcome[] = [];
 	const messages: ToolResultMessage[] = [];
+	let stopTurn = false;
 
 	for (const toolCall of toolCalls) {
 		await emit({
@@ -592,7 +601,18 @@ async function executeToolCallsSequential(
 			args: toolCall.arguments,
 		});
 
-		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
+		const preparation: PreparedToolCall | ImmediateToolCallOutcome = stopTurn
+			? {
+					kind: "immediate",
+					// The call never ran, so it is reported as an error, but not as a
+					// policy denial: no `terminate`, so callers that map terminating
+					// blocks to exit codes do not count the barrier as a failure.
+					result: createErrorToolResult(
+						"This tool call was skipped because an earlier control tool ended the turn.",
+					),
+					isError: true,
+				}
+			: await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		let finalized: FinalizedToolCallOutcome;
 		if (preparation.kind === "immediate") {
 			finalized = {
@@ -617,6 +637,7 @@ async function executeToolCallsSequential(
 		await emitToolResultMessage(toolResultMessage, emit);
 		finalizedCalls.push(finalized);
 		messages.push(toolResultMessage);
+		stopTurn ||= finalized.result.stopTurn === true;
 
 		if (signal?.aborted) {
 			break;
@@ -626,6 +647,7 @@ async function executeToolCallsSequential(
 	return {
 		messages,
 		terminate: shouldTerminateToolBatch(finalizedCalls),
+		stopTurn,
 	};
 }
 
@@ -693,6 +715,7 @@ async function executeToolCallsParallel(
 	return {
 		messages,
 		terminate: shouldTerminateToolBatch(orderedFinalizedCalls),
+		stopTurn: orderedFinalizedCalls.some((call) => call.result.stopTurn === true),
 	};
 }
 
@@ -723,7 +746,10 @@ type FinalizedToolCallOutcome = {
 type FinalizedToolCallEntry = FinalizedToolCallOutcome | (() => Promise<FinalizedToolCallOutcome>);
 
 function shouldTerminateToolBatch(finalizedCalls: FinalizedToolCallOutcome[]): boolean {
-	return finalizedCalls.length > 0 && finalizedCalls.every((finalized) => finalized.result.terminate === true);
+	return (
+		finalizedCalls.some((finalized) => finalized.result.stopTurn === true) ||
+		(finalizedCalls.length > 0 && finalizedCalls.every((finalized) => finalized.result.terminate === true))
+	);
 }
 
 function prepareToolCallArguments(tool: AgentTool<any>, toolCall: AgentToolCall): AgentToolCall {
@@ -947,10 +973,13 @@ async function finalizeExecutedToolCall(
 					details: afterResult.details ?? result.details,
 					usage: afterResult.usage ?? result.usage,
 					terminate: afterResult.terminate ?? result.terminate,
+					stopTurn: afterResult.stopTurn ?? result.stopTurn,
 				};
 				isError = afterResult.isError ?? isError;
 			}
 		} catch (error) {
+			// `observed` carries the tool's own result, so a `stopTurn` the tool
+			// already requested survives the hook failure.
 			result = createErrorToolResult(error instanceof Error ? error.message : String(error), result);
 			isError = true;
 		}

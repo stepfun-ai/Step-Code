@@ -1541,6 +1541,25 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
   color: var(--ink-3);
   text-align: right;
 }
+/* The user's own way out: leaving the mode is their decision, not the model's. */
+.plan-strip-exit {
+  flex: none;
+  padding: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  cursor: pointer;
+}
+.plan-strip-exit:hover {
+  color: var(--ink);
+  border-color: var(--mode-plan);
+}
+.plan-strip-exit:focus-visible {
+  outline: 2px solid var(--mode-plan);
+  outline-offset: 2px;
+}
 
 /*
  * The in-place edit composer: a smaller sibling of the bottom one — narrower,

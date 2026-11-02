@@ -1,18 +1,45 @@
 # Plan approval handoff
 
 `exit_plan_mode` submits a written proposal for review. Leaving plan mode and
-approving the proposal are separate events. In headless and RPC sessions, a valid
-proposal exits plan mode, while the caller remains responsible for obtaining
-approval before execution. This also applies to RPC contexts with `hasUI: true`;
-their UI bridge does not provide interactive approval.
+approving the proposal are separate events.
+
+In the TUI, the tool blocks on the review dialog: the user approves execution,
+requests refinements, or dismisses. Approval exits plan mode; feedback keeps it
+active and steers the notes into the next response; dismissal keeps it active and
+ends the turn. There is no deadline on that decision. The dialog closes when the
+run is cancelled, and the tool then reports the review as aborted.
+
+Headless runs and RPC hosts cannot obtain approval. They exit plan mode and hand
+the proposal to the caller, but the turn ends immediately: leaving the mode does
+not authorize execution. RPC hosts are always external, even when their dialog
+bridge reports `hasUI: true`. The caller must approve the exact snapshot before
+starting an implementation turn. The host reports the proposal in place of the
+answer it does not have: print text mode writes the handoff to stdout, and the
+SDK result and the RPC `get_last_assistant_text` reply carry the handoff rather
+than the assistant line that introduces the submission.
 
 Plan mode does not hide tools: it denies mutating calls outside the plan file
 through the `tool_call` policy, so the request's tool block stays byte-identical
 and the provider's prompt cache keeps its prefix. Only a profile that lacks a
 plan tool has it appended on entry, and that addition alone is reverted on exit.
-That denial is decided before any approval prompt, so a host never asks the user
-to approve a mutation plan mode forbids; a write to the plan file itself still
-goes through the normal permission policy.
+
+The plan-file boundary has one spelling, shared by the plan extension's guard and
+the Step permission pre-check:
+
+- The check runs before the ordinary permission prompt, so the `ask` preset does
+  not ask the user to approve an edit plan mode forbids and then refuse it.
+- A mutation outside the plan file is blocked without a prompt. A write to the
+  plan file still goes through the normal permission policy.
+- A `then_run` command fused into a plan-file write is blocked: it is a shell
+  execution the boundary does not permit, so the write is accepted only without
+  it. `run_command` itself keeps its normal permissions; the plan prompt asks the
+  model to stay read-only with it.
+- The decision reads the persisted `step-plan` state, so a guard that runs before
+  this process replayed `session_start` still blocks. When the live marker says
+  plan mode is off, the check returns without walking the branch.
+- An embedder that mounts the Step extension without the plan extension does not
+  inherit the restriction: the pre-check is enabled only when the plan extension
+  is mounted for that session.
 
 ## Mode announcements
 
@@ -43,8 +70,7 @@ the compaction summary can carry its rules.
 
 ## Handoff details
 
-Successful headless and RPC exits return the existing model-facing text plus
-structured `details`, for example:
+Both interactive and external results carry structured `details`:
 
 ```json
 {
@@ -57,14 +83,13 @@ structured `details`, for example:
 }
 ```
 
-`outcome: "external_approval_required"` identifies a handoff awaiting the caller's
-decision. `planModeExited: true` describes the resulting mode state; it does not
-mean approval was granted. The result still has `terminate: false`, so the host
-must gate execution through its own approval flow. These details do not add an
-approval command or enforce an execution barrier.
+`outcome: "external_approval_required"` identifies a handoff awaiting the
+caller's decision. `planModeExited: true` describes the resulting mode state; it
+does not mean approval was granted. External handoffs end the turn: the result
+sets `stopTurn` in addition to `terminate`.
 
-`approvalSource` identifies who owns the decision: `"user"` for native interactive
-review, including feedback and dismissal, and `"external"` for the headless/RPC
+`approvalSource` identifies who owns the decision: `"user"` for the TUI review,
+including feedback and dismissal, and `"external"` for the headless / RPC
 caller's approval flow. It does not indicate that approval has occurred. Source
 and outcome are independent: a future caller-owned `"approved"` outcome can keep
 `approvalSource: "external"` without claiming the user clicked the TUI. Native
@@ -108,7 +133,9 @@ stays suppressed for that invocation; explicit caller messages are still deliver
 The runner does not infer an approval decision from their wording.
 
 If the proposal changes, obtain a new review and approval for the new hash. A
-matching hash identifies content; it is not an approval token.
+matching hash identifies content; it is not an approval token. The interactive
+tool rereads the file before accepting approval: a changed, missing, or
+unreadable proposal keeps plan mode active and requires a new review.
 
 Native outcomes keep their existing behavior:
 
@@ -116,26 +143,63 @@ Native outcomes keep their existing behavior:
 | --- | --- | --- | --- |
 | `approved` | `user` | `true` | The user selected execution; restore tools and continue. |
 | `feedback` | `user` | `false` | Keep planning and steer the user's notes into the next response. |
-| `dismissed` | `user` | `false` | Keep planning and terminate the turn to wait for the user. |
-| `external_approval_required` | `external` | `true` | Headless/RPC handoff; the caller must gate execution. |
+| `dismissed` | `user` | `false` | Keep planning and stop the turn to wait for the user. |
+| `external_approval_required` | `external` | `true` | Headless / RPC handoff; the turn ends and the caller must gate execution. |
 
 The TUI still selects execution by default, and Enter confirms that selection.
 Interactive result details also include the hash of the reviewed snapshot.
 Transcripts display external handoffs as **External approval required**, with the
 complete plan, rather than displaying an approved result.
 
-Missing, empty, whitespace-only, unreadable, and non-regular plan files retain
-their existing explanatory text and leave plan mode active. Their `details` are
-`undefined`; they never receive a successful handoff outcome or hash. Calling
-`exit_plan_mode` outside plan mode likewise returns no handoff details, and in
-headless/RPC sessions a readable file whose content is unchanged since the round
-entered plan mode (or that still holds the already-submitted proposal) counts as
-no new proposal: it exits plan mode and returns no handoff details, so a leftover
-plan from an earlier round is never presented as this request's answer. A
-non-error tool result alone is therefore insufficient to recognize a handoff.
+Missing, empty, whitespace-only, unreadable, and non-regular plan files leave
+plan mode active. A request that needs no proposal may be answered read-only;
+file absence or unchanged content never authorizes the model to disable planning.
+Only the user can leave that mode with `/plan`. These guard results have no
+handoff details or approval hash. Calling `exit_plan_mode` outside plan mode
+likewise returns no handoff details. A non-error result is not itself approval.
 
 `approvalSource`, `planHash`, and `planModeExited` are optional in `PlanReviewDetails`
 for compatibility with existing producers and older transcripts. Native results
 with a valid plan populate all three fields. Consumers should handle their absence
 explicitly and must not infer approval or its source from missing fields, or infer
 approval from plan-mode exit alone.
+
+## Stop-turn barrier
+
+A control decision ends the turn on its own. `stopTurn` on the tool result stops
+the loop after the batch even when a sibling result does not set `terminate`:
+
+- Sequential batches skip calls after the barrier and give each skipped call a
+  paired error result, so the tool-call protocol stays complete.
+- Parallel calls already in flight settle normally; no further model turn starts
+  from the loop itself.
+- A result-processing failure preserves a stop the tool already requested.
+- Earlier calls in the batch are not rolled back.
+
+The barrier ends that Agent Loop invocation. The session may still start another
+turn for input queued after `agent_end` or for automatic context maintenance, so
+a host that must not proceed without approval keeps that gate on its own side —
+which is why the headless and RPC handoffs are gated by the caller.
+
+Inside the session, the plan extension registers one automatic-turn guard with
+`ctx.registerAutomaticTurnGuard`: a handoff that no user message has answered yet.
+Guards belong to the extension generation that registered them, so a reload drops
+the stale ones along with the runner whose context they capture.
+The session asks that guard before every turn it would start on the user's
+behalf — a feature's `triggerTurn` message, a goal continuation, a cron delivery,
+a background lane waking its parent, and post-run recovery. A feature therefore
+does not need to know the other starters to respect the decision, and adding a
+new starter cannot silently bypass it.
+
+A feature that can defer its own trigger asks `ctx.hasPendingUserDecision()` and
+retries later, instead of firing into a queue that would replay work after the
+decision: cron keeps the job due, and a goal continuation stays pending.
+
+A user's own prompt always runs: that message is how the decision gets answered.
+A host bridge forwarding a real person's input reports its own `source`, so the
+message is not mistaken for extension-generated text.
+The guard only recognizes *some* user message, because the approval belongs to
+the caller and the session must not guess at its wording. A host that needs a
+real decision records it on the tool result (the `tool_result` hook) or uses its
+own approval channel; a follow-up question typed by the user also clears the
+gate.
