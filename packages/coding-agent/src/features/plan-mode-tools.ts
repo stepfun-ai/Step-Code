@@ -51,12 +51,7 @@ export function getPlanFilePath(sessionId: string, projectCwd?: string): string 
  * streaming another response, handing the turn back to the user.
  */
 function controlResult(text: string, terminate = false): AgentToolResult<PlanReviewDetails | undefined> {
-	return {
-		content: [{ type: "text", text }],
-		details: undefined,
-		terminate,
-		...(terminate ? { stopTurn: true } : {}),
-	};
+	return { content: [{ type: "text", text }], details: undefined, terminate };
 }
 
 /**
@@ -70,7 +65,7 @@ function reviewedResult(
 	details: PlanReviewDetails,
 	terminate = false,
 ): AgentToolResult<PlanReviewDetails | undefined> {
-	return { content: [{ type: "text", text }], details, terminate, ...(terminate ? { stopTurn: true } : {}) };
+	return { content: [{ type: "text", text }], details, terminate };
 }
 
 /**
@@ -90,25 +85,22 @@ const STAY_IN_PLAN_MODE_RESULT =
 	"Stop here and wait for the user; do not call exit_plan_mode again until they ask for another review.";
 
 /**
- * Run the interactive review in the TUI.
+ * Run the interactive review.
  *
- * The dialog offers approval and a line of feedback, nothing else. It has no
- * deadline: the user decides when to answer, and the run's signal closes the
- * dialog if the turn is cancelled. A plan review is a human decision, not a
- * request with a transport budget.
+ * The dialog offers approval and a line of feedback, nothing else: a third
+ * "keep going, no comment" choice told the model nothing that dismissing the
+ * dialog does not already say, so Escape covers it.
  */
 async function reviewPlanInteractively(
 	extensionContext: ExtensionContext,
 	planFilePath: string,
 	planContents: string,
-	signal: AbortSignal | undefined,
 ): Promise<PlanReviewResult> {
 	return extensionContext.ui.custom<PlanReviewResult>(
 		(tui, theme, _keybindings, done) =>
 			new PlanReviewComponent({
 				planFilePath,
 				planContents,
-				signal,
 				theme,
 				onResult: done,
 				onChange: () => tui.requestRender(),
@@ -134,12 +126,10 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 		renderShell: "self",
 		renderResult: renderPlanReviewResult,
 		description:
-			"Submit the written proposal for review. Requires a readable, nonempty regular plan file. In the TUI the user approves execution, requests refinements, or dismisses; approval exits planning, while refining or dismissing keeps it active. In headless and RPC runs the proposal is handed to the caller instead: plan mode exits, this turn ends, and the caller must obtain approval before execution. If no proposal was written, answer read-only questions directly and keep plan mode active until the user turns it off.",
+			"Submit the written proposal for review. Requires a readable, nonempty regular plan file. In interactive mode, user approval exits planning; staying, refining, or cancelling keeps it active. In headless and RPC modes, exits without interactive approval; the caller must gate approval externally before execution.",
 		promptSnippet: "Submit the written proposal for review",
 		parameters: Type.Object({}),
-		// A decision barrier: later calls in this batch must not run behind it.
-		executionMode: "sequential",
-		execute: async (_toolCallId, _params, signal, _onUpdate, ctx) => {
+		execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
 			if (!planMode.isPlanModeActive()) {
 				return controlResult(
 					"Not in plan mode. Only the user starts plan mode, with /plan or --plan; continue the task in the current mode.",
@@ -147,11 +137,8 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 			}
 			const planFilePath = planMode.resolvePlanFilePath(ctx);
 			if (!existsSync(planFilePath)) {
-				// A request that needs no proposal may be answered directly, but a
-				// missing file is not permission to leave: only the user turns the
-				// mode off, otherwise every later edit would be unguarded.
 				return controlResult(
-					`No plan file at ${planFilePath}. Plan mode stays active. If this request needs no proposal, answer directly without changing files; only the user can turn plan mode off with /plan. Otherwise write the proposal with write_file, then call exit_plan_mode again.`,
+					`No plan file at ${planFilePath}. Check the path and permissions, then write it with write_file and call exit_plan_mode again.`,
 				);
 			}
 			let planContents: string;
@@ -172,54 +159,27 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				outcome,
 				...(feedback === undefined ? {} : { feedback }),
 			});
-			// An RPC child has a dialog bridge (hasUI is true) but no real user
-			// behind it, so its dialog can be auto-cancelled. Exit plan mode, but end
-			// this turn: the caller still owns approval before execution.
 			if (ctx.mode === "rpc") {
+				// An rpc child has a dialog bridge (hasUI is true) but no real user
+				// behind it, so its extension_ui_request select can be auto-cancelled
+				// to "Stay", leaving the child idle in plan mode forever. Exit plan mode
+				// and hand approval to the caller.
 				planMode.exitPlanMode("auto_rpc", ctx);
-				ctx.ui.notify(
-					"RPC host has no plan-review bridge; caller approval is required before execution.",
-					"warning",
-				);
+				ctx.ui.notify("rpc child auto-approved plan mode exit — user oversight was not gated", "warning");
 				return reviewedResult(
-					`Cannot gate approval in this RPC host. Plan file at ${planFilePath}; caller should approve externally. This turn ends now; do not execute until the caller approves.\n\nPlan contents:\n${planContents}`,
+					`Cannot gate approval in rpc child context. Plan file at ${planFilePath}; caller should approve externally. Plan mode exited and file mutations are re-enabled.\n\nPlan contents:\n${planContents}`,
 					reviewed("external_approval_required"),
-					true,
 				);
 			}
 			if (!ctx.hasUI) {
 				planMode.exitPlanMode("auto_headless", ctx);
 				return reviewedResult(
-					`Plan mode exited. Plan file kept at ${planFilePath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show interactive prompt; caller must gate approval externally. This turn ends now.`,
+					`Plan mode exited. Plan file kept at ${planFilePath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show interactive prompt; caller must gate approval externally.`,
 					reviewed("external_approval_required"),
-					true,
 				);
 			}
-			const review = await reviewPlanInteractively(ctx, planFilePath, planContents, signal);
-			if (signal?.aborted) {
-				return controlResult("The plan review was aborted. Planning remains active.", true);
-			}
+			const review = await reviewPlanInteractively(ctx, planFilePath, planContents);
 			if (review?.action === "execute") {
-				// The approval belongs to the exact snapshot the user read. Reread the
-				// file: a plan edited while the dialog was open cannot be approved by
-				// the click that approved the old text.
-				let unchanged = false;
-				try {
-					unchanged =
-						createHash("sha256").update(readPlanContents(planFilePath), "utf8").digest("hex") === planHash;
-				} catch {
-					// A deleted or unreadable file cannot be the approved snapshot.
-				}
-				if (!unchanged) {
-					ctx.ui.notify(
-						"The plan changed during review. Submit the current proposal for a new review.",
-						"warning",
-					);
-					return controlResult(
-						"The plan changed or is no longer readable. Plan mode stays active; the earlier approval cannot authorize a different proposal. Wait for the user to request a new review.",
-						true,
-					);
-				}
 				planMode.exitPlanMode("approved", ctx);
 				return reviewedResult(
 					`The user approved the plan. Plan mode exited and file mutations are re-enabled. Execute the plan now, using ${planFilePath} as the reference; do not silently diverge from it.`,

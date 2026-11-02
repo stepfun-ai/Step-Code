@@ -108,6 +108,10 @@ it("keeps the request tool block and system prompt byte-identical across a plan-
 				capture(context);
 				return fauxAssistantMessage("done");
 			},
+			(context) => {
+				capture(context);
+				return fauxAssistantMessage("back in default mode");
+			},
 		]);
 
 		// The user enters plan mode; the announcement rides in the messages, never
@@ -120,7 +124,7 @@ it("keeps the request tool block and system prompt byte-identical across a plan-
 
 		// The system prompt embeds the active tool snippets, so equal tools plus an
 		// equal prompt is exactly the prefix the provider caches.
-		expect(captured).toHaveLength(4);
+		expect(captured).toHaveLength(5);
 		const announcements = harness.session.messages.filter(
 			(message) => message.role === "custom" && message.customType === "step-plan-mode",
 		);

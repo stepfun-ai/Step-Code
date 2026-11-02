@@ -790,7 +790,7 @@ Behavior guarantees:
 - Later `tool_call` handlers see mutations made by earlier handlers
 - No re-validation is performed after your mutation
 - Return values from `tool_call` control blocking via `{ block: true, reason?: string, terminate?: boolean }`
-- `terminate` only applies to a blocked call; the agent stops early only when every finalized result in the batch is terminating. Hook results cannot request `stopTurn`; only a tool's `execute()` or `afterToolCall` can start that barrier
+- `terminate` only applies to a blocked call; the agent stops early only when every finalized result in the batch is terminating
 
 ```typescript
 import { isToolCallEventType } from "@step-harness/coding-agent";
@@ -2050,8 +2050,6 @@ pi.registerTool({
 **Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
 
 **Early termination:** Return `terminate: true` from `execute()` to hint that the automatic follow-up LLM call should be skipped after the current tool batch. This only takes effect when every finalized tool result in that batch is terminating. See [examples/extensions/structured-output.ts](../examples/extensions/structured-output.ts) for a minimal example where the agent ends on a final structured-output tool call.
-
-**Decision barriers:** Return `stopTurn: true` to end the turn when this result settles, regardless of sibling results. Declare `executionMode: "sequential"` on the tool when it owns a user decision: later calls in the same batch then receive paired skipped results instead of running behind the barrier. Parallel calls already in flight still settle, earlier calls are not rolled back, and queued input is not drained — it stays for the next turn the caller starts. See [plan approval](../../../docs/plan-approval.md#stop-turn-barrier).
 
 ```typescript
 // Correct: throw to signal an error
