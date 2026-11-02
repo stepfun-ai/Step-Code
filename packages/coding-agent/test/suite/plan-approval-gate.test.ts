@@ -275,6 +275,26 @@ test("automatic work queued ahead of the user's words is still held", async () =
 	expect(requests.some((request) => request.some((message) => message.includes("AUTOWORK")))).toBe(false);
 });
 
+test("work held by the decision is delivered once it is answered", async () => {
+	// Holding is not dropping: the automatic work queued before the decision must
+	// still run after the user answers, in one piece.
+	const { harness } = await createPlanHarness("step-plan-gate-held-");
+	const requests: string[][] = [];
+	harness.setResponses([
+		async () => {
+			await harness.session.sendCustomMessage(
+				{ customType: "test-wake", content: "AUTOWORK", display: true, details: {} },
+				{ deliverAs: "followUp", triggerTurn: true },
+			);
+			return fauxAssistantMessage("planned");
+		},
+		record(requests),
+	]);
+	await harness.session.prompt("kick");
+	expect(harness.session.hasPendingUserDecision).toBe(false);
+	expect(requests.some((request) => request.some((message) => message.includes("AUTOWORK")))).toBe(true);
+});
+
 test("a compaction does not leave a decision nobody can answer", async () => {
 	const { harness, planPath } = await createPlanHarness("step-plan-gate-compact-");
 	await handoff(harness, planPath);

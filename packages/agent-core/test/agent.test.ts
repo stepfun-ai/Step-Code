@@ -749,6 +749,52 @@ describe("Agent", () => {
 		expect(agent.hasQueuedMessages()).toBe(true);
 	});
 
+	it("holds only the refused messages when queue mode drains everything at once", async () => {
+		// "all" takes a batch: a filter has to split it rather than pass the whole
+		// batch through or refuse it entirely.
+		let responseCount = 0;
+		const agent = new Agent({
+			followUpMode: "all",
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				responseCount++;
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage(`Reply ${responseCount}`) });
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: [{ type: "text", text: "Initial" }], timestamp: Date.now() - 10 },
+			createAssistantMessage("Initial response"),
+		];
+		const held = { role: "user" as const, content: [{ type: "text" as const, text: "Held work" }], timestamp: 1 };
+		const first = { role: "user" as const, content: [{ type: "text" as const, text: "First words" }], timestamp: 2 };
+		const second = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "Second words" }],
+			timestamp: 3,
+		};
+		agent.followUp(held);
+		agent.followUp(first);
+		agent.followUp(second);
+
+		agent.setQueueDeliveryFilter((message) => message !== held);
+		await agent.continue();
+
+		const texts = agent.state.messages
+			.filter((message) => message.role === "user")
+			.map((message) =>
+				typeof message.content === "string"
+					? message.content
+					: message.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+			);
+		expect(texts).toContain("First words");
+		expect(texts).toContain("Second words");
+		expect(texts).not.toContain("Held work");
+		expect(agent.hasQueuedMessages()).toBe(true);
+	});
+
 	it("should handle abort controller", () => {
 		const agent = new Agent({ streamFn: unusedStreamFunction });
 

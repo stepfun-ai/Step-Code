@@ -1618,6 +1618,9 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		// The filter is this session's, not the agent's: a caller that keeps the
+		// agent must not inherit a rule about a decision nobody owns any more.
+		this.agent.setQueueDeliveryFilter(undefined);
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -3287,7 +3290,9 @@ export class AgentSession {
 				{ systemPrompt: this.systemPrompt, messages: this.agent.state.messages, tools: this.agent.state.tools },
 				this._agentRunAbortController?.signal,
 			);
-			if (automatic?.attempted) return this.agent.hasQueuedMessages();
+			// Held work does not justify a maintenance turn: the decision is still
+			// waiting, and a turn taken for it would deliver nothing.
+			if (automatic?.attempted) return this.agent.hasDeliverableQueuedMessage(this._queueDeliveryAllowed);
 			return await this._runAutoCompaction("threshold", false);
 		}
 		return false;
@@ -3478,8 +3483,9 @@ export class AgentSession {
 			}
 
 			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-			// Continue once so queued messages are delivered.
-			return this.agent.hasQueuedMessages();
+			// Continue once so queued messages are delivered — the ones the decision
+			// allows; work it holds stays queued for the turn that answers it.
+			return this.agent.hasDeliverableQueuedMessage(this._queueDeliveryAllowed);
 		} catch (error) {
 			if (started) {
 				const aborted = this._autoCompactionAbortController?.signal.aborted ?? false;

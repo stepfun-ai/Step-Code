@@ -151,7 +151,10 @@ class PendingMessageQueue {
 	 * hold part of the queue without dropping what it holds or reordering what it
 	 * releases. With no predicate this drains everything the mode allows.
 	 */
-	drain(allow?: (message: AgentMessage) => boolean): AgentMessage[] {
+	drain(allowed?: (message: AgentMessage) => boolean): AgentMessage[] {
+		// Wrapped so a predicate that also declares (index, array) cannot be handed
+		// them by findIndex/some.
+		const allow = allowed === undefined ? undefined : (message: AgentMessage): boolean => allowed(message);
 		if (!allow) {
 			if (this.mode === "all") {
 				const drained = this.messages.slice();
@@ -176,10 +179,10 @@ class PendingMessageQueue {
 		return [first!];
 	}
 
-	/** Whether any queued message would pass `allow`. */
-	hasDeliverable(allow?: (message: AgentMessage) => boolean): boolean {
-		if (!allow) return this.messages.length > 0;
-		return this.messages.some(allow);
+	/** Whether any queued message would pass `allowed`. */
+	hasDeliverable(allowed?: (message: AgentMessage) => boolean): boolean {
+		if (!allowed) return this.messages.length > 0;
+		return this.messages.some((message: AgentMessage) => allowed(message));
 	}
 
 	clear(): void {
