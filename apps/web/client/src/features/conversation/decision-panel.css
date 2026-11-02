@@ -1,0 +1,11 @@
+/*
+ * `.decision-panel`: the one question the page is blocked on.
+ *
+ * It sits in the stream's last slot, directly above the composer, so the user
+ * answers where they were about to type. The composer closes while it is
+ * occupied — the session accepts nothing else — which is why the panel belongs
+ * here rather than in an overlay that could be dismissed by accident.
+ */
+.decision-panel {
+  margin: 14px 0 6px;
+}

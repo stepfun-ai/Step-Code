@@ -7,13 +7,13 @@ import type { MessageTimelineItem, SteeringMessage, TimelineItem } from "../../s
 import { Icon } from "../../ui";
 import { Composer } from "../composer";
 import { openSettings } from "../settings/actions";
-import { ClarificationPanel } from "./ClarificationPanel";
 import { CommandRow } from "./CommandRow";
 import { CompactionRow, CompactionRunningRow } from "./CompactionRow";
+import { DecisionPanel } from "./DecisionPanel";
 import { GoalRoundRow } from "./GoalRoundRow";
 import { MessageActions, MessageItem } from "./MessageItem";
 import { NoticeRow } from "./NoticeRow";
-import { PlanReviewCard, PlanReviewPanel } from "./PlanReviewCard";
+import { PlanReviewCard } from "./PlanReviewCard";
 import { ProcessGroup } from "./ProcessGroup";
 import {
 	groupProcessRows,
@@ -92,7 +92,9 @@ const STICK_THRESHOLD = 48;
  */
 export function ConversationStream() {
 	const t = useT();
-	const items = useAppStore((state) => state.timelineItems);
+	// A pending approval is the page's one decision, drawn by `DecisionPanel` above
+	// the composer; the transcript would otherwise show the same question twice.
+	const items = useAppStore((state) => state.timelineItems.filter((item) => item.kind !== "approval"));
 	const pendingTurn = useAppStore((state) => state.pendingTurn);
 	// Sent with "立即" or Cmd/Ctrl+Enter: the kernel reads them after the current tool call; shown already.
 	const steering = useAppStore((state) => state.current?.steeringMessages ?? NO_STEERING);
@@ -411,13 +413,10 @@ export function ConversationStream() {
 				) : (
 					<EmptyConversation />
 				)}
-				{/* The pending questionnaire is conversation, not composer chrome: it
-				 * renders as the stream's latest element, where the question was asked. */}
-				<ClarificationPanel />
-				{/* A proposal waiting for an answer takes the same place for the same
-				 * reason: it is the one decision the page is blocked on, and the
-				 * composer refuses new text until it is answered. */}
-				<PlanReviewPanel />
+				{/* The one decision the page is blocked on — a plan review, a
+				 * questionnaire, or a tool approval — renders as the stream's last
+				 * element, and the composer refuses new text until it is answered. */}
+				<DecisionPanel />
 			</div>
 		</div>
 	);

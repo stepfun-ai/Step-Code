@@ -2005,9 +2005,11 @@ test("the status chip does not require a theme from the host", async () => {
 	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
 });
 
-test("plan mode announces its state without adding a transcript row", async () => {
+test("entering plan mode announces it without adding a transcript row", async () => {
 	// The host draws plan mode from session state; a notice would be a row nobody
-	// typed into the conversation.
+	// typed into the conversation. Leaving says nothing at all: the chip closing
+	// and the composer reopening are the report, and a toast on top of them is one
+	// more thing to dismiss.
 	const harness = createHarness({ cwd: makeWorkspace() });
 	createStepPlanExtension()(harness.api);
 	const context = harness.ctx();
@@ -2015,8 +2017,34 @@ test("plan mode announces its state without adding a transcript row", async () =
 	await harness.commands.get("plan")!.handler("", context);
 
 	const notices = harness.notifications.filter((notice) => /Plan mode (enabled|disabled)/.test(notice.message));
-	expect(notices).toHaveLength(2);
-	expect(notices.every((notice) => notice.options?.transient === true)).toBe(true);
+	expect(notices).toHaveLength(1);
+	expect(notices[0]?.options?.transient).toBe(true);
+});
+
+test("leaving plan mode ends the work in flight instead of letting it implement", async () => {
+	// The Default announcement only reaches the model's next request, so a run
+	// still streaming would carry on with the plan boundary lifted — the exact
+	// opposite of what the user asked for by leaving.
+	const harness = createHarness({ cwd: makeWorkspace() });
+	createStepPlanExtension()(harness.api);
+	const abort = vi.fn();
+	const context = harness.ctx({ isIdle: () => false, abort });
+	await harness.commands.get("plan")!.handler("", context);
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: true });
+
+	await harness.commands.get("plan")!.handler("off", context);
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
+	expect(abort).toHaveBeenCalledTimes(1);
+});
+
+test("leaving plan mode while idle does not abort anything", async () => {
+	const harness = createHarness({ cwd: makeWorkspace() });
+	createStepPlanExtension()(harness.api);
+	const abort = vi.fn();
+	const context = harness.ctx({ isIdle: () => true, abort });
+	await harness.commands.get("plan")!.handler("", context);
+	await harness.commands.get("plan")!.handler("off", context);
+	expect(abort).not.toHaveBeenCalled();
 });
 
 test("plan mode denies a mutation even when the branch carries no plan entry", async () => {

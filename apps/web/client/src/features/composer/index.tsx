@@ -143,10 +143,18 @@ function ComposerInput({
 	 * exact ambiguity the card exists to remove. The card takes the input it
 	 * needs (approve, notes, or exit).
 	 */
-	const awaitingPlanReview = useAppStore((state) => state.pendingPlanReview !== undefined);
+	// A plan review, a questionnaire, and a tool approval all block the session
+	// until the user answers, so they block the composer the same way. Otherwise
+	// text typed past the card reads as an answer to it.
+	const awaitingDecision = useAppStore(
+		(state) =>
+			state.pendingPlanReview !== undefined ||
+			state.current?.pendingClarifications?.[0] !== undefined ||
+			state.current?.pendingApprovals?.[0] !== undefined,
+	);
 	// Only the bottom composer is blocked: the in-place editor rewrites a message
-	// that already exists, and the plan card has nothing to say about it.
-	const waiting = status === "waiting" || (awaitingPlanReview && variant !== "edit");
+	// that already exists, and the card has nothing to say about it.
+	const waiting = status === "waiting" || (awaitingDecision && variant !== "edit");
 	/** During a turn Enter queues the message and Cmd/Ctrl+Enter steers it (see `sendMessage`). */
 	const active = useAppStore(turnActive);
 	const queuedCount = useAppStore((state) => state.current?.queuedMessages?.length ?? 0);

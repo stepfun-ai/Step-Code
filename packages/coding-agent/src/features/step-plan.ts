@@ -471,6 +471,18 @@ export const createStepPlanExtension =
 			restoreTools();
 			updateStatus(ctx, enabled, planSource);
 		};
+		/**
+		 * Leave plan mode because the user said so.
+		 *
+		 * Nothing else tells the model: the Default announcement only reaches its
+		 * next request, so a run still streaming would keep going and, with the
+		 * boundary lifted, start implementing the plan the user just rejected. End
+		 * that work here instead of leaving it to read the mode change.
+		 */
+		const leaveByUser = (outcome: StepPlanExitOutcome, ctx: ExtensionContext): void => {
+			exit(outcome, ctx);
+			if (!ctx.isIdle()) ctx.abort();
+		};
 		const recordPendingProposal = (planHash: string): void => {
 			pendingProposal = planHash;
 			// Persisted with the mode: a resumed session still knows a proposal is
@@ -503,13 +515,10 @@ export const createStepPlanExtension =
 			handler: async (args, ctx) => {
 				const prompt = args.trim();
 				if (!prompt) {
-					if (enabled) {
-						exit("toggled_off", ctx);
-						// State the host already draws; see enter().
-						ctx.ui.notify("Plan mode disabled.", "info", { transient: true });
-					} else {
-						enter(ctx);
-					}
+					// The host draws the mode; a notice for it would be a row nobody
+					// typed, on the screen the user is already reading.
+					if (enabled) leaveByUser("toggled_off", ctx);
+					else enter(ctx);
 					return;
 				}
 				// Absolute verbs, so a host that can only send text can express
@@ -522,10 +531,7 @@ export const createStepPlanExtension =
 					return;
 				}
 				if (prompt === "off") {
-					if (enabled) {
-						exit("toggled_off", ctx);
-						ctx.ui.notify("Plan mode disabled.", "info", { transient: true });
-					}
+					if (enabled) leaveByUser("toggled_off", ctx);
 					return;
 				}
 				if (prompt === "approve") {
