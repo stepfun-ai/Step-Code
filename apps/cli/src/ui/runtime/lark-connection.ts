@@ -174,7 +174,14 @@ export function createLarkConnectionExtension(): ExtensionFactory {
 			if (notes.length) content.unshift({ type: "text", text: notes.join("\n\n") });
 			if (!content.length) return;
 			// Do not execute remote slash commands, login flows or editor actions.
-			pi.sendUserMessage(content, { deliverAs: "followUp", expandPromptTemplates: false });
+			// The author is a real person on the far end, so this message can answer a
+			// decision the session is waiting for: reporting it as extension-authored
+			// would park it behind that same decision.
+			pi.sendUserMessage(content, {
+				deliverAs: "followUp",
+				expandPromptTemplates: false,
+				source: "rpc",
+			});
 		};
 		const pair = async (current: Connection) => {
 			let stage = "pairing initialization";

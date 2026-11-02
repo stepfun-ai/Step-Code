@@ -338,7 +338,14 @@ describe("current-session Lark connection", () => {
 		await vi.waitFor(() => expect(fixture.start).toHaveBeenCalled());
 		const message = fixture.options.onMessage as (message: unknown) => void;
 		message({ id: "m1", chatId: "chat", text: "hello", imageKeys: [], files: [] });
-		await vi.waitFor(() => expect(harness.submit).toHaveBeenCalledWith([{ type: "text", text: "hello" }], { deliverAs: "followUp", expandPromptTemplates: false }));
+		await vi.waitFor(() =>
+			expect(harness.submit).toHaveBeenCalledWith([{ type: "text", text: "hello" }], {
+				deliverAs: "followUp",
+				expandPromptTemplates: false,
+				// A person typed this on the far end, so it can answer a pending decision.
+				source: "rpc",
+			}),
+		);
 		harness.handlers.get("before_agent_start")?.({ prompt: "hello" }, harness.context);
 		await vi.waitFor(() => expect(fixture.send).toHaveBeenCalled());
 		harness.handlers.get("message_end")?.({ message: { role: "assistant", content: [{ type: "text", text: "answer" }] } });

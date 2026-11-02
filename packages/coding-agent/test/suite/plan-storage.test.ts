@@ -29,7 +29,7 @@ function git(cwd: string, ...args: string[]): string {
 	});
 }
 
-async function setup(external: boolean, approvePlan: boolean) {
+async function setup(external: boolean, approvePlan: boolean, mode: "json" | "text" = "json") {
 	const storage = mkdtempSync(join(tmpdir(), "step-plan-storage-"));
 	roots.push(storage);
 	const harness = await createHarness({
@@ -110,7 +110,7 @@ async function setup(external: boolean, approvePlan: boolean) {
 	const run = async () => {
 		await harness.session.prompt("/plan");
 		return runPrintMode(host as unknown as AgentSessionRuntimeHost, {
-			mode: "json",
+			mode,
 			initialMessage: "Plan the change, implement it, and finish with committed work.",
 			completionCheck: "git-committed",
 			completionCheckAttempts: 1,
@@ -171,7 +171,7 @@ test.each([false, true])(
 			hasCommittedChanges: false,
 			trackedDirty: false,
 			untrackedFiles: !external,
-			hasFinalText: true,
+			hasFinalText: false,
 			status: "follow_up",
 			willFollowUp: true,
 		});
@@ -231,7 +231,7 @@ test.each([false, true])(
 		const { harness, planPath, run } = await setup(external, false);
 		expect(await run()).toBe(0);
 		expect(getUserTexts(harness)).toHaveLength(1);
-		expect(harness.getPendingResponseCount()).toBe(1);
+		expect(harness.getPendingResponseCount()).toBe(2);
 		expect(readFileSync(planPath, "utf8")).toBe("# Proposal\nCheck the parser and tests.\n");
 		const exit = harness.eventsOfType("tool_execution_end").find((event) => event.toolName === "exit_plan_mode");
 		expect(exit?.result.details).toMatchObject({
@@ -247,3 +247,14 @@ test.each([false, true])(
 		expect(completionEvents).toEqual([]);
 	},
 );
+
+test("a headless text run hands off the proposal on stdout", async () => {
+	// The handoff ends the turn on the tool result, so there is no assistant
+	// message left to print. A text caller cannot read the json event stream, and
+	// an empty stdout at exit 0 would hide the proposal it has to approve.
+	const { run } = await setup(true, false, "text");
+	expect(await run()).toBe(0);
+	expect(stdout).toContain("caller must gate approval externally");
+	expect(stdout).toContain("Plan contents:");
+	expect(stdout).toContain("Check the parser and tests.");
+});

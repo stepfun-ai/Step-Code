@@ -164,7 +164,7 @@ function createContext(cwd: string, model?: Model<string>): ExtensionContext {
 			getToolsExpanded: () => false,
 			setToolsExpanded: () => {},
 		},
-		sessionManager: { getEntries: () => [], getSessionId: () => "test-session" },
+		sessionManager: { getEntries: () => [], getBranch: () => [], getSessionId: () => "test-session" },
 		modelRegistry: {} as never,
 		scopedModels: [],
 	} as unknown as ExtensionContext;

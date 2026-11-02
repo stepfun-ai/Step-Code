@@ -14,9 +14,16 @@
 import { existsSync } from "node:fs";
 import type { AgentMessage } from "@step-harness/agent-core";
 import type { EventBus } from "../core/event-bus.ts";
-import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ExtensionFactory,
+	ToolCallEventResult,
+} from "../core/extensions/types.ts";
 import { resolveToCwd } from "../core/tools/path-utils.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
+import { getThenRunCommand } from "../step/then-run.ts";
+import { hasPendingExternalPlanApproval } from "./plan-handoff.ts";
 import { type LegacyPlanTodoFields, migrateLegacyPlanTodos } from "./plan-mode-migration.ts";
 import { buildDefaultModePrompt, buildPlanModePrompt, PLAN_MODE_MESSAGE_TYPE } from "./plan-mode-prompt.ts";
 import {
@@ -131,17 +138,165 @@ function sameToolOrder(left: readonly string[], right: readonly string[]): boole
 }
 
 const publishedPlanModes = new WeakMap<object, boolean>();
+/** Plan path the live mode owns, so an in-memory override wins over the branch. */
+const publishedPlanPaths = new WeakMap<object, string>();
+/** Sessions whose host loaded this extension, so the permission pre-check can opt in. */
+const planExtensionSessions = new WeakSet<object>();
+
+export function markPlanExtensionMounted(sessionManager: object): void {
+	planExtensionSessions.add(sessionManager);
+}
+
+export function isPlanExtensionMounted(sessionManager: object): boolean {
+	return planExtensionSessions.has(sessionManager);
+}
 export function getStepPlanMode(manager: object): string {
 	const value = publishedPlanModes.get(manager);
 	return value === undefined ? "Unknown" : value ? "Plan" : "Default";
+}
+
+/** Latest plan state recorded on the branch, for hosts and guards. */
+export interface StepPlanState {
+	enabled: boolean;
+	planFilePath?: string;
+	planSource: StepPlanSource;
+}
+
+/**
+ * Plan mode as of the latest `step-plan` entry on the branch.
+ *
+ * Reads persisted state rather than the in-memory marker, so a guard that runs
+ * before this process replayed `session_start` still sees the right answer.
+ */
+export function getStepPlanState(
+	entries: readonly { type: string; customType?: string; data?: unknown }[],
+): StepPlanState | undefined {
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index]!;
+		if (entry.type !== "custom" || entry.customType !== "step-plan") continue;
+		const data = entry.data;
+		if (!data || typeof data !== "object" || !("enabled" in data) || typeof data.enabled !== "boolean") continue;
+		const source = "planSource" in data ? data.planSource : undefined;
+		return {
+			enabled: data.enabled,
+			planSource: source === "user" || source === "agent" ? source : "unknown",
+			...("planFilePath" in data && typeof data.planFilePath === "string"
+				? { planFilePath: data.planFilePath }
+				: {}),
+		};
+	}
+	return undefined;
+}
+
+export interface PlanModeToolCallDecision {
+	planFilePath: string;
+	targetPath: string;
+	targetsPlanFile: boolean;
+	block?: ToolCallEventResult;
+}
+
+/**
+ * Plan mode's verdict on one tool call, or undefined when it decides nothing.
+ *
+ * The single source of truth for the plan-file boundary, shared by the Step
+ * permission pre-check and this extension's own guard. Two spellings would
+ * drift, and the drift is silent: a path one side accepts and the other blocks
+ * is an edit the user is asked to approve and then refused.
+ *
+ * The live marker is authoritative when this process has published one: it is
+ * only set after the matching state was persisted, so the common hot path costs
+ * one WeakMap read instead of walking the branch. A process that has not seen
+ * the session yet falls back to the branch.
+ */
+export function planModeToolCallDecision(options: {
+	manager: { getBranch(): readonly { type: string; customType?: string; data?: unknown }[]; getSessionId(): string };
+	cwd: string;
+	toolName: string;
+	input: unknown;
+}): PlanModeToolCallDecision | undefined {
+	if (!MUTATING_TOOLS.has(options.toolName)) return undefined;
+	const live = publishedPlanModes.get(options.manager);
+	if (live === false) return undefined;
+	const state = live === true ? undefined : getStepPlanState(options.manager.getBranch());
+	if (live !== true && !state?.enabled) return undefined;
+	const planFilePath =
+		publishedPlanPaths.get(options.manager) ??
+		state?.planFilePath ??
+		getPlanFilePath(options.manager.getSessionId(), options.cwd);
+	const input = options.input;
+	const targetPath =
+		input && typeof input === "object" && "path" in input && typeof input.path === "string" ? input.path : "";
+	const thenRun = getThenRunCommand(options.toolName, input);
+	if (targetPath && resolveToCwd(targetPath, options.cwd) === resolveToCwd(planFilePath, options.cwd)) {
+		// `then_run` is a shell command fused into the mutation, and gates elsewhere
+		// already treat it as an embedded `run_command`. Writing the plan file is
+		// allowed; the command that would run with it is not, or plan mode would
+		// hand out arbitrary file writes through the one path it permits.
+		if (thenRun !== undefined) {
+			return {
+				planFilePath,
+				targetPath,
+				targetsPlanFile: true,
+				block: {
+					block: true,
+					reason: [
+						"Plan mode is active, so this file mutation was blocked: `then_run` runs a shell command, which is not part of writing the plan.",
+						`Target: ${targetPath}`,
+						`Command: ${thenRun}`,
+						"Write the plan file without `then_run`; verify the plan after the user approves it.",
+					].join("\n"),
+				},
+			};
+		}
+		return { planFilePath, targetPath, targetsPlanFile: true };
+	}
+	if (thenRun !== undefined) {
+		return {
+			planFilePath,
+			targetPath,
+			targetsPlanFile: false,
+			block: {
+				block: true,
+				reason: [
+					`Plan mode is active, so this file mutation was blocked. Only the plan file may be written: ${planFilePath}`,
+					`Target: ${targetPath || "(no path provided)"}`,
+					`Command: ${thenRun}`,
+					"Plan mode is a permission restriction, not a missing tool: do not retry this edit or rephrase the path.",
+					"Write the implementation proposal to the plan file with write_file, then call exit_plan_mode to submit it for review.",
+				].join("\n"),
+			},
+		};
+	}
+	return {
+		planFilePath,
+		targetPath,
+		targetsPlanFile: false,
+		block: {
+			block: true,
+			reason: [
+				`Plan mode is active, so this file mutation was blocked. Only the plan file may be written: ${planFilePath}`,
+				`Target: ${targetPath || "(no path provided)"}`,
+				"Plan mode is a permission restriction, not a missing tool: do not retry this edit or rephrase the path.",
+				"run_command keeps its normal permissions, but stay read-only while planning: do not use it to write or patch files.",
+				"Write the implementation proposal to the plan file with write_file, then call exit_plan_mode to submit it for review.",
+			].join("\n"),
+		},
+	};
 }
 
 /**
  * Status-bar chip: "Planning (user|agent|unknown)" while plan mode is on,
  * cleared (normal) otherwise.
  */
-function updateStatus(ctx: ExtensionContext, enabled: boolean, planSource: StepPlanSource | undefined): void {
+function updateStatus(
+	ctx: ExtensionContext,
+	enabled: boolean,
+	planSource: StepPlanSource | undefined,
+	planFilePath?: string,
+): void {
 	publishedPlanModes.set(ctx.sessionManager, enabled);
+	if (enabled && planFilePath) publishedPlanPaths.set(ctx.sessionManager, planFilePath);
+	else publishedPlanPaths.delete(ctx.sessionManager);
 	if (enabled) {
 		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", `Planning (${planSource ?? "unknown"})`));
 	} else {
@@ -194,12 +349,12 @@ export const createStepPlanExtension =
 		 * Ordinary entries never carry a snapshot — this build appends tools
 		 * instead of replacing the list.
 		 */
-		const persistPlanState = (carriesLegacyTools?: string[]): void => {
+		const persistPlanState = (carriesLegacyTools?: string[], nextEnabled = enabled): void => {
 			pi.appendEntry("step-plan", {
 				version: 2,
-				enabled,
+				enabled: nextEnabled,
 				planFilePath,
-				planSource,
+				planSource: nextEnabled ? planSource : undefined,
 				...(carriesLegacyTools ? { toolsBeforePlanMode: carriesLegacyTools } : {}),
 			});
 		};
@@ -240,24 +395,38 @@ export const createStepPlanExtension =
 		const resolvePlanFilePath = (ctx: ExtensionContext): string =>
 			planFilePath ?? getPlanFilePath(ctx.sessionManager.getSessionId(), ctx.cwd);
 		const enter = (ctx: ExtensionContext): void => {
+			markPlanExtensionMounted(ctx.sessionManager);
+			const previousPath = planFilePath;
 			enabled = true;
 			planSource = "user";
 			planFilePath = resolvePlanFilePath(ctx);
+			// Persist before publishing the live marker: a failed write must leave the
+			// session exactly as it was, not enter a mode that resume cannot see.
+			try {
+				persistPlanState();
+			} catch (error) {
+				enabled = false;
+				planSource = undefined;
+				planFilePath = previousPath;
+				throw error;
+			}
 			enable();
 			recordPlanEnter(options.telemetry, planSource);
-			updateStatus(ctx, enabled, planSource);
-			persistPlanState();
+			updateStatus(ctx, enabled, planSource, planFilePath);
 			ctx.ui.notify(
 				`Plan mode enabled. Draft your proposal at ${planFilePath}; file-editing tools are limited to this path. Commands still use normal permissions.`,
 				"info",
 			);
 		};
 		const exit = (outcome: StepPlanExitOutcome, ctx: ExtensionContext): void => {
+			if (!enabled) return;
+			// Persist before lifting the live restriction: a failed write must leave
+			// the session in plan mode, not strand the branch saying it is still on.
+			persistPlanState(undefined, false);
 			recordPlanExit(options.telemetry, planSource, outcome);
 			enabled = false;
 			planSource = undefined;
 			restoreTools();
-			persistPlanState();
 			updateStatus(ctx, enabled, planSource);
 		};
 		const planModeController: StepPlanModeController = {
@@ -295,28 +464,18 @@ export const createStepPlanExtension =
 		});
 		registerPlanModeTools(pi, planModeController);
 		pi.on("tool_call", async (event, ctx) => {
-			if (!enabled || !MUTATING_TOOLS.has(event.toolName)) return;
-			const planPath = resolvePlanFilePath(ctx);
-			const toolInput = (event.input ?? {}) as Record<string, unknown>;
-			const targetPath = typeof toolInput.path === "string" ? toolInput.path : "";
-			// Resolve exactly as the file tools do (`~`, `@`, unicode spaces), so an
-			// allowed target cannot land somewhere else than the guard checked.
-			if (targetPath && resolveToCwd(targetPath, ctx.cwd) === resolveToCwd(planPath, ctx.cwd)) {
+			const decision = planModeToolCallDecision({
+				manager: ctx.sessionManager,
+				cwd: ctx.cwd,
+				toolName: event.toolName,
+				input: event.input,
+			});
+			if (decision?.targetsPlanFile && !decision.block) {
 				// Allowed: the mutation targets the plan file itself. This runs
 				// before the write lands, so a missing file marks the plan's creation.
-				recordPlanUpdate(options.telemetry, planSource, !existsSync(planPath));
-				return;
+				recordPlanUpdate(options.telemetry, planSource, !existsSync(decision.planFilePath));
 			}
-			return {
-				block: true,
-				reason: [
-					`Plan mode is active, so this file mutation was blocked. Only the plan file may be written: ${planPath}`,
-					`Target: ${targetPath || "(no path provided)"}`,
-					"Plan mode is a permission restriction, not a missing tool: do not retry this edit or rephrase the path.",
-					"run_command keeps its normal permissions, but stay read-only while planning: do not use it to write or patch files.",
-					`Write the implementation proposal to the plan file with write_file, then call exit_plan_mode to submit it for review.`,
-				].join("\n"),
-			};
+			return decision?.block;
 		});
 
 		// Announce mode changes by appending a collaboration-mode block, never by
@@ -364,13 +523,16 @@ export const createStepPlanExtension =
 			const activePlanTaskTools = pi.getActiveTools().filter((name) => PLAN_TASK_TOOLS.has(name));
 			// Undo whatever the previous branch's entry applied before reading the next.
 			restoreTools();
-			const planStates = [...ctx.sessionManager.getBranch()]
-				.reverse()
-				.flatMap((entry) =>
-					entry.type === "custom" && entry.customType === "step-plan"
-						? [entry.data as (PlanState & LegacyPlanTodoFields) | undefined]
-						: [],
-				);
+			const planStates = [...ctx.sessionManager.getBranch()].reverse().flatMap((entry) => {
+				if (entry.type !== "custom" || entry.customType !== "step-plan") return [];
+				const data = entry.data;
+				// Skip malformed entries the same way `getStepPlanState` does, so a
+				// branch and its live marker never disagree about the same history.
+				if (!data || typeof data !== "object" || !("enabled" in data) || typeof data.enabled !== "boolean") {
+					return [];
+				}
+				return [data as PlanState & LegacyPlanTodoFields];
+			});
 			const restoredPlanState = planStates[0];
 			// The list to undo belongs to whichever entry narrowed it. An on-entry
 			// wins over an older carried snapshot, so a newer plan session never
@@ -402,12 +564,22 @@ export const createStepPlanExtension =
 				enter(ctx);
 				return;
 			}
-			updateStatus(ctx, enabled, planSource);
+			updateStatus(ctx, enabled, planSource, planFilePath);
 		};
 		pi.on("session_start", async (event, ctx) => {
+			// Two extensions in one runner receive different API objects, so the
+			// presence marker is keyed by the session the pre-check also reads.
+			markPlanExtensionMounted(ctx.sessionManager);
+			// A handoff that no user message answered must not be continued by an
+			// automatic turn starter. The session asks this before any of them, so
+			// each feature does not need its own copy of the rule.
+			ctx.registerAutomaticTurnGuard?.(() => hasPendingExternalPlanApproval(ctx.sessionManager));
 			restorePlanState(ctx, event.reason === "startup" && pi.getFlag("plan") === true);
 		});
-		pi.on("session_tree", async (_event, ctx) => restorePlanState(ctx));
+		pi.on("session_tree", async (_event, ctx) => {
+			markPlanExtensionMounted(ctx.sessionManager);
+			restorePlanState(ctx);
+		});
 	};
 
 export const stepPlanExtension = createStepPlanExtension();

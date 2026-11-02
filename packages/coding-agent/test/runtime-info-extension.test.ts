@@ -132,6 +132,8 @@ function harness(options: { flag?: boolean | string; mode?: ExtensionContext["mo
 		isProjectTrusted: () => true,
 		signal: undefined,
 		hasPendingMessages: () => false,
+		hasPendingUserDecision: () => false,
+		registerAutomaticTurnGuard: () => () => {},
 		waitForIdle: async () => {},
 		getContextUsage,
 	};

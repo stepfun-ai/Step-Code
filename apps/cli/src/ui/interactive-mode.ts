@@ -2474,6 +2474,8 @@ export class InteractiveMode {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			},
 			hasPendingMessages: () => this.session.pendingMessageCount > 0,
+			hasPendingUserDecision: () => this.session.hasPendingUserDecision,
+			registerAutomaticTurnGuard: (guard) => this.session.registerAutomaticTurnGuard(guard),
 			shutdown: () => {
 				this.shutdownRequested = true;
 			},
