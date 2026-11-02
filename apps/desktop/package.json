@@ -10,7 +10,7 @@
 		"build": "node scripts/build.mjs",
 		"typecheck": "tsgo -p tsconfig.json --noEmit",
 		"test": "node --test test/*.test.ts",
-		"start": "pnpm --filter @step-harness/web build && node scripts/build.mjs && electron .",
+		"start": "node scripts/build.mjs --ensure-web && electron .",
 		"dev": "node scripts/build.mjs --ensure-web && electron .",
 		"icons": "node scripts/icons.mjs",
 		"package": "node scripts/build.mjs && node scripts/package.mjs",
