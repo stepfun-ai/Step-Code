@@ -2461,6 +2461,9 @@ export class InteractiveMode {
 			ui: this.createExtensionUIContext(),
 			mode: "tui",
 			hasUI: true,
+			// The terminal answers a plan review inside the tool call, so it never
+			// leaves a proposal waiting for a decision in the session.
+			planReviewSurface: false,
 			cwd: this.sessionManager.getCwd(),
 			sessionManager: this.sessionManager,
 			modelRegistry: extensionRunner.getModelRegistry(),

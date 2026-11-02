@@ -96,8 +96,8 @@ until the user answers. Neither means approval was granted. Every handoff ends t
 turn: the result sets `stopTurn` in addition to `terminate`.
 
 `approvalSource` identifies who owns the decision: `"user"` for the TUI review,
-including feedback and dismissal, and `"external"` for the headless / RPC
-caller's approval flow. It does not indicate that approval has occurred. Source
+including feedback and dismissal, and for a review-surface host whose person
+answers in the app; `"external"` for the headless / RPC caller's approval flow. It does not indicate that approval has occurred. Source
 and outcome are independent: a future caller-owned `"approved"` outcome can keep
 `approvalSource: "external"` without claiming the user clicked the TUI. Native
 headless/RPC exits currently emit `"external_approval_required"` only.
@@ -153,7 +153,7 @@ Native outcomes keep their existing behavior:
 | `approved` | `user` | `true` | The user selected execution; restore tools and continue. |
 | `feedback` | `user` | `false` | Keep planning and steer the user's notes into the next response. |
 | `dismissed` | `user` | `false` | Keep planning and stop the turn to wait for the user. |
-| `external_approval_required` | `external` | `true` / `false` | The turn ends. `true` for a caller that left the mode; `false` for a review-surface host that keeps planning until its user answers. |
+| `external_approval_required` | `external` / `user` | `true` / `false` | The turn ends. `true` for a caller that left the mode (`external`); `false` for a review-surface host that keeps planning until its user answers (`user`). |
 
 The TUI still selects execution by default, and Enter confirms that selection.
 Interactive result details also include the hash of the reviewed snapshot.
@@ -191,7 +191,12 @@ a host that must not proceed without approval keeps that gate on its own side �
 which is why the headless and RPC handoffs are gated by the caller.
 
 Inside the session, the plan extension registers one automatic-turn guard with
-`ctx.registerAutomaticTurnGuard`: a handoff that no user message has answered yet.
+`ctx.registerAutomaticTurnGuard`: is a proposal still waiting for its decision.
+The answer is the session fact `pendingProposalHash`, not the shape of the
+transcript. A decision clears it — `/plan approve`, a request for changes, or
+leaving plan mode — while a question typed past the proposal does not: on a host
+with a review surface the user is still deciding, and on a caller handoff the
+next turn owns the decision.
 Guards belong to the extension generation that registered them, so a reload drops
 the stale ones along with the runner whose context they capture.
 The session asks that guard before every turn it would start on the user's
@@ -207,8 +212,15 @@ decision: cron keeps the job due, and a goal continuation stays pending.
 A user's own prompt always runs: that message is how the decision gets answered.
 A host bridge forwarding a real person's input reports its own `source`, so the
 message is not mistaken for extension-generated text.
-The guard only recognizes *some* user message, because the approval belongs to
-the caller and the session must not guess at its wording. A host that needs a
-real decision records it on the tool result (the `tool_result` hook) or uses its
-own approval channel; a follow-up question typed by the user also clears the
-gate.
+The guard never guesses from wording. On a host without a review surface the
+decision belongs to the caller, and the only channel it has is a message; the
+first turn after the handoff therefore settles the wait, and the guard stays
+armed until then. A caller that wants the wait ended without writing a message
+sends `/plan off` (leave without implementing) or `/plan approve` (accept the
+proposal), and `/plan approve <hash>` binds the decision to the snapshot the
+caller actually read.
+
+A session written before the decision fact recorded its wait only in the
+transcript. `restorePlanState` migrates it once, from the still-unanswered
+handoff at the tail of the branch, so upgrading does not lift the gate on a
+proposal nobody answered.

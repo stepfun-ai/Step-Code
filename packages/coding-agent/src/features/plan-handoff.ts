@@ -17,6 +17,8 @@ import type { AgentMessage } from "@step-harness/agent-core";
 export interface ExternalPlanHandoff {
 	/** Model-facing handoff text: the explanation plus the reviewed plan. */
 	text: string;
+	/** Hash of the reviewed snapshot, when the result recorded one. */
+	planHash?: string;
 }
 
 /**
@@ -35,8 +37,10 @@ export function readExternalPlanHandoff(result: unknown): ExternalPlanHandoff | 
 	) {
 		return undefined;
 	}
+	const planHash = (details as { planHash?: unknown }).planHash;
+	const hash = typeof planHash === "string" ? { planHash } : {};
 	const content = (result as { content?: unknown }).content;
-	if (!Array.isArray(content)) return { text: "" };
+	if (!Array.isArray(content)) return { text: "", ...hash };
 	const text = content
 		.filter((part): part is { type: "text"; text: string } => {
 			if (typeof part !== "object" || part === null) return false;
@@ -46,7 +50,7 @@ export function readExternalPlanHandoff(result: unknown): ExternalPlanHandoff | 
 		.map((part) => part.text)
 		.join("\n")
 		.trim();
-	return { text };
+	return { text, ...hash };
 }
 
 /**
@@ -72,11 +76,51 @@ export function findPendingExternalPlanApproval(messages: readonly AgentMessage[
 }
 
 /**
- * There is deliberately no branch variant of the pending check.
+ * The proposal a caller should be shown instead of the assistant's last line.
  *
- * Deciding whether work may continue past a handoff is the `step-plan`
- * extension's `pendingProposalHash`, which a decision clears explicitly. A walk
- * over the branch would answer "is a handoff near the tail" and be taken for "is
- * the user's decision still outstanding" — the same two questions this file's
- * header warns against conflating.
+ * A handoff ends the turn on its tool result, so the last assistant message only
+ * introduces the submission. But "still unanswered" is the session fact, not the
+ * shape of the transcript: an approval that writes no user message — a decision
+ * made in a host that draws the card — would leave a scan reporting the old
+ * proposal forever.
  */
+export function pendingHandoffText(
+	state: { pendingProposalHash?: string } | undefined,
+	messages: readonly AgentMessage[],
+): string | undefined {
+	if (state?.pendingProposalHash === undefined) return undefined;
+	return findPendingExternalPlanApproval(messages)?.text;
+}
+
+/**
+ * The handoff a session written before the decision fact still leaves open.
+ *
+ * Only `restorePlanState` calls this, and only for an entry older than the
+ * `pendingProposalHash` field: those builds recorded the wait in the transcript
+ * alone, so a resumed session would otherwise resume with no gate at all. An
+ * entry written by this build always carries the fact, which a decision clears
+ * explicitly, and nothing else consults the transcript again.
+ *
+ * A `step-plan` entry after the handoff means the mode changed after it — the
+ * user left, or turned planning back on — and that is not a decision this
+ * function may replay.
+ */
+export function findLegacyUnansweredHandoff(manager: {
+	getBranch(): readonly { type: string; message?: AgentMessage; customType?: string }[];
+}): ExternalPlanHandoff | undefined {
+	const branch = manager.getBranch();
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index]!;
+		if (entry.type === "compaction" || entry.type === "branch_summary") return undefined;
+		// A plan entry above the handoff is a later transition: the handoff's own
+		// exit is written before its result, so it is still below.
+		if (entry.type === "custom" && entry.customType === "step-plan") return undefined;
+		if (entry.type !== "message" || !entry.message) continue;
+		const message = entry.message;
+		if (message.role === "user") return undefined;
+		if (message.role !== "toolResult" || message.toolName !== "exit_plan_mode" || message.isError) continue;
+		const handoff = readExternalPlanHandoff(message);
+		if (handoff) return handoff;
+	}
+	return undefined;
+}

@@ -24,7 +24,8 @@ import type {
 	WorkingIndicatorOptions,
 } from "../core/extensions/types.ts";
 import { isToolCommandFailure } from "../core/tools/command-outcome.ts";
-import { findPendingExternalPlanApproval } from "../features/plan-handoff.ts";
+import { pendingHandoffText } from "../features/plan-handoff.ts";
+import { getStepPlanState } from "../features/step-plan.ts";
 import type { Theme } from "../theme/theme.ts";
 import { STEP_DEFAULT_PROVIDER } from "./defaults.ts";
 import { listStepSessions } from "./session.ts";
@@ -664,9 +665,13 @@ export class StepStdioHost {
 		// A plan handoff ends the turn on its tool result, so the query can settle
 		// with no assistant text at all, or with an assistant line that introduces
 		// the submission. Reporting either as the result would hide the proposal the
-		// caller has to approve, so an unanswered handoff wins.
-		const pendingHandoff = findPendingExternalPlanApproval(this.#session.messages);
-		const text = (pendingHandoff ? pendingHandoff.text : this.#session.getLastAssistantText()) ?? "";
+		// caller has to approve, so the proposal wins while the decision fact says it
+		// is still waiting.
+		const pending = pendingHandoffText(
+			getStepPlanState(this.#session.sessionManager.getBranch()),
+			this.#session.messages,
+		);
+		const text = pending ?? this.#session.getLastAssistantText() ?? "";
 		this.#emitMessage(query, {
 			type: "result",
 			subtype: isError ? "error_during_execution" : "success",

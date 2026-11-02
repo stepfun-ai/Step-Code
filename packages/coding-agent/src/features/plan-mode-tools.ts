@@ -159,7 +159,7 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 		renderShell: "self",
 		renderResult: renderPlanReviewResult,
 		description:
-			"Submit the written proposal for review. Requires a readable, nonempty regular plan file. The user decides; you do not. In a host with a review surface — the terminal dialog, or the web and desktop apps — the proposal is shown and this turn ends, and plan mode stays until they answer: approval leaves planning and starts the work, a request for changes arrives as a new user message, and leaving keeps the mode off. A host without that surface hands the proposal to its caller, which must obtain approval before execution. If no proposal was written, answer read-only questions directly and keep plan mode active until the user turns it off.",
+			"Submit the written proposal for review. Requires a readable, nonempty regular plan file. The user decides; you do not. In a host that can show the proposal and collect a decision — the terminal dialog is one — the proposal is shown and this turn ends, and plan mode stays until they answer: approval leaves planning and starts the work, a request for changes arrives as a new user message, and leaving keeps the mode off. A host without that surface hands the proposal to its caller, which must obtain approval before execution. If no proposal was written, answer read-only questions directly and keep plan mode active until the user turns it off.",
 		promptSnippet: "Submit the written proposal for review",
 		parameters: Type.Object({}),
 		// A decision barrier: later calls in this batch must not run behind it.
@@ -193,7 +193,10 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				planContents,
 				planHash,
 				planModeExited: !planMode.isPlanModeActive(),
-				approvalSource: ctx.mode === "rpc" || !ctx.hasUI ? "external" : "user",
+				// Who owns the decision, not what carries it. A host that draws the
+				// proposal has a person answering, whatever transport it uses; without
+				// that surface the caller owns approval.
+				approvalSource: ctx.planReviewSurface || (ctx.mode !== "rpc" && ctx.hasUI) ? "user" : "external",
 				outcome,
 				...(feedback === undefined ? {} : { feedback }),
 			});

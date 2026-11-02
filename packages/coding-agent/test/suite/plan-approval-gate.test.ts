@@ -167,6 +167,8 @@ test("a caller handoff leaves the decision pending across a resume", async () =>
 	// survives with `enabled: false` — that is what keeps the guard holding.
 	expect(planEntry).toMatchObject({ enabled: false, pendingProposalHash: expect.any(String) });
 
+	// The restart replaces the extension generation and replays the branch, so the
+	// new guard has to read the wait back from the entry rather than from memory.
 	// The guard keeps holding automatic work until someone answers, and only an
 	// answer clears the fact.
 	harness.setResponses([fauxAssistantMessage("implemented")]);

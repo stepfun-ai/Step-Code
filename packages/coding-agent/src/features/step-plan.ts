@@ -23,6 +23,7 @@ import type {
 import { resolveToCwd } from "../core/tools/path-utils.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
 import { getThenRunCommand } from "../step/then-run.ts";
+import { findLegacyUnansweredHandoff } from "./plan-handoff.ts";
 import { type LegacyPlanTodoFields, migrateLegacyPlanTodos } from "./plan-mode-migration.ts";
 import { buildDefaultModePrompt, buildPlanModePrompt, PLAN_MODE_MESSAGE_TYPE } from "./plan-mode-prompt.ts";
 import {
@@ -54,8 +55,12 @@ const PLAN_TASK_TOOLS = new Set(["exit_plan_mode", "task_create", "task_update",
 export type StepPlanSource = "user" | "agent" | "unknown";
 
 interface PlanState {
-	/** Written by this build. Its presence marks an entry that never narrowed the tool list. */
-	version?: 2;
+	/**
+	 * Format of this entry. 2 marks an entry that never narrowed the tool list;
+	 * 3 also records the decision fact, so a wait left by an older build — which
+	 * only the transcript could describe — is migrated once at restore.
+	 */
+	version?: 2 | 3;
 	enabled: boolean;
 	/**
 	 * Legacy only: the list a narrowing entry replaced. Older builds dropped the
@@ -372,7 +377,7 @@ export const createStepPlanExtension =
 		 */
 		const persistPlanState = (carriesLegacyTools?: string[], nextEnabled = enabled): void => {
 			pi.appendEntry("step-plan", {
-				version: 2,
+				version: 3,
 				enabled: nextEnabled,
 				planFilePath,
 				planSource: nextEnabled ? planSource : undefined,
@@ -419,6 +424,11 @@ export const createStepPlanExtension =
 		const enter = (ctx: ExtensionContext): void => {
 			markPlanExtensionMounted(ctx.sessionManager);
 			const previousPath = planFilePath;
+			// Entering is not a decision on a proposal from an earlier round. A fact
+			// left by a caller handoff would otherwise be approvable against a
+			// snapshot the user is no longer looking at.
+			const previousPending = pendingProposal;
+			pendingProposal = undefined;
 			enabled = true;
 			planSource = "user";
 			planFilePath = resolvePlanFilePath(ctx);
@@ -430,6 +440,7 @@ export const createStepPlanExtension =
 				enabled = false;
 				planSource = undefined;
 				planFilePath = previousPath;
+				pendingProposal = previousPending;
 				throw error;
 			}
 			enable();
@@ -473,19 +484,35 @@ export const createStepPlanExtension =
 		 * that work here instead of leaving it to read the mode change.
 		 */
 		const leaveByUser = (outcome: StepPlanExitOutcome, ctx: ExtensionContext): void => {
+			// `exit` is a no-op outside the mode, and stopping a run the user never
+			// put into plan mode would cut an ordinary answer short.
+			if (!enabled) return;
 			exit(outcome, ctx);
 			if (!ctx.isIdle()) ctx.abort();
 		};
-		const recordPendingProposal = (planHash: string): void => {
-			pendingProposal = planHash;
-			// Persisted with the mode: a resumed session still knows a proposal is
-			// waiting, and a decision made before the restart is not replayed.
-			persistPlanState();
+		/**
+		 * Late decisions must not be applied to the wrong proposal.
+		 *
+		 * The fact is written with the mode. A failed write leaves the branch
+		 * saying something else, so the memory cannot keep the new value: a wait
+		 * nobody recorded would hold every automatic turn back with no way to see
+		 * why, and a decision nobody recorded would let work past a plan the user
+		 * never approved.
+		 */
+		const writePendingProposal = (next: string | undefined): void => {
+			const previous = pendingProposal;
+			pendingProposal = next;
+			try {
+				persistPlanState();
+			} catch (error) {
+				pendingProposal = previous;
+				throw error;
+			}
 		};
+		const recordPendingProposal = (planHash: string): void => writePendingProposal(planHash);
 		const clearPendingProposal = (): void => {
 			if (pendingProposal === undefined) return;
-			pendingProposal = undefined;
-			persistPlanState();
+			writePendingProposal(undefined);
 		};
 		const planModeController: StepPlanModeController = {
 			isPlanModeActive: () => enabled,
@@ -523,15 +550,31 @@ export const createStepPlanExtension =
 					return;
 				}
 				if (prompt === "off") {
+					// Leaving is a decision even when the mode already ended: a caller
+					// handoff leaves the proposal waiting, and the user saying "off" is
+					// the answer that releases it.
 					if (enabled) leaveByUser("toggled_off", ctx);
+					else clearPendingProposal();
 					return;
 				}
-				if (prompt === "approve") {
+				// `/plan approve` answers the proposal, `/plan approve <hash>` answers
+				// that one. Any other text after the verb is a task, not a decision.
+				const namedProposal = /^approve\s+(.+)$/.exec(prompt)?.[1]?.trim();
+				if (prompt === "approve" || namedProposal !== undefined) {
 					// The user accepted the proposal the host showed them. Leaving the
 					// mode and starting the implementation turn are one decision: the
 					// only way this turn runs with file mutations enabled.
-					if (!enabled || pendingProposal === undefined) {
+					//
+					// The verb may name the proposal it answers. A host that draws the
+					// card knows which snapshot the user clicked, and a decision that
+					// arrives after a newer submission must not approve that one — the
+					// file being current says nothing about which proposal was on screen.
+					if (pendingProposal === undefined) {
 						ctx.ui.notify("No plan is waiting for approval.", "warning");
+						return;
+					}
+					if (namedProposal !== undefined && namedProposal !== pendingProposal) {
+						ctx.ui.notify("That proposal is no longer waiting for approval.", "warning");
 						return;
 					}
 					// The approval belongs to the snapshot the user read. A file edited
@@ -544,11 +587,15 @@ export const createStepPlanExtension =
 						// Deleted or unreadable: not the reviewed snapshot either.
 					}
 					if (current !== pendingProposal) {
-						clearPendingProposal();
+						// Nothing was decided: the wait stays, so automatic work keeps
+						// holding until someone reviews the text that is on disk now.
 						ctx.ui.notify("The plan changed since it was submitted; ask for a new review.", "warning");
 						return;
 					}
-					exit("approved", ctx);
+					// A caller handoff already left the mode; the caller answering in
+					// text is the decision it was waiting for.
+					if (enabled) exit("approved", ctx);
+					else clearPendingProposal();
 					// The decision itself is the command; this is only the instruction it
 					// carries. As a user message it would read as a second thing the user
 					// said, next to the command row they actually sent.
@@ -574,24 +621,32 @@ export const createStepPlanExtension =
 				// session would wait on a proposal nobody is looking at.
 				const revising = pendingProposal !== undefined;
 				clearPendingProposal();
+				// Both halves travel on the same channel. Left to the default, a hidden
+				// message sent mid-run is steered into the current request while the
+				// notes wait in the follow-up queue — the model would be told to
+				// resubmit before it had read what to change, and the notes would arrive
+				// after the turn had already stopped for approval.
+				const queued = !ctx.isIdle();
+				if (revising) {
+					// The "submit again" half is an instruction, not something the user
+					// typed: a hidden message keeps it out of their bubble, and going
+					// first keeps it ahead of the notes in the same request.
+					pi.sendMessage(
+						{
+							customType: "step-plan-revision",
+							display: false,
+							content:
+								"These notes revise the proposal under review. Update the plan file, then call exit_plan_mode again to submit the new proposal for approval.",
+						},
+						queued ? { deliverAs: "followUp" } : undefined,
+					);
+				}
 				// Expand a leading `/skill:` or prompt template in the task, as the same
 				// text sent without `/plan` would be (the web composer puts its plan
 				// prefix in front of a picked skill).
-				if (revising) {
-					// The "submit again" half is an instruction, not something the user
-					// typed: a hidden message keeps it out of their bubble. It goes first
-					// so it rides the same request as the notes — a follow-up queued after
-					// the notes would only arrive once this turn had already stopped.
-					pi.sendMessage({
-						customType: "step-plan-revision",
-						display: false,
-						content:
-							"These notes revise the proposal under review. Update the plan file, then call exit_plan_mode again to submit the new proposal for approval.",
-					});
-				}
 				pi.sendUserMessage(prompt, {
 					expandPromptTemplates: true,
-					...(ctx.isIdle() ? {} : { deliverAs: "followUp" as const }),
+					...(queued ? { deliverAs: "followUp" as const } : {}),
 				});
 			},
 		});
@@ -689,6 +744,12 @@ export const createStepPlanExtension =
 			// that already left the mode: the guard must keep holding work until
 			// someone answers it, and only the answer clears this.
 			pendingProposal = restoredPlanState?.pendingProposalHash;
+			// An entry older than the fact recorded the wait only in the transcript.
+			// Migrate it once, so upgrading does not silently lift the gate on a
+			// session whose proposal nobody has answered.
+			if (restoredPlanState && (restoredPlanState.version ?? 2) < 3) {
+				pendingProposal = findLegacyUnansweredHandoff(ctx.sessionManager)?.planHash;
+			}
 			if (legacyBaseline) {
 				const baseline = unique([...legacyBaseline, ...activePlanTaskTools]);
 				if (!sameToolOrder(pi.getActiveTools(), baseline)) pi.setActiveTools(baseline);

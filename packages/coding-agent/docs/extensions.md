@@ -974,6 +974,12 @@ Current run mode: `"tui"`, `"rpc"`, `"json"`, or `"print"`. Use `ctx.mode === "t
 
 `true` in TUI and RPC modes. `false` in print mode (`-p`) and JSON mode. Use this to guard dialog methods (`select`, `confirm`, `input`, `editor`) and fire-and-forget methods (`notify`, `setStatus`, `setWidget`, `setTitle`, `setEditorText`) that work in both TUI and RPC modes. In RPC mode, some TUI-specific methods are no-ops or return defaults (see [rpc.md](rpc.md#extension-ui-protocol)).
 
+### ctx.planReviewSurface
+
+`true` when the host can show a plan proposal and collect a decision for it. `mode` and `hasUI` cannot answer this: every RPC host has a dialog bridge, including clients with no review surface and no person to answer.
+
+`exit_plan_mode` reads it. With the surface, the proposal is shown, the turn ends, and plan mode stays on until the user decides; without it, the mode ends and approval belongs to the caller. Hosts set it when they bind the session (`bindExtensions({ planReviewSurface: true })`); an extension sees the value on every handler's `ctx`.
+
 ### ctx.cwd
 
 Current working directory.
@@ -3007,11 +3013,11 @@ const highlighted = highlightCode(code, lang, theme);
 
 ## Mode Behavior
 
-| Mode | `ctx.mode` | `ctx.hasUI` | Notes |
-|------|------------|-------------|-------|
-| Interactive | `"tui"` | `true` | Full TUI with terminal rendering |
-| RPC (`--mode rpc`) | `"rpc"` | `true` | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`. See [rpc.md](rpc.md) |
-| JSON (`--mode json`) | `"json"` | `false` | Event stream to stdout; UI methods are no-ops |
+| Mode | `ctx.mode` | `ctx.hasUI` | `ctx.planReviewSurface` | Notes |
+|------|------------|-------------|------------------------|-------|
+| Interactive | `"tui"` | `true` | `false` | Full TUI with terminal rendering; a plan review is answered inside the tool call |
+| RPC (`--mode rpc`) | `"rpc"` | `true` | set by the host | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`. See [rpc.md](rpc.md) |
+| JSON (`--mode json`) | `"json"` | `false` | `false` | Event stream to stdout; UI methods are no-ops |
 | Print (`-p`) | `"print"` | `false` | Extensions run but can't prompt |
 
 Use `ctx.mode === "tui"` before TUI-specific features (`custom()`, component factories, terminal input). Use `ctx.hasUI` before dialog and notification methods that work in both TUI and RPC modes.
