@@ -85,6 +85,7 @@ import {
 } from "./prompt-editor";
 import { QueueDock } from "./QueueDock";
 import { type SlashItem, SlashMenu, type SlashMenuHandle, slashQuery } from "./SlashMenu";
+import { WarningsButton } from "./WarningsButton";
 
 export { ImagePreview } from "./ImagePreview";
 // The conversation's command-echo rows reuse the composer's command icon map
@@ -871,6 +872,8 @@ function ComposerInput({
 					) : null}
 				</div>
 				<div className="composer-controls">
+					{/* Warnings sit ahead of the menus: the badge is a status, not a tool. */}
+					{edit ? null : <WarningsButton />}
 					{/* The editor rewrites one message: it has no attach menu, policy picker or model switch. */}
 					{edit ? null : (
 						<PlusMenu

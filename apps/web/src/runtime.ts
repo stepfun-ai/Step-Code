@@ -43,6 +43,7 @@ import {
 	NOOP_OBSERVABILITY_PROVIDER,
 	normalizeFeedbackCategory,
 	openStepSession,
+	type PromptOptions,
 	plainTheme,
 	prepareFeedbackEvidence as prepareKernelFeedbackEvidence,
 	readFeedbackUsername,
@@ -184,6 +185,13 @@ export type WebEventBody =
 			markdown?: boolean;
 			/** Restates host-rendered state (plan mode, permission tier): shown briefly, not kept. */
 			transient?: boolean;
+			/**
+			 * Published while the kernel was still accepting something the user ran
+			 * (typed, or a composer control): a command's handler, the input hooks
+			 * before a turn. It is that input's reply; the page keeps reply warnings in
+			 * the transcript and collects other warnings in its warning badge.
+			 */
+			reply?: boolean;
 	  }
 	| {
 			/**
@@ -933,6 +941,8 @@ export class WebSession {
 	private startingPrompt?: { cancelled: boolean };
 	/** One background attempt to name this session after its first prompt has run. */
 	private sessionTitleGenerated = false;
+	/** User inputs the kernel is still accepting; their notices are replies (see `promptAsUser`). */
+	private acceptingUserInput = 0;
 	/**
 	 * Feedback evidence prepared for the dialog the user is reading, until the
 	 * submission that consumes it (see `feedback-report.ts`).
@@ -1310,7 +1320,8 @@ export class WebSession {
 				this.clarifications,
 				this.selections,
 				this.textInputs,
-				(notice) => this.emit({ type: "notice", ...notice }),
+				(notice) =>
+					this.emit({ type: "notice", ...notice, ...(this.acceptingUserInput > 0 ? { reply: true } : {}) }),
 				(answer) => this.recordSideAnswer(answer),
 			),
 			commandContextActions: {
@@ -1514,11 +1525,39 @@ export class WebSession {
 		if (promptCommand) this.nameSessionAfter(promptCommand);
 		// No words to generate a title from: without a name the listing reads "(no messages)".
 		else if (!text.trim() && attachments[0]) this.nameSessionAfter(attachments[0].name);
-		await this.session.prompt(sent, {
+		await this.promptAsUser(sent, {
 			source: "rpc",
 			...(images.length ? { images } : {}),
 			...(followUp ? { streamingBehavior: "followUp" as const } : {}),
 		});
+	}
+
+	/**
+	 * Run what the user asked for (typed, or a composer control). Until the
+	 * kernel accepts it — a command's handler returned, a message passed its
+	 * input hooks and is about to run — the notices it publishes are its reply
+	 * (`reply: true` on the SSE `notice`), so the page keeps those warnings in
+	 * the transcript. The turn that follows is ambient: its warnings go to the badge.
+	 */
+	private async promptAsUser(text: string, options: PromptOptions): Promise<void> {
+		this.acceptingUserInput += 1;
+		let accepting = true;
+		const accepted = () => {
+			if (!accepting) return;
+			accepting = false;
+			this.acceptingUserInput -= 1;
+		};
+		try {
+			await this.session.prompt(text, {
+				...options,
+				preflightResult: (success) => {
+					accepted();
+					options.preflightResult?.(success);
+				},
+			});
+		} finally {
+			accepted();
+		}
 	}
 
 	/**
@@ -1820,7 +1859,7 @@ export class WebSession {
 				resolve();
 			};
 		});
-		const applied = this.session.prompt(`/permissions ${preset}`, { source: "rpc" });
+		const applied = this.promptAsUser(`/permissions ${preset}`, { source: "rpc" });
 		// Before a dialog opens, a failure rejects the race below and becomes this
 		// request's error. After one opens, nobody awaits the command any more, so
 		// its failure is reported on the stream instead of being lost.
@@ -2255,7 +2294,7 @@ export class WebSession {
 		// Starting a goal is user input; the other toggles carry no text to title.
 		await this.promptTracked(() => {
 			if (mode === "goal" && enabled) this.maybeGenerateSessionTitle(prompt);
-			return this.session.prompt(prompt, { source: "rpc", streamingBehavior: "followUp" });
+			return this.promptAsUser(prompt, { source: "rpc", streamingBehavior: "followUp" });
 		});
 	}
 
@@ -2283,7 +2322,7 @@ export class WebSession {
 							: "/goal clear";
 		await this.promptTracked(() => {
 			if (action === "start") this.maybeGenerateSessionTitle(prompt);
-			return this.session.prompt(prompt, { source: "rpc", streamingBehavior: "followUp" });
+			return this.promptAsUser(prompt, { source: "rpc", streamingBehavior: "followUp" });
 		});
 	}
 
