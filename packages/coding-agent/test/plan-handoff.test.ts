@@ -43,6 +43,15 @@ test("a question typed past the proposal does not hide it", () => {
 	);
 });
 
+test("a newer answer is not hidden by the proposal it followed", () => {
+	// A host that draws the proposal keeps it pending when its user asks a question,
+	// so the fact still says one is waiting — but the model answered, and reporting
+	// the proposal instead would hide the answer the caller asked for.
+	const answer = { role: "assistant" as const, content: [{ type: "text" as const, text: "Because of the parser." }] };
+	const messages = [handoff, user, answer] as AgentMessage[];
+	expect(pendingHandoffText({ pendingProposalHash: "a".repeat(64) }, messages)).toBeUndefined();
+});
+
 test("a newer submission before its own result is not reported as the old text", () => {
 	// The fact names the snapshot; the transcript tail may still be the older
 	// round, whose text the user is no longer looking at.

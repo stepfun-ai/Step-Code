@@ -65,6 +65,11 @@ export function readExternalPlanHandoff(result: unknown): ExternalPlanHandoff | 
  * in a handoff" cannot answer this: a question typed past the proposal is not an
  * answer, and a newer submission recorded before its own result would be
  * reported with the older text.
+ *
+ * A newer answer still ends the search. On a host that draws the proposal, a
+ * question does not settle the wait, so the proposal stays pending — but the
+ * model has answered that question, and reporting the proposal instead would hide
+ * what the caller asked for.
  */
 export function pendingHandoffText(
 	state: { pendingProposalHash?: string } | undefined,
@@ -73,6 +78,9 @@ export function pendingHandoffText(
 	const pending = state?.pendingProposalHash;
 	if (pending === undefined) return undefined;
 	for (const message of [...messages].reverse()) {
+		// Any answer after the submission, and the proposal is no longer the last
+		// thing the model said.
+		if (message.role === "assistant" && hasText(message)) return undefined;
 		if (message.role !== "toolResult" || message.toolName !== "exit_plan_mode" || message.isError) continue;
 		const details = message.details as { planHash?: unknown } | undefined;
 		if (details?.planHash !== pending) continue;
@@ -81,6 +89,20 @@ export function pendingHandoffText(
 		if (text) return text;
 	}
 	return undefined;
+}
+
+function hasText(message: AgentMessage): boolean {
+	const content = (message as { content?: unknown }).content;
+	if (typeof content === "string") return content.trim().length > 0;
+	if (!Array.isArray(content)) return false;
+	return content.some(
+		(part) =>
+			typeof part === "object" &&
+			part !== null &&
+			(part as { type?: unknown }).type === "text" &&
+			typeof (part as { text?: unknown }).text === "string" &&
+			(part as { text: string }).text.trim().length > 0,
+	);
 }
 
 /**
