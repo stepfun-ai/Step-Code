@@ -230,6 +230,10 @@ export { FooterDataProvider } from "./core/footer-data-provider.ts";
 // rather than reimplement them, or it would act on empty/detached local state.
 // -----------------------------------------------------------------------------
 export { configureHttpDispatcher, formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "./core/http-dispatcher.ts";
+export {
+	createIncompleteTurnRecoveryMessage,
+	INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
+} from "./core/incomplete-turn-recovery.ts";
 export { KeybindingsManager } from "./core/keybindings.ts";
 export {
 	type BranchSummaryMessage,

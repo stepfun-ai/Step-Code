@@ -79,6 +79,10 @@ export {
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
 export {
+	createIncompleteTurnRecoveryMessage,
+	INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
+} from "./incomplete-turn-recovery.ts";
+export {
 	type ModelRequestCompleted,
 	type ModelRequestObserver,
 	type ModelRequestOutcome,
