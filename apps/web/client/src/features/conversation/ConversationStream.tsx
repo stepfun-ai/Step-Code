@@ -1,7 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useLocale, useT } from "../../i18n";
 import { collectTurnChanges } from "../../lib/turn-changes";
-import { transcriptNotices } from "../../state/notices";
 import { showToast } from "../../state/session";
 import { setUi, useAppStore } from "../../state/store";
 import type { MessageTimelineItem, SteeringMessage, TimelineItem } from "../../state/types";
@@ -119,9 +118,10 @@ export function ConversationStream() {
 	const stick = useRef(true);
 	const previousRows = useRef<readonly (IndexedTimelineRow | ProcessGroupRow)[]>([]);
 	// Notices belong to the page, not the session file: show only this session's.
-	// Ambient warnings are the exception: the composer's warning badge holds
-	// them, so a warning nobody asked for never interrupts the transcript.
-	const sessionNotices = useMemo(() => transcriptNotices(notices, sessionId), [notices, sessionId]);
+	const sessionNotices = useMemo(
+		() => notices.filter((notice) => notice.sessionId === sessionId),
+		[notices, sessionId],
+	);
 	const turns = useMemo(() => collectTurnChanges(items, cwd), [items, cwd]);
 	const footerAfter = useMemo(
 		() => new Map(collectTurnFooters(items, status, pendingTurn !== null).map((turn) => [turn.lastIndex, turn])),

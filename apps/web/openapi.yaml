@@ -1410,11 +1410,8 @@ paths:
             carry id. text_input_required carries `input` (id, sessionId, title, placeholder) and
             text_input_resolved carries id. side-answer carries `answer` (id, question, text, model, unavailable,
             createdAt) for the rail tab. `notice` carries level (info|warning|error), text and optional markdown:
-            it is command output from the kernel's `ui.notify`, never persisted and never part of the model's context.
-            `reply: true` marks a notice published while the kernel was still accepting something the user ran (typed,
-            or a composer control): a command's handler, or the input hooks before a turn. It is that input's reply.
-            The client shows replies and info/error notices in the transcript and collects every other warning in its
-            warning badge. `transient: true` marks an announcement of state the client already renders
+            it is command output from the kernel's `ui.notify`, shown in the transcript but never persisted and never
+            part of the model's context. `transient: true` marks an announcement of state the client already renders
             (plan mode, the permission tier): shown briefly, never added to the conversation. A failure the host cannot attribute to a request is sent as `web_error` with
             a message. queue carries a QueueState (queued, steering).
             Agent envelopes optionally carry thinkingTimings, keyed by original content-block index, with host-observed

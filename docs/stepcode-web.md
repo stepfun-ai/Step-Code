@@ -668,14 +668,7 @@ arguments or picked from the menu) opens the feedback dialog instead of a
 prompt. `/btw` opens its own rail tab (see below). Command replies reach the page through  
 the kernel's `ui.notify` → SSE `notice`, never as a user or assistant message,  
 so they do not enter the session file or the model's context; notices live for  
-the page load and can be dismissed. A warning the host marks `reply: true`
-(published while the kernel was still accepting the user's own input: a
-command's handler, or the input hooks before a turn) stays in the transcript
-with that input. Every other warning — a background failure, a problem
-mid-turn — is not a row: the composer collects it in the warning badge
-(`#warningsTrigger`, `⚠ N` at the start of the controls row), whose panel lists
-the session's warnings newest first with per-row dismiss and "clear all".
-The classification lives in `client/src/state/notices.ts`. Kernel `ui.input` prompts travel as
+the page load and can be dismissed. Kernel `ui.input` prompts travel as  
 `text-input-required` / `text-input-resolved` events and are answered through  
 `POST /api/v1/sessions/{id}/text-inputs/response`.  
 Skills come from `GET /api/v1/sessions/{id}/skills`  
