@@ -70,6 +70,11 @@ describe("lax message content handling", () => {
 			},
 		];
 		const harness = await createHarness({ extensionFactories });
+		// The replacement removes every block, so the turn is empty by structure and
+		// the session treats it exactly like a provider that returned nothing. The
+		// recovery is what turns it into a second model call here; this case is about
+		// the normalization, so the extra call is not what is under test.
+		harness.session.setIncompleteTurnRecoveryEnabled(false);
 
 		try {
 			harness.setResponses([fauxAssistantMessage("hello")]);
@@ -78,6 +83,8 @@ describe("lax message content handling", () => {
 			const assistantMessages = harness.session.messages.filter((message) => message.role === "assistant");
 			expect(assistantMessages).toHaveLength(1);
 			expect(assistantMessages[0].content).toEqual([]);
+			// The classification still describes the message that was persisted.
+			expect(assistantMessages[0].incomplete).toBe("no_visible_output");
 		} finally {
 			harness.cleanup();
 		}

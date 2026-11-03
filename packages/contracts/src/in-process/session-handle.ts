@@ -43,7 +43,19 @@ export interface AgentMessagePreview {
 export type AgentEvent =
 	| { readonly type: "agent_start" }
 	| { readonly type: "agent_end"; readonly willRetry: boolean }
-	| { readonly type: "agent_settled" }
+	| {
+			readonly type: "agent_settled";
+			/**
+			 * Why the run produced no usable answer, when the transcript cannot say it.
+			 *
+			 * A provider error is visible as an assistant message's stop reason. An empty
+			 * turn keeps the provider's own value, so a consumer that decides success from
+			 * the transcript alone would be wrong. Opaque here on purpose: the concrete
+			 * failure shape belongs to the product, which the contracts package must not
+			 * depend on.
+			 */
+			readonly failure?: unknown;
+	  }
 	| { readonly type: "turn_start" }
 	| { readonly type: "turn_end"; readonly message: AgentMessagePreview }
 	| { readonly type: "message_start"; readonly message: AgentMessagePreview }

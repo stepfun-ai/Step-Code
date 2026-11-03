@@ -410,7 +410,7 @@ test("usage reported by a runner after cancellation is still charged to the budg
 	expect(entries.at(-1)).toMatchObject({ status: "aborted", usage: { input: 7 } });
 });
 
-test("a resampled request in the same turn is tagged with the current congestion epoch", async () => {
+test("a follow-up request without a started event is tagged with the current congestion epoch", async () => {
 	let finish!: () => void;
 	const gate = new Promise<void>((resolve) => {
 		finish = resolve;
@@ -430,7 +430,7 @@ test("a resampled request in the same turn is tagged with the current congestion
 			runtime.semaphore.throttle(runtime.semaphore.epoch, 0);
 			expect(runtime.semaphore.max).toBe(3);
 			// The first success belongs to the pre-throttle epoch and is ignored. The
-			// resample that follows has no "started" event and must count again.
+			// follow-up request has no "started" event and must count again.
 			for (let i = 0; i < 5; i++) input.onModelRequest?.({ type: "succeeded" });
 			capAfterRecovery = runtime.semaphore.max;
 			finish();

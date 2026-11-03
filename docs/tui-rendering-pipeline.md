@@ -43,6 +43,12 @@
 
 产品侧接线在 `apps/cli/src/ui/`：`interactive-mode.ts`（组合根）、`runtime/input-dispatch.ts`（键位动作注册与提交路由）、`runtime/session-events.ts`（会话事件 → 组件树）、`runtime/redraw.ts`（渲染门面）。
 
+### 空回合与运行失败
+
+`AssistantMessage.incomplete` 仅说明回合没有可见回答或可执行调用，transcript 用中性说明展示；分类诊断不证明重试已开始，也不证明运行已结束。
+
+`runtime/session-events.ts` 在隐藏恢复消息的 `message_start` 时展示开始重试的历史行，次数来自消息的 `details.attempt/maxAttempts`。`agent_settled.failure` 则通过 `showError` 展示红色终态错误，即使其文案与回合说明相同也不省略。历史重载保留回合分类，不从连续空回合数推断运行终态。
+
 ## 1. 终端协商与输出原语
 
 `ProcessTerminal.start`（`terminal.ts:161`）按顺序做：

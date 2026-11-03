@@ -777,6 +777,8 @@ Every `AssistantMessage` includes a `stopReason` field that indicates how the ge
 - `"error"` - An error occurred during generation
 - `"aborted"` - Request was cancelled via abort signal
 
+A successful stop reason does not promise anything a client can act on. A turn can end with `stop` while carrying neither visible text nor a tool call, and `toolUse` while carrying no call at all. `classifyIncompleteAssistantTurn()` classifies that from the stop reason and content-block types alone, and the agent loop records it as `AssistantMessage.incomplete` (`"no_visible_output"` or `"missing_tool_call"`) without changing the stop reason. Use `assistantTerminalFailure()` when a consumer needs to decide whether a run produced a usable answer; do not infer it from `stopReason` alone.
+
 `AssistantMessage` may also include `responseId`, a provider-specific upstream response or message identifier when the underlying API exposes one. Do not assume it is always present across providers.
 
 ## Error Handling

@@ -74,6 +74,7 @@ export interface HarnessOptions {
 	bindings?: Parameters<AgentSession["bindExtensions"]>[0];
 	withConfiguredAuth?: boolean;
 	modelsJson?: Record<string, unknown>;
+	sessionPersistence?: boolean;
 }
 
 export interface Harness {
@@ -111,7 +112,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	const withConfiguredAuth = options.withConfiguredAuth ?? true;
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
-	const sessionManager = SessionManager.inMemory();
+	const sessionManager = options.sessionPersistence ? SessionManager.create(tempDir) : SessionManager.inMemory();
 	const settingsManager = SettingsManager.inMemory(options.settings);
 
 	const authStorage = AuthStorage.inMemory();

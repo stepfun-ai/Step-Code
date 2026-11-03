@@ -141,6 +141,7 @@ function makeNativeRunMessage(message: AssistantMessage, content: VisibleAssista
 		// an extra error/length row of its own.
 		stopReason: "stop",
 		errorMessage: undefined,
+		incomplete: undefined,
 	};
 }
 
@@ -707,7 +708,8 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 		const hasToolCalls = message.content.some((content) => content.type === "toolCall");
 		const needsStatus =
 			message.stopReason === "length" ||
-			(!hasToolCalls && (message.stopReason === "aborted" || message.stopReason === "error"));
+			(!hasToolCalls &&
+				(message.stopReason === "aborted" || message.stopReason === "error" || !!message.incomplete));
 		if (!needsStatus) {
 			this.nativeStatusComponent = undefined;
 			return;
@@ -716,6 +718,7 @@ export class StepAssistantMessageComponent extends AssistantMessageComponent {
 		const statusMessage = makeNativeRunMessage(message, []);
 		statusMessage.stopReason = message.stopReason;
 		statusMessage.errorMessage = message.errorMessage;
+		statusMessage.incomplete = message.incomplete;
 		if (!this.nativeStatusComponent) {
 			this.nativeStatusComponent = new AssistantMessageComponent(
 				statusMessage,

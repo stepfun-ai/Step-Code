@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback, ThinkingLevel } from "@step-harness/agent-core";
 import { Text } from "@step-harness/pi-tui";
-import { type Message, type ProviderErrorKind, StringEnum, type Usage } from "@step-harness/providers";
+import { contentBlocks, type Message, type ProviderErrorKind, StringEnum, type Usage } from "@step-harness/providers";
 import { type Static, Type } from "typebox";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { CHILD_SESSION_ORIGIN } from "../core/child-session.ts";
@@ -355,7 +355,11 @@ function isAssistantMessage(message: Message): message is Extract<Message, { rol
 
 function assistantText(message: Message): string {
 	if (!isAssistantMessage(message)) return "";
-	return message.content
+	// A child's message comes off a JSON pipe, so `content` can be a plain string.
+	// `isMessage` already accepts that shape; reading it must not throw.
+	const content = contentBlocks(message);
+	if (content.length === 0 && typeof message.content === "string") return message.content;
+	return content
 		.filter((part): part is { type: "text"; text: string } => part.type === "text")
 		.map((part) => part.text)
 		.join("\n");
@@ -403,6 +407,39 @@ export function providerErrorKind(
 
 export function isFailed(result: Pick<StepSubagentRunResult, "exitCode" | "stopReason">): boolean {
 	return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+}
+
+/**
+ * The terminal outcome a settled child leaves its lane with.
+ *
+ * A user cancellation is not a failure: it is the caller's own stop. A settled run
+ * that reported a failure is one, whatever its transcript says. Anything else is a
+ * success — a provider error already reaches the lane through the assistant
+ * message, so this only has to carry what the transcript cannot express.
+ */
+export function settledTurnOutcome(
+	failure: string | undefined,
+	aborted: boolean,
+): { exitCode: number; stopReason?: string; errorMessage?: string } {
+	if (aborted) return { exitCode: 0, stopReason: "aborted", errorMessage: "Subagent was aborted" };
+	if (failure) return { exitCode: 1, stopReason: "error", errorMessage: failure };
+	return { exitCode: 0 };
+}
+
+/**
+ * The run-level failure a settled child reported, if any.
+ *
+ * A settled run is not automatically a successful one: a terminal incomplete turn
+ * keeps the provider's stop reason on its assistant message, so the child reports
+ * the failure on `agent_settled` instead.
+ */
+export function readSettledFailure(event: Record<string, unknown>): string | undefined {
+	if (event.type !== "agent_settled") return undefined;
+	const failure = isRecordValue(event.failure) ? event.failure : undefined;
+	if (!failure) return undefined;
+	return typeof failure.message === "string" && failure.message
+		? failure.message
+		: "The agent run ended without a usable answer.";
 }
 
 export function resultText(result: StepSubagentRunResult): string {

@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { AgentTool } from "@step-harness/agent-core";
-import { type Context, fauxAssistantMessage, fauxToolCall } from "@step-harness/providers";
+import { type Context, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@step-harness/providers";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { createHarness, type Harness } from "./harness.ts";
@@ -447,7 +447,7 @@ describe("AgentSession CLM context integration", () => {
 			expect(next!.messages.filter((m) => m.role === "toolResult")).toHaveLength(2);
 		},
 	);
-	it("accepts a valid edit after the native loop resamples a leaked tool call", async () => {
+	it("keeps a recovered incomplete turn in CLM source history before a later edit", async () => {
 		let h: Harness;
 		const noop: AgentTool = {
 			name: "noop",
@@ -477,7 +477,7 @@ describe("AgentSession CLM context integration", () => {
 		await h.session.prompt("next");
 		let next: Context | undefined;
 		h.setResponses([
-			fauxAssistantMessage("<tool_call>parser leak</tool_call>"),
+			fauxAssistantMessage(fauxThinking("recovered response retained in context")),
 			fauxAssistantMessage(fauxToolCall("noop", {}), { stopReason: "toolUse" }),
 			fauxAssistantMessage(fauxToolCall("organize", {}), { stopReason: "toolUse" }),
 			(context) => {
@@ -488,8 +488,8 @@ describe("AgentSession CLM context integration", () => {
 		await h.session.prompt("organize after noop");
 		expect(h.session.getLiveContextStatus()!.revision).toBe(1);
 		expect(JSON.stringify(next!.messages)).toContain("resampled finding");
-		expect(JSON.stringify(next!.messages)).not.toContain("parser leak");
-		expect(JSON.stringify(h.sessionManager.getEntries())).toContain("parser leak");
+		expect(JSON.stringify(next!.messages)).toContain("recovered response retained in context");
+		expect(JSON.stringify(h.sessionManager.getEntries())).toContain("recovered response retained in context");
 	});
 
 	it("keeps the existing raw-history threshold policy in lightweight mode", async () => {

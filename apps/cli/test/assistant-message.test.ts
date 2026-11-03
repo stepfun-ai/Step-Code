@@ -11,7 +11,7 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 
 function createAssistantMessage(
 	content: AssistantMessage["content"],
-	overrides: Partial<Pick<AssistantMessage, "stopReason">> = {},
+	overrides: Partial<Pick<AssistantMessage, "stopReason" | "incomplete">> = {},
 ): AssistantMessage {
 	return {
 		role: "assistant",
@@ -28,6 +28,7 @@ function createAssistantMessage(
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 		stopReason: overrides.stopReason ?? "stop",
+		incomplete: overrides.incomplete,
 		timestamp: Date.now(),
 	};
 }
@@ -71,6 +72,48 @@ describe("AssistantMessageComponent", () => {
 
 		expect(rendered).toContain("Thinking...");
 		expect(rendered).toContain("Response was truncated before completion.");
+	});
+
+	test("renders an incomplete turn without assuming a run outcome", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: "private reasoning" }], {
+				stopReason: "stop",
+				incomplete: "no_visible_output",
+			}),
+			true,
+		);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).toContain("The model returned no visible answer or executable tool call.");
+		expect(rendered).not.toMatch(/retried|retry limit|run ended/);
+	});
+
+	test.each([1, 2])("classification streak %s does not prove recovery or termination", (consecutiveTurns) => {
+		initTheme("dark");
+
+		const message = createAssistantMessage([{ type: "thinking", thinking: "private reasoning" }], {
+			stopReason: "stop",
+			incomplete: "no_visible_output",
+		});
+		message.diagnostics = [
+			{ type: "incomplete_turn", timestamp: 1, details: { consecutiveTurns, maxAttempts: 1 } },
+		];
+		const rendered = stripAnsi(new AssistantMessageComponent(message, true).render(80).join("\n"));
+
+		expect(rendered).toContain("The model returned no visible answer or executable tool call.");
+		expect(rendered).not.toMatch(/retried|retry limit|run ended/);
+	});
+
+	test("renders a completed turn without a status line", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(createAssistantMessage([{ type: "text", text: "answer" }]), true);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).toContain("answer");
+		expect(rendered).not.toContain("no visible answer");
 	});
 
 	test("coalesces adjacent thinking blocks into one hidden thinking label", () => {

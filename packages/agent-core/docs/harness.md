@@ -1305,6 +1305,10 @@ Overflow is checked before retryable error, so an oversized request compacts rat
 
 An overflow classification never produces a tool plan. A *genuine* `length` that carries tool calls does produce the full plan, executes nothing, and appends one `isError: true` result per call explaining that truncation may have corrupted the arguments — those results then require another assistant turn.
 
+**Incomplete responses are a product decision.** A response that stops normally while carrying neither visible text nor a structured tool call, or that reports `toolUse` without one, is structurally incomplete. The loop classifies it with `classifyIncompleteAssistantTurn()` from `stopReason` and content-block types only and records the result on the finished message as `AssistantMessage.incomplete`. It still ends the turn normally: it reads thinking not at all and text only to decide whether any is visible, and it does not discard the response, retry it, or rewrite the provider's stop reason.
+
+A product session owns any bounded recovery, such as appending a hidden recovery prompt and continuing once, and must bound how often a repeated incomplete response can happen. Because the stop reason stays truthful, a session must report a terminal incomplete turn as its own outcome rather than encoding it as a provider error: a product can carry it on its settled event, and consumers that must decide "did the run succeed" read `assistantTerminalFailure()` from `@step-harness/providers`, never `stopReason` alone.
+
 ## 3.8 Tools
 
 | From | Trigger | Transaction | To |

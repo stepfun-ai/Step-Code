@@ -146,7 +146,7 @@ subagent runner passes no ACL: its children read as top-level and each started a
 further wave of workflow agents, multiplying concurrent provider streams well past
 the account limit and producing cascading rate-limit failures.
 
-A turn settles on `agent_settled`, a failed prompt ack, or child exit. Because a
+A turn settles on `agent_settled`, a failed prompt ack, or child exit. Settlement is not success: a run that produced no usable answer reports it on `agent_settled.failure`, and the lane's exit code follows that rather than the absence of an error in the transcript. Because a
 child that stays alive without emitting any of those would strand its parent
 indefinitely, and `executeSubagent` awaits every lane, each turn also carries an
 idle watchdog. The budget is measured against child output rather than wall clock:
