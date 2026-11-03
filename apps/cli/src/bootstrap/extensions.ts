@@ -12,6 +12,7 @@ import {
 	createStepCronExtension,
 	createStepExtensionInline,
 	createStepGoalExtension,
+	createStepToolSearchExtension,
 	type InlineExtension,
 	type StepExtensionOptions,
 	type StepTelemetryReporter,
@@ -66,6 +67,7 @@ export function createStepExtensionFactories(deps: StepExtensionFactoryDeps): In
 		}),
 		createStepCronExtension({ telemetry: deps.telemetry }),
 		createStepGoalExtension({ telemetry: deps.telemetry }),
+		createStepToolSearchExtension(),
 		{ name: "connect-lark", factory: createLarkConnectionExtension(), hidden: true },
 		...(deps.stepCodeProviderExtension ? [deps.stepCodeProviderExtension] : []),
 	];

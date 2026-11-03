@@ -82,6 +82,8 @@ const READ_ONLY_TOOLS = new Set([
 	"search_web",
 	"read_file",
 	"find_tools",
+	// Loads tool definitions for the next model call; it touches no files and runs no command.
+	"tool_search",
 	// Keep native names safe when a caller explicitly enables a native tool.
 	"ls",
 	"find",

@@ -579,6 +579,13 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	/** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
 	renderShell?: "default" | "self";
 
+	/**
+	 * Whether the tool is active at session start. Defaults to true. Set false for a tool that is
+	 * only useful on request, such as a tool loader: it stays registered and reachable through the
+	 * tool settings, but the model does not see it until it is activated.
+	 */
+	defaultActive?: boolean;
+
 	/** Optional compatibility shim to prepare raw tool call arguments before schema validation. Must return an object conforming to TParams. */
 	prepareArguments?: (args: unknown) => Static<TParams>;
 

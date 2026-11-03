@@ -4076,6 +4076,10 @@ export class AgentSession {
 		const excludedToolNames = this._excludedToolNames;
 		const isAllowedTool = (name: string): boolean =>
 			(!allowedToolNames || allowedToolNames.has(name)) && !excludedToolNames?.has(name);
+		// A tool that opts out of the default selection stays registered but is not declared until
+		// the session activates it, through the tool settings or another tool's activation.
+		const isDefaultActive = (name: string): boolean =>
+			this._toolDefinitions.get(name)?.definition.defaultActive !== false;
 
 		const registeredTools = this._extensionRunner.getAllRegisteredTools();
 		const allCustomTools = [
@@ -4142,6 +4146,8 @@ export class AgentSession {
 		).filter((name) => isAllowedTool(name));
 
 		if (allowedToolNames && options?.includeAllExtensionTools) {
+			// The allowlist is an explicit selection, so it activates a tool that opted out of the
+			// default set.
 			for (const toolName of this._toolRegistry.keys()) {
 				if (allowedToolNames.has(toolName)) {
 					nextActiveToolNames.push(toolName);
@@ -4149,13 +4155,13 @@ export class AgentSession {
 			}
 		} else if (options?.includeAllExtensionTools) {
 			for (const tool of wrappedExtensionTools) {
-				nextActiveToolNames.push(tool.name);
+				if (isDefaultActive(tool.name)) nextActiveToolNames.push(tool.name);
 			}
 		} else {
 			// Preserve selections for known tools during refresh/reload; only genuinely
 			// new registrations opt in automatically after initial runtime creation.
 			for (const toolName of this._toolRegistry.keys()) {
-				if (!previousRegistryNames.has(toolName)) {
+				if (!previousRegistryNames.has(toolName) && isDefaultActive(toolName)) {
 					nextActiveToolNames.push(toolName);
 				}
 			}
