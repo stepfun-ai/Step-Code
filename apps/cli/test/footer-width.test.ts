@@ -2,7 +2,8 @@ import { visibleWidth } from "@step-harness/pi-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../../../packages/coding-agent/src/core/agent-session.ts";
 import type { ReadonlyFooterDataProvider } from "../../../packages/coding-agent/src/core/footer-data-provider.ts";
-import { FooterComponent, formatCwdForFooter } from "../src/ui/view/chrome/footer.ts";
+import { FooterComponent, formatCwdForFooter, warningListHint } from "../src/ui/view/chrome/footer.ts";
+import { formatKeyText } from "../../../packages/coding-agent/src/render/keybinding-hints.ts";
 import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 import { stripAnsi } from "../../../packages/coding-agent/src/utils/ansi.ts";
 
@@ -114,6 +115,22 @@ describe("formatCwdForFooter", () => {
 	it("abbreviates the home directory and descendants", () => {
 		expect(formatCwdForFooter("/home/user", "/home/user")).toBe("~");
 		expect(formatCwdForFooter("/home/user/project", "/home/user")).toBe("~/project");
+	});
+});
+
+describe("warningListHint", () => {
+	it("offers the slash command on macOS when the binding is an Option+letter dead key", () => {
+		expect(warningListHint(["alt+i"], "darwin")).toBe("/warnings");
+	});
+
+	it("keeps a reachable binding on macOS and every binding elsewhere", () => {
+		expect(warningListHint(["alt+i", "ctrl+shift+w"], "darwin")).toBe(formatKeyText("ctrl+shift+w"));
+		expect(warningListHint(["alt+i"], "linux")).toBe(formatKeyText("alt+i"));
+		expect(warningListHint(["alt+i"], "win32")).toBe(formatKeyText("alt+i"));
+	});
+
+	it("falls back to the slash command when nothing is bound", () => {
+		expect(warningListHint([], "linux")).toBe("/warnings");
 	});
 });
 
@@ -442,6 +459,63 @@ describe("FooterComponent width handling", () => {
 				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 			}
 		}
+	});
+
+	it("shows the warning count after the context readout in the Step footer", () => {
+		const footer = new FooterComponent(createSession({ sessionName: "" }), createFooterData(1), {
+			presentation: "step",
+			warningCount: () => 3,
+		});
+
+		const [line = ""] = footer.render(120);
+		const plain = stripAnsi(line);
+		expect(plain).toContain("⚠ 3");
+		expect(plain).toMatch(/88% context left\s+⚠ 3$/u);
+		expect(visibleWidth(line)).toBe(120);
+	});
+
+	it("omits the warning badge when the session has none", () => {
+		const footer = new FooterComponent(createSession({ sessionName: "" }), createFooterData(1), {
+			presentation: "step",
+			warningCount: () => 0,
+		});
+
+		expect(stripAnsi(footer.render(120)[0] ?? "")).not.toContain("⚠");
+	});
+
+	it("keeps the warning badge within narrow widths", () => {
+		const footer = new FooterComponent(createSession({ sessionName: "" }), createFooterData(1), {
+			presentation: "step",
+			warningCount: () => 12,
+		});
+		for (const width of [20, 40, 60]) {
+			for (const line of footer.render(width)) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+		}
+	});
+
+	it("names the key that opens the warning list on a wide footer only", () => {
+		const footer = new FooterComponent(createSession({ sessionName: "" }), createFooterData(1), {
+			presentation: "step",
+			warningCount: () => 2,
+			warningListKey: () => "alt+i",
+		});
+
+		expect(stripAnsi(footer.render(120)[0] ?? "")).toMatch(/88% context left\s+⚠ 2 \(alt\+i\)$/u);
+		expect(stripAnsi(footer.render(80)[0] ?? "")).toMatch(/⚠ 2$/u);
+	});
+
+	it("drops the context readout before the warning badge on a narrow footer", () => {
+		const footer = new FooterComponent(createSession({ sessionName: "" }), createFooterData(1), {
+			presentation: "step",
+			warningCount: () => 12,
+		});
+
+		const plain = stripAnsi(footer.render(22)[0] ?? "");
+		expect(plain).toMatch(/⚠ 12$/u);
+		expect(plain).not.toContain("context left");
+		expect(visibleWidth(footer.render(22)[0] ?? "")).toBeLessThanOrEqual(22);
 	});
 	it.each([20, 60, 80, 120])("renders Lark on its own row above the unchanged operational footer at %i columns", (width) => {
 		const statuses = new Map([["lark", "lark · connected · @周旭的飞书 CLI"]]);
