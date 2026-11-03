@@ -154,6 +154,13 @@ export interface ExtensionNotifyOptions {
 	 * entered. Modes without a transcript ignore it.
 	 */
 	echoesInput?: boolean;
+	/**
+	 * The message only restates state the host already renders from the session
+	 * (plan mode on/off, the permission tier). A host with a transcript shows it
+	 * briefly and keeps it out of the conversation: it is an announcement, not an
+	 * answer to something the user typed.
+	 */
+	transient?: boolean;
 }
 
 /** Raw terminal input listener for extensions. */
@@ -395,6 +402,15 @@ export interface ExtensionContext {
 	isIdle(): boolean;
 	/** Whether project-local trust is active for this context. */
 	isProjectTrusted(): boolean;
+	/**
+	 * The host can show a plan proposal and collect a decision for it.
+	 *
+	 * Unlike `hasUI`, this is about one specific surface, not about having a
+	 * dialog bridge at all: an rpc child has the bridge but no user to answer.
+	 * A host that cannot ask leaves this false, and the tool hands the proposal
+	 * to its caller as before.
+	 */
+	planReviewSurface: boolean;
 	/** The current abort signal, or undefined when the agent is not streaming. */
 	signal: AbortSignal | undefined;
 	/** Abort the current agent operation */
@@ -875,6 +891,16 @@ export interface TurnEndEvent {
 export interface MessageStartEvent {
 	type: "message_start";
 	message: AgentMessage;
+	/**
+	 * The message was written by a person, not generated on their behalf.
+	 *
+	 * Present on user messages: `true` when the person wrote it, `false` when an
+	 * extension produced it. Absent on other roles. A queued message and a prompt
+	 * look identical in the transcript, so an extension that must react to "the
+	 * user spoke" — rather than to "some user message exists" — reads this instead
+	 * of the content.
+	 */
+	fromUser?: boolean;
 }
 
 /** Fired during assistant message streaming with token-by-token updates */
@@ -1861,6 +1887,8 @@ export interface ExtensionContextActions {
 	getScopedModels: () => readonly ScopedModel[];
 	isIdle: () => boolean;
 	isProjectTrusted: () => boolean;
+	/** Whether the host can collect a plan review decision (optional; defaults to false). */
+	hasPlanReviewSurface?: () => boolean;
 	getSignal: () => AbortSignal | undefined;
 	abort: () => void;
 	hasPendingMessages: () => boolean;

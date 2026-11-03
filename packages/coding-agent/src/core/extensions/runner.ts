@@ -280,6 +280,7 @@ export class ExtensionRunner {
 	private getScopedModels: () => readonly ScopedModel[] = () => [];
 	private isIdleFn: () => boolean = () => true;
 	private isProjectTrustedFn: () => boolean = () => true;
+	private hasPlanReviewSurfaceFn: () => boolean = () => false;
 	private getSignalFn: () => AbortSignal | undefined = () => undefined;
 	private waitForIdleFn: () => Promise<void> = async () => {};
 	private abortFn: () => void = () => {};
@@ -350,6 +351,7 @@ export class ExtensionRunner {
 		this.getScopedModels = contextActions.getScopedModels;
 		this.isIdleFn = contextActions.isIdle;
 		this.isProjectTrustedFn = contextActions.isProjectTrusted;
+		this.hasPlanReviewSurfaceFn = contextActions.hasPlanReviewSurface ?? (() => false);
 		this.getSignalFn = contextActions.getSignal;
 		this.abortFn = contextActions.abort;
 		this.hasPendingMessagesFn = contextActions.hasPendingMessages;
@@ -807,6 +809,10 @@ export class ExtensionRunner {
 			isProjectTrusted: () => {
 				runner.assertActive();
 				return runner.isProjectTrustedFn();
+			},
+			get planReviewSurface() {
+				runner.assertActive();
+				return runner.hasPlanReviewSurfaceFn();
 			},
 			get signal() {
 				runner.assertActive();

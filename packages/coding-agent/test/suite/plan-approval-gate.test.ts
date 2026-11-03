@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@step-harness/providers";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { AgentSessionRuntimeHost } from "../../src/core/agent-session-runtime.ts";
@@ -28,6 +28,14 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
+/** Record the request the model actually received. */
+function record(requests: string[][]) {
+	return (context: { messages: readonly unknown[] }) => {
+		requests.push(context.messages.map((message) => JSON.stringify(message)));
+		return fauxAssistantMessage("recorded");
+	};
+}
+
 function printHost(harness: Harness): AgentSessionRuntimeHost {
 	return {
 		session: harness.session,
@@ -42,10 +50,11 @@ function printHost(harness: Harness): AgentSessionRuntimeHost {
 	} as unknown as AgentSessionRuntimeHost;
 }
 
-async function createPlanHarness(prefix: string) {
+async function createPlanHarness(prefix: string, bindings?: Parameters<Harness["session"]["bindExtensions"]>[0]) {
 	const storage = mkdtempSync(join(tmpdir(), prefix));
 	roots.push(storage);
 	const harness = await createHarness({
+		bindings,
 		settings: { compaction: { enabled: false }, retry: { enabled: false } },
 		extensionFactories: [
 			(pi) => {
@@ -149,40 +158,249 @@ test("a reload does not leave an automatic-turn guard stranded", async () => {
 	harness.setResponses([fauxAssistantMessage("after reload")]);
 	await harness.session.reload();
 	expect(harness.session.hasPendingUserDecision).toBe(false);
+});
 
-	// The new generation registers its own guard: an unanswered handoff on the
-	// restored branch is gated again. The handoff is appended directly because the
-	// reload also drops the test provider registration.
-	harness.sessionManager.appendMessage({
-		role: "toolResult",
-		toolCallId: "plan-after-reload",
-		toolName: "exit_plan_mode",
-		content: [{ type: "text", text: "Caller must approve." }],
-		details: { outcome: "external_approval_required" },
-		isError: false,
-		timestamp: Date.now(),
-	} as unknown as Parameters<typeof harness.sessionManager.appendMessage>[0]);
+test("a caller handoff leaves the decision pending across a reload", async () => {
+	// A handoff that leaves the mode still has an unanswered proposal, and the
+	// guard must keep holding automatic work after the extension generation is
+	// replaced: only the answer clears it.
+	const { harness, planPath } = await createPlanHarness("step-plan-gate-resume-");
+	await handoff(harness, planPath);
+	const planEntry = harness.sessionManager
+		.getBranch()
+		.flatMap((entry) =>
+			entry.type === "custom" && entry.customType === "step-plan" ? [(entry as { data?: unknown }).data] : [],
+		)
+		.at(-1);
+	// The handoff left the mode but the proposal is still unanswered, so the fact
+	// survives with `enabled: false` — that is what keeps the guard holding.
+	expect(planEntry).toMatchObject({ enabled: false, pendingProposalHash: expect.any(String) });
+
+	// The reload replaces the extension generation and replays the branch, so the
+	// new guard has to read the wait back from the entry rather than from memory.
+	harness.setResponses([fauxAssistantMessage("after reload")]);
+	await harness.session.reload();
+	expect(harness.session.hasPendingUserDecision).toBe(true);
+});
+
+test("notes sent mid-run reach the model as they are, with no second message", async () => {
+	// The revision is one message: the user's notes. A hidden companion could not
+	// be kept in the same request, and would tell the model to resubmit before it
+	// had read what to change.
+	const { harness, planPath } = await createPlanHarness("step-plan-gate-revision-", {
+		mode: "rpc",
+		planReviewSurface: true,
+	});
+	mkdirSync(dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Proposal\nDo it.\n");
+	const requests: string[][] = [];
+	harness.setResponses([fauxAssistantMessage([fauxToolCall("exit_plan_mode", {})])]);
+	await harness.session.prompt("/plan write the proposal");
 	expect(harness.session.hasPendingUserDecision).toBe(true);
 
-	harness.sessionManager.appendMessage({
-		role: "user",
-		content: [{ type: "text", text: "Approved." }],
-		timestamp: Date.now(),
-	} as unknown as Parameters<typeof harness.sessionManager.appendMessage>[0]);
+	harness.setResponses([record(requests)]);
+	await harness.session.prompt("/plan split the second step");
+
+	const request = requests.at(-1) ?? [];
+	// The notes are the whole message: they arrive as the user's own text and are
+	// the last thing the model sees, with no hidden instruction appended after them.
+	expect(request.at(-1)).toContain("split the second step");
+});
+
+test("a change request queued before the submission still reaches the model", async () => {
+	// The user typed these words, and the turn they waited behind is the one that
+	// submitted the proposal. Holding the queue back would leave their request
+	// behind a gate only they can open, with nothing on screen to open it.
+	const { harness, planPath } = await createPlanHarness("step-plan-gate-notes-", {
+		mode: "rpc",
+		planReviewSurface: true,
+	});
+	mkdirSync(dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Proposal\nDo it.\n");
+	const requests: string[][] = [];
+	harness.setResponses([
+		async () => {
+			await harness.session.sendUserMessage("split the second step", {
+				deliverAs: "followUp",
+				source: "rpc",
+			});
+			return fauxAssistantMessage([fauxToolCall("exit_plan_mode", {})]);
+		},
+		record(requests),
+		record(requests),
+	]);
+	await harness.session.prompt("/plan write the proposal");
+
+	// The submission armed the gate: the proposal is waiting for an answer.
+	expect(harness.session.hasPendingUserDecision).toBe(true);
+	// Their words are the input of the next request, not something the model is
+	// asked about and told afterwards: the turn that submits ends, and the message
+	// it held enters before the model is asked anything.
+	expect(requests).toHaveLength(1);
+	expect(requests[0]?.at(-1)).toContain("split the second step");
+});
+
+test("automatic work queued ahead of the user's words is still held", async () => {
+	// A continuation delivers one queued message at a time. Letting it run because
+	// the user said something later would deliver the automatic work first, on
+	// their behalf, past a decision they have not answered.
+	const { harness, planPath } = await createPlanHarness("step-plan-gate-auto-", {
+		mode: "rpc",
+		planReviewSurface: true,
+	});
+	mkdirSync(dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Proposal\nDo it.\n");
+	const requests: string[][] = [];
+	harness.setResponses([
+		async () => {
+			await harness.session.sendCustomMessage(
+				{ customType: "test-wake", content: "AUTOWORK", display: true, details: {} },
+				{ deliverAs: "followUp", triggerTurn: true },
+			);
+			await harness.session.sendUserMessage("split the second step", {
+				deliverAs: "followUp",
+				source: "rpc",
+			});
+			return fauxAssistantMessage([fauxToolCall("exit_plan_mode", {})]);
+		},
+		record(requests),
+		record(requests),
+	]);
+	await harness.session.prompt("/plan write the proposal");
+
+	expect(harness.session.hasPendingUserDecision).toBe(true);
+	// Their notes still get through — they are the answer the gate is waiting for.
+	expect(requests.some((request) => request.some((message) => message.includes("split the second step")))).toBe(true);
+	// The automatic work queued ahead of them does not, even though the turn that
+	// would deliver it is the one their notes justified.
+	expect(requests.some((request) => request.some((message) => message.includes("AUTOWORK")))).toBe(false);
+});
+
+test("work held by the decision is delivered once it is answered", async () => {
+	// Holding is not dropping: the automatic work queued before the decision must
+	// still run after the user answers, in one piece.
+	const { harness, planPath } = await createPlanHarness("step-plan-gate-held-", {
+		mode: "rpc",
+		planReviewSurface: true,
+	});
+	mkdirSync(dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Proposal\nDo it.\n");
+	const requests: string[][] = [];
+	harness.setResponses([
+		async () => {
+			await harness.session.sendCustomMessage(
+				{ customType: "test-wake", content: "AUTOWORK", display: true, details: {} },
+				{ deliverAs: "followUp", triggerTurn: true },
+			);
+			return fauxAssistantMessage([fauxToolCall("exit_plan_mode", {})]);
+		},
+		record(requests),
+	]);
+	await harness.session.prompt("/plan write the proposal");
+
+	// The submission holds the automatic work: it reached no request.
+	expect(harness.session.hasPendingUserDecision).toBe(true);
+	expect(requests.some((request) => request.some((message) => message.includes("AUTOWORK")))).toBe(false);
+
+	// Answering releases it. The approval turn runs first, then the work it held.
+	harness.setResponses([fauxAssistantMessage("implementing"), record(requests), record(requests)]);
+	await harness.session.prompt("/plan approve");
+	expect(harness.session.hasPendingUserDecision).toBe(false);
+	expect(requests.some((request) => request.some((message) => message.includes("AUTOWORK")))).toBe(true);
+});
+
+test("a caller handoff is settled by the message that answers it, at delivery", async () => {
+	// The message arrives through the queue, not through a new `prompt`: nothing
+	// runs `before_agent_start`, so the delivery itself has to settle the wait.
+	const { harness, planPath } = await createPlanHarness("step-plan-gate-delivery-", { mode: "rpc" });
+	mkdirSync(dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Proposal\nDo it.\n");
+	const requests: string[][] = [];
+	harness.setResponses([
+		async () => {
+			await harness.session.sendUserMessage("Approved, go ahead.", { deliverAs: "followUp", source: "rpc" });
+			return fauxAssistantMessage([fauxToolCall("exit_plan_mode", {})]);
+		},
+		record(requests),
+	]);
+	await harness.session.prompt("/plan write the proposal");
+
+	// Their words are the input of the next request, not a request the model takes
+	// before seeing them, and they settle the wait.
+	expect(requests).toHaveLength(1);
+	expect(requests[0]?.some((message) => message.includes("Approved, go ahead."))).toBe(true);
 	expect(harness.session.hasPendingUserDecision).toBe(false);
 });
 
-test("a compaction ends the wait instead of leaving a phantom decision", async () => {
+test("a custom message held by the decision is not folded into the user's question", async () => {
+	// Context an extension queued is not something the person wrote. It waits for the
+	// turn that answers the decision, even when that turn is a question: the model
+	// must not read automatic work past a decision that is still open.
+	const { harness, planPath } = await createPlanHarness("step-plan-gate-custom-", {
+		mode: "rpc",
+		planReviewSurface: true,
+	});
+	mkdirSync(dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Proposal\nDo it.\n");
+	harness.setResponses([fauxAssistantMessage([fauxToolCall("exit_plan_mode", {})])]);
+	await harness.session.prompt("/plan write the proposal");
+	expect(harness.session.hasPendingUserDecision).toBe(true);
+
+	await harness.session.sendCustomMessage(
+		{ customType: "test-wake", content: "AUTOWORK", display: true, details: {} },
+		{ deliverAs: "followUp", triggerTurn: true },
+	);
+
+	const requests: string[][] = [];
+	harness.setResponses([record(requests)]);
+	await harness.session.prompt("why the second step?");
+	expect(requests).toHaveLength(1);
+	expect(requests[0]?.some((message) => message.includes("AUTOWORK"))).toBe(false);
+});
+
+test("notes forwarded by a command still answer the decision they queued behind", async () => {
+	// `/plan <notes>` is the user's own words, forwarded by a command. The session
+	// tracks who typed it, so the note may answer the wait it queued behind instead
+	// of being held as extension traffic — otherwise a user asking for changes would
+	// have them silently dropped.
+	const { harness, planPath } = await createPlanHarness("step-plan-gate-command-notes-", {
+		mode: "rpc",
+		planReviewSurface: true,
+	});
+	mkdirSync(dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Proposal\nDo it.\n");
+	const requests: string[][] = [];
+	harness.setResponses([
+		async () => {
+			// Queued during the turn that submits, through the command path (`/plan`).
+			await harness.session.prompt("/plan split the second step");
+			return fauxAssistantMessage([fauxToolCall("exit_plan_mode", {})]);
+		},
+		record(requests),
+		record(requests),
+	]);
+	await harness.session.prompt("/plan write the proposal");
+
+	expect(harness.session.hasPendingUserDecision).toBe(true);
+	expect(requests).toHaveLength(1);
+	expect(requests[0]?.at(-1)).toContain("split the second step");
+});
+
+test("a compaction does not leave a decision nobody can answer", async () => {
 	const { harness, planPath } = await createPlanHarness("step-plan-gate-compact-");
 	await handoff(harness, planPath);
 	expect(harness.session.hasPendingUserDecision).toBe(true);
 
-	// The summary replaces the history that held the handoff, so it is no longer
-	// something the user can answer. Leaving the gate closed would stall goal,
-	// cron, and lane wake-ups with nothing to answer.
+	// The decision waits in the `step-plan` entry, not in the summarized history,
+	// so compaction changes neither answer nor wait. What must not happen is a
+	// decided proposal coming back after a summary.
 	const firstMessage = harness.sessionManager.getBranch().find((entry) => entry.type === "message");
 	expect(firstMessage).toBeDefined();
 	harness.sessionManager.appendCompaction("Earlier work summarized.", firstMessage!.id, 1_000);
+	expect(harness.session.hasPendingUserDecision).toBe(true);
+
+	harness.setResponses([fauxAssistantMessage("implemented")]);
+	await harness.session.prompt("Approved.");
 	expect(harness.session.hasPendingUserDecision).toBe(false);
 });
 

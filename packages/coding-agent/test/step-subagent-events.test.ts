@@ -1362,12 +1362,21 @@ test("idle keep-alive children are stopped after the TTL and a reply resumes qui
 		 * file I/O that a loaded CI runner loses. Advance in steps for a bounded
 		 * virtual budget instead, and report what did arrive.
 		 */
+		const seen = (count: number): boolean =>
+			sent.filter((m) => m.details?.event === "background_done").length >= count;
 		const settle = async (count: number): Promise<boolean> => {
-			for (let i = 0; i < 500; i += 1) {
-				if (sent.filter((m) => m.details?.event === "background_done").length >= count) return true;
+			// Bounded by real time, not by a step count. The notification waits on the
+			// child's exit and its details, which is real I/O: a fixed number of
+			// virtual-time steps is spent in a few milliseconds and loses that race on a
+			// loaded runner. Each step also yields a real macrotask, because fake timers
+			// advance virtual time only.
+			const deadline = Date.now() + 3_000;
+			while (Date.now() < deadline) {
+				if (seen(count)) return true;
 				await vi.advanceTimersByTimeAsync(10);
+				await new Promise((resolve) => setImmediate(resolve));
 			}
-			return false;
+			return seen(count);
 		};
 		const notifications = () => sent.map((m) => m.details?.event ?? "?").join(", ") || "none";
 		expect(await settle(1), `notifications after the first lane: ${notifications()}`).toBe(true);

@@ -2257,6 +2257,9 @@ export class InteractiveMode {
 		await this.session.bindExtensions({
 			uiContext,
 			mode: "tui",
+			// The terminal answers a plan review inside the tool call, so it never
+			// leaves a proposal waiting for a decision in the session.
+			planReviewSurface: false,
 			abortHandler: () => {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			},
@@ -2477,6 +2480,9 @@ export class InteractiveMode {
 			ui: this.createExtensionUIContext(),
 			mode: "tui",
 			hasUI: true,
+			// Same host as `bindCurrentSessionExtensions`, stated again because this
+			// context is built by hand rather than by the runner.
+			planReviewSurface: false,
 			cwd: this.sessionManager.getCwd(),
 			sessionManager: this.sessionManager,
 			modelRegistry: extensionRunner.getModelRegistry(),

@@ -253,6 +253,15 @@ export interface AgentSessionConfig {
 export interface ExtensionBindings {
 	uiContext?: ExtensionUIContext;
 	mode?: ExtensionMode;
+	/**
+	 * The host can show a plan proposal and collect a decision for it.
+	 *
+	 * `mode` and `hasUI` cannot answer this: every rpc host passes a dialog
+	 * bridge, including clients with no plan-review surface. A host that has one
+	 * sets this, and the plan tool hands the proposal over instead of leaving the
+	 * mode by itself.
+	 */
+	planReviewSurface?: boolean;
 	commandContextActions?: ExtensionCommandContextActions;
 	/** Host UI cleanup after the session cancels its run (for example, restore queued input). */
 	abortHandler?: () => void;
@@ -357,6 +366,15 @@ export class AgentSession {
 	private _steeringMessages: string[] = [];
 	/** Tracks pending follow-up messages for UI display. Removed when delivered. */
 	private _followUpMessages: string[] = [];
+	/**
+	 * Queued messages a person wrote, by identity, so the decision gate below can
+	 * tell the user's own words from work a feature queued on their behalf.
+	 *
+	 * Identity, not text: the same words can be queued by both, and queued
+	 * messages are delivered as objects the agent holds. A weak set keeps this
+	 * from outliving the queue.
+	 */
+	private _queuedFromUser = new WeakSet<AgentMessage>();
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
 	/** Context-only custom messages queued during a run, flushed once the current turn's tool results are in. */
@@ -419,6 +437,8 @@ export class AgentSession {
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
 	private _extensionMode: ExtensionMode = "print";
+	/** Whether the bound host can show a plan proposal and collect a decision. */
+	private _extensionPlanReviewSurface = false;
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionAbortHandler?: () => void;
 	/** Predicates that block automatic turn starts until the user answers. */
@@ -452,7 +472,7 @@ export class AgentSession {
 	 * the API it used. Tracking the source here keeps every command — built-in or
 	 * third-party — from having to repeat it at each call site.
 	 */
-	private _commandSources: InputSource[] = [];
+	private _commandSources: Array<{ source: InputSource }> = [];
 
 	private _modelRuntime: ModelRuntime;
 	private _agentDir?: string;
@@ -471,6 +491,9 @@ export class AgentSession {
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
+		// Installed once: the loop drains the queues long after a run-start check,
+		// so the decision has to be consulted at delivery time.
+		this.agent.setQueueDeliveryFilter(this._queueDeliveryAllowed);
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
 		this._scopedModels = config.scopedModels ?? [];
@@ -1486,6 +1509,7 @@ export class AgentSession {
 			const extensionEvent: MessageStartEvent = {
 				type: "message_start",
 				message: event.message,
+				...(event.message.role === "user" ? { fromUser: this._queuedFromUser.has(event.message) } : {}),
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		} else if (event.type === "message_update") {
@@ -1595,6 +1619,9 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		// The filter is this session's, not the agent's: a caller that keeps the
+		// agent must not inherit a rule about a decision nobody owns any more.
+		this.agent.setQueueDeliveryFilter(undefined);
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -1983,12 +2010,13 @@ export class AgentSession {
 						}
 					: undefined;
 			await this.agent.prompt(messages);
-			while (
-				!runAbortController.signal.aborted &&
-				(await this._handlePostAgentRun()) &&
-				!runAbortController.signal.aborted
-			) {
-				await this.agent.continue();
+			while (!runAbortController.signal.aborted) {
+				const next = await this._handlePostAgentRun();
+				if (next === "stop" || runAbortController.signal.aborted) break;
+				// Only the queued-work decision turns a waiting message into this turn's
+				// input. A retry or a context repair resumes the same work, and a message
+				// the person queued behind it is meant to arrive after it finishes.
+				await this.agent.continue({ deliverQueued: next === "deliver" });
 			}
 		} finally {
 			this._checkedInitialRequest = undefined;
@@ -2007,18 +2035,18 @@ export class AgentSession {
 		}
 	}
 
-	private async _handlePostAgentRun(): Promise<boolean> {
+	private async _handlePostAgentRun(): Promise<"stop" | "retry" | "recover" | "deliver"> {
 		const msg = this._lastAssistantMessage;
 		this._lastAssistantMessage = undefined;
 		if (!msg) {
-			return false;
+			return "stop";
 		}
 
 		if (this._isRetryableError(msg) && (await this._prepareRetry(msg))) {
-			return true;
+			return "retry";
 		}
 
-		if (this._agentRunAbortController?.signal.aborted) return false;
+		if (this._agentRunAbortController?.signal.aborted) return "stop";
 
 		if (msg.stopReason === "error" && this._retryAttempt > 0) {
 			this._emit({
@@ -2034,7 +2062,18 @@ export class AgentSession {
 		// The turn ended on a decision the user has not answered yet. Continuing here
 		// would run a queued input, or a compaction recovery request, on the user's
 		// behalf; the recovered work starts from the user's next prompt instead.
-		if (this.hasPendingUserDecision) return false;
+		//
+		// The user's own words are not that. A prompt they typed before the decision
+		// existed is how they answer it, whether it arrived mid-turn or after, so it
+		// still runs — otherwise their request waits behind a gate only they can
+		// open, with nothing left on screen to open it.
+		if (this.hasPendingUserDecision && !this.agent.hasDeliverableQueuedMessage(this._queueDeliveryAllowed)) {
+			// Overflow and truncation recovery repair the transcript so the next
+			// request fits. They are maintenance, not work on the user's behalf, so a
+			// decision still holds them off from *starting* anything but lets them run:
+			// threshold compaction stays deferred to the next request either way.
+			return (await this._checkCompaction(msg, true, true)) ? "recover" : "stop";
+		}
 
 		// CLM maintains context for a future request. A successful settled answer
 		// needs no extra model call; the next prompt/continuation performs the
@@ -2047,19 +2086,19 @@ export class AgentSession {
 			!this.agent.hasQueuedMessages() &&
 			this.pendingMessageCount === 0
 		) {
-			return false;
+			return "stop";
 		}
 
 		// Under the v2 trigger policy, threshold compaction waits for the next request's
 		// before-request check; only overflow and truncation recovery run here.
 		if (await this._checkCompaction(msg, true, this._usesTriggerPolicyV2())) {
-			return true;
+			return "recover";
 		}
 
 		// The agent loop drains both queues before emitting agent_end, except when a
 		// tool result ended the turn first. Messages here were queued by `agent_end`
 		// handlers, or were still pending when a control barrier ended the run.
-		return this.agent.hasQueuedMessages();
+		return this.agent.hasDeliverableQueuedMessage(this._queueDeliveryAllowed) ? "deliver" : "stop";
 	}
 
 	/**
@@ -2134,9 +2173,9 @@ export class AgentSession {
 					);
 				}
 				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
+					await this._queueFollowUp(expandedText, currentImages, options?.source);
 				} else {
-					await this._queueSteer(expandedText, currentImages);
+					await this._queueSteer(expandedText, currentImages, options?.source);
 				}
 				preflightResult?.(true);
 				return;
@@ -2146,7 +2185,7 @@ export class AgentSession {
 			// answered; the message waits for the turn that answers it. A user's own
 			// message always runs, because that is how the decision gets answered.
 			if (options?.source === "extension" && this.hasPendingUserDecision) {
-				await this._queueFollowUp(expandedText, currentImages);
+				await this._queueFollowUp(expandedText, currentImages, options.source);
 				preflightResult?.(true);
 				return;
 			}
@@ -2197,11 +2236,16 @@ export class AgentSession {
 			if (currentImages) {
 				userContent.push(...currentImages);
 			}
-			messages.push({
+			const userMessage: AgentMessage = {
 				role: "user",
 				content: userContent,
 				timestamp: Date.now(),
-			});
+			};
+			// A prompt a person typed is theirs, whatever delivered it. Recorded by
+			// identity so the delivery rule and the delivery event can tell it from
+			// work an extension queued on their behalf.
+			if ((options?.source ?? "interactive") !== "extension") this._queuedFromUser.add(userMessage);
+			messages.push(userMessage);
 
 			// Inject any pending "nextTurn" messages as context alongside the user message
 			for (const msg of this._pendingNextTurnMessages) {
@@ -2277,8 +2321,12 @@ export class AgentSession {
 		const ctx = this._extensionRunner.createCommandContext();
 
 		const turns: Promise<unknown>[] = [];
+		// The source entry travels with its own handler: two commands can overlap and
+		// finish out of order, and removing by position keeps each one's source with
+		// the work it forwarded.
+		const sourceEntry = { source };
 		this._openCommandTurns.push(turns);
-		this._commandSources.push(source);
+		this._commandSources.push(sourceEntry);
 		try {
 			await command.handler(args, ctx);
 		} catch (err) {
@@ -2289,9 +2337,10 @@ export class AgentSession {
 				error: err instanceof Error ? err.message : String(err),
 			});
 		} finally {
-			const index = this._openCommandTurns.indexOf(turns);
-			if (index !== -1) this._openCommandTurns.splice(index, 1);
-			this._commandSources.pop();
+			const turnIndex = this._openCommandTurns.indexOf(turns);
+			if (turnIndex !== -1) this._openCommandTurns.splice(turnIndex, 1);
+			const sourceIndex = this._commandSources.indexOf(sourceEntry);
+			if (sourceIndex !== -1) this._commandSources.splice(sourceIndex, 1);
 		}
 
 		// The handler may have handed work to the agent and returned. Acceptance is
@@ -2384,35 +2433,44 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
-	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+	/**
+	 * Whether this queued message may be delivered now.
+	 *
+	 * A pending decision holds work that would run on the user's behalf — a goal
+	 * continuation, a cron delivery, a lane waking its parent. It does not hold
+	 * what the user wrote: their message is how they answer, and it may be waiting
+	 * in the queue from before the decision existed. Asked per message, because
+	 * the loop delivers a batch at a time and would otherwise carry the refused
+	 * work along with the allowed one.
+	 */
+	private _queueDeliveryAllowed = (message: AgentMessage): boolean =>
+		!this.hasPendingUserDecision || this._queuedFromUser.has(message);
+
+	private async _queueSteer(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
 		this._steeringMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.steer({
-			role: "user",
-			content,
-			timestamp: Date.now(),
-		});
+		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		if (source !== "extension") this._queuedFromUser.add(message);
+		this.agent.steer(message);
 	}
 
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
-	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueFollowUp(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
 		this._followUpMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.followUp({
-			role: "user",
-			content,
-			timestamp: Date.now(),
-		});
+		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		if (source !== "extension") this._queuedFromUser.add(message);
+		this.agent.followUp(message);
 	}
 
 	/**
@@ -2500,10 +2558,17 @@ export class AgentSession {
 	/**
 	 * Append custom messages queued while the agent was running.
 	 * Called once the current turn's tool results are in agent state and session history.
+	 *
+	 * A pending decision holds them, like every other message no person wrote: these
+	 * are context an extension queued on the user's behalf, and the rule that keeps
+	 * automatic work out of a turn applies to them too. They flush once the decision
+	 * is answered — at that turn's end, or at the next one.
 	 */
 	private _flushPendingCustomMessages(): void {
 		if (this._pendingCustomMessages.length === 0) return;
-
+		// Held like any other message no person wrote: it flushes once the decision is
+		// answered, not into a question typed while it waits.
+		if (this.hasPendingUserDecision) return;
 		const pending = this._pendingCustomMessages;
 		this._pendingCustomMessages = [];
 		for (const appMessage of pending) {
@@ -2556,7 +2621,7 @@ export class AgentSession {
 			// through: the user typed the command, so the text may answer a pending
 			// decision. Outside a command, the default keeps extension-generated
 			// text behind the gate.
-			source: options?.source ?? this._commandSources.at(-1) ?? "extension",
+			source: options?.source ?? this._commandSources.at(-1)?.source ?? "extension",
 		});
 	}
 
@@ -3248,7 +3313,9 @@ export class AgentSession {
 				{ systemPrompt: this.systemPrompt, messages: this.agent.state.messages, tools: this.agent.state.tools },
 				this._agentRunAbortController?.signal,
 			);
-			if (automatic?.attempted) return this.agent.hasQueuedMessages();
+			// Held work does not justify a maintenance turn: the decision is still
+			// waiting, and a turn taken for it would deliver nothing.
+			if (automatic?.attempted) return this.agent.hasDeliverableQueuedMessage(this._queueDeliveryAllowed);
 			return await this._runAutoCompaction("threshold", false);
 		}
 		return false;
@@ -3439,8 +3506,9 @@ export class AgentSession {
 			}
 
 			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-			// Continue once so queued messages are delivered.
-			return this.agent.hasQueuedMessages();
+			// Continue once so queued messages are delivered — the ones the decision
+			// allows; work it holds stays queued for the turn that answers it.
+			return this.agent.hasDeliverableQueuedMessage(this._queueDeliveryAllowed);
 		} catch (error) {
 			if (started) {
 				const aborted = this._autoCompactionAbortController?.signal.aborted ?? false;
@@ -3500,6 +3568,9 @@ export class AgentSession {
 		}
 		if (bindings.mode !== undefined) {
 			this._extensionMode = bindings.mode;
+		}
+		if (bindings.planReviewSurface !== undefined) {
+			this._extensionPlanReviewSurface = bindings.planReviewSurface;
 		}
 		if (bindings.commandContextActions !== undefined) {
 			this._extensionCommandContextActions = bindings.commandContextActions;
@@ -3682,6 +3753,7 @@ export class AgentSession {
 				getScopedModels: () => this._scopedModels,
 				isIdle: () => this.isIdle,
 				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
+				hasPlanReviewSurface: () => this._extensionPlanReviewSurface,
 				getSignal: () => this.agent.signal,
 				abort: () => {
 					this._abortCurrentRun();
