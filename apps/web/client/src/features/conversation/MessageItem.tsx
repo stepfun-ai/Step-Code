@@ -141,7 +141,8 @@ export const MessageItem = memo(function MessageItem({
 				label={command ? `/${command.name}` : (skill?.name ?? pluginInstall?.name ?? t("modeUltraloop"))}
 			/>
 		) : null;
-	if (item.error) return <MessageError item={item} inlineTimestamp={inlineTimestamp} />;
+	if (item.error)
+		return <MessageError item={item} inlineTimestamp={inlineTimestamp} attachments={attachments} cwd={cwd} />;
 	// The live turn before its first text (reasoning, or waiting on the first token).
 	if (role === "assistant" && !content) return <ThinkingIndicator />;
 	return (
@@ -280,9 +281,13 @@ function errorDetail(error: string): { readonly status: string; readonly message
 function MessageError({
 	item,
 	inlineTimestamp,
+	attachments,
+	cwd,
 }: {
 	readonly item: MessageTimelineItem;
 	readonly inlineTimestamp: boolean;
+	readonly attachments?: readonly TurnArtifact[];
+	readonly cwd: string;
 }) {
 	const t = useT();
 	const detail = errorDetail(item.error ?? "");
@@ -308,6 +313,8 @@ function MessageError({
 					),
 				)}
 			</p>
+			{/* A later model failure cannot erase files the turn already produced. */}
+			{attachments?.length ? <MessageAttachments artifacts={attachments} cwd={cwd} /> : null}
 			{inlineTimestamp ? <MessageMeta item={item} /> : null}
 		</article>
 	);

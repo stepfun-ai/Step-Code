@@ -455,7 +455,7 @@ export interface MessageTimelineItem {
 	readonly images?: readonly string[];
 	readonly usage?: Usage;
 	readonly timestamp?: string;
-	/** The model request failed (assistant `stopReason: "error"`); the provider's message. */
+	/** Explanation for a failed provider request or an incomplete response. */
 	readonly error?: string;
 	/**
 	 * A failed provider request and an incomplete response need different labels.

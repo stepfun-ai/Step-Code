@@ -241,6 +241,11 @@ When to add or change one:
   embedding, a CLI quit) is a session-lifecycle change: stop, wait for idle, then dispose.
 - `interruptedTurn` is derived from the recorded entries (`hasInterruptedTurn`), never from a process flag, so a
   reopened session reports the same thing a live page did. Do not infer it from UI text or from a missing live row.
+- A settled run is not automatically completed: retain a terminal provider error from `agent_end` through settlement,
+  and present `agent_settled.failure` as failed status plus a transient error notice (red toast). The recorded
+  `incomplete` response classification is not a run outcome. Pair hidden recovery entries by `details.recoversEntryId`
+  for `incompleteTurnRecovered` snapshots; never infer recovery from adjacency. Files already produced by a turn remain
+  visible even when its closing assistant item is an error or incomplete-response card.
 - Thinking elapsed time is host-observed presentation metadata (`src/thinking-timing.ts`), persisted through
   the session manager's `stepcode-web.thinking-timing` custom entries outside model context. Snapshots and agent
   envelopes project validated `thinkingTimings` by original content index. Never infer durations for unobserved

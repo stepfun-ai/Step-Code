@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createRequire } from "node:module";
+import { runInNewContext } from "node:vm";
+import { fileURLToPath } from "node:url";
+import { buildSync } from "esbuild";
+import { createElement, type ComponentType } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { turnArtifacts } from "../client/src/features/conversation/turn-artifacts.ts";
+import { collectTurnFooters } from "../client/src/features/conversation/turn-footers.ts";
 import { t } from "../client/src/i18n/index.ts";
 import { incompleteRecoveryNotice, timelineFromEntries } from "../client/src/state/session.ts";
 import type { SessionEntry } from "../client/src/state/types.ts";
@@ -65,6 +73,54 @@ test("legacy or invalid recovery metadata uses the existing one-attempt budget",
 			}),
 			t("incompleteRetryStarted", { attempt: 1, max: 1 }),
 		);
+	}
+});
+
+test("an error or incomplete closing response still renders the turn's file deliveries", () => {
+	// Bundle the actual renderer for Node; CSS has no behavior in server rendering.
+	// Keep React external so hooks and the server renderer share one instance.
+	const result = buildSync({
+		entryPoints: [fileURLToPath(new URL("../client/src/features/conversation/MessageItem.tsx", import.meta.url))],
+		bundle: true,
+		write: false,
+		outfile: "renderer.cjs",
+		platform: "node",
+		format: "cjs",
+		jsx: "automatic",
+		external: ["react", "react/*", "react-dom", "react-dom/*"],
+		logLevel: "silent",
+		loader: { ".css": "text" },
+	});
+	const module = { exports: {} as { MessageItem: ComponentType<Record<string, unknown>> } };
+	runInNewContext(result.outputFiles[0].text, {
+		module,
+		exports: module.exports,
+		require: createRequire(import.meta.url),
+		console,
+		process,
+		crypto: globalThis.crypto,
+		performance,
+		navigator: { userAgent: "fixture browser" },
+		setTimeout,
+		clearTimeout,
+		URL,
+	});
+	for (const errorKind of ["incomplete", "request"]) {
+		const items = timelineFromEntries([
+			user("u"),
+			emptyTurn("a", "missing_tool_call", [{ type: "text", text: "Saved [Report](report.md)." }]),
+		]);
+		const [footer] = collectTurnFooters(items, "failed", false);
+		const attachments = turnArtifacts(items, footer, "/work");
+		assert.equal(attachments.length, 1);
+		const closing = items.filter((item) => item.kind === "message" && item.role === "assistant").at(-1);
+		assert.ok(closing?.kind === "message" && closing.error);
+		const html = renderToStaticMarkup(
+			createElement(module.exports.MessageItem, { item: { ...closing, errorKind }, attachments, fileCwd: "/work" }),
+		);
+		assert.match(html, /message-error/);
+		assert.match(html, /attachment-grid/);
+		assert.match(html, /report\.md/);
 	}
 });
 

@@ -105,7 +105,11 @@ test("the real host reports a terminal incomplete run as a red error and a later
 		await session.send("Inspect the workspace");
 		assert.equal(requests, 2);
 		assert.equal(session.liveStatus().status, "failed");
-		assert.ok(events.some((event) => event.type === "notice" && event.level === "error" && event.text.includes("1/1")));
+		assert.ok(
+			events.some(
+				(event) => event.type === "notice" && event.level === "error" && event.transient === true && event.text.includes("1/1"),
+			),
+		);
 		const recovered = session.snapshot().entries as Array<Record<string, unknown>>;
 		assert.equal(recovered.filter((entry) => entry.incompleteTurnRecovered === true).length, 1);
 		events.length = 0;

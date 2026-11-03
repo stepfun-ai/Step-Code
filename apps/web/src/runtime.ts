@@ -1320,7 +1320,7 @@ export class WebSession {
 				// Classification is only a turn explanation. The settled event proves that
 				// the run failed; never suppress its error based on similar display text.
 				const failure = settledRunFailure(event);
-				if (failure) this.emit({ type: "notice", level: "error", text: failure.message });
+				if (failure) this.emit({ type: "notice", level: "error", text: failure.message, transient: true });
 			}
 			if (event.type === "agent_end") {
 				const stops = event.messages.flatMap((message) =>
