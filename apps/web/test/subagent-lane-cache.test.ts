@@ -32,3 +32,25 @@ test("OpenAPI publishes lane frames, reconnect state and durable completed-respo
 	assert.match(document.paths["/api/v1/sessions/{id}/events"].get.responses["200"].description, /subagent_lane/);
 	assert.ok(document.paths["/api/v1/sessions/{id}"].get.responses["200"].content?.["application/json"].schema.properties.subagentLanes);
 });
+
+test("OpenAPI publishes the plan decision fact the card and the queue read", async () => {
+	// `pendingPlanHash` is a lease-level fact: the client marks exactly that card
+	// actionable, and the host holds its queue while the mode is on and it is
+	// present. A payload the app depends on must be in the published contract.
+	const document = parse(await readFile(new URL("../openapi.yaml", import.meta.url), "utf8")) as {
+		paths: Record<
+			string,
+			{
+				get: {
+					responses: Record<
+						string,
+						{ content?: Record<string, { schema: { properties: Record<string, { description?: string }> } }> }
+					>;
+				};
+			}
+		>;
+	};
+	const snapshot = document.paths["/api/v1/sessions/{id}"].get.responses["200"].content?.["application/json"].schema.properties;
+	assert.ok(snapshot?.planMode);
+	assert.match(snapshot.pendingPlanHash?.description ?? "", /step-plan/);
+});

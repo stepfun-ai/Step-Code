@@ -1265,6 +1265,12 @@ paths:
                       enabled: { type: boolean }
                       planFilePath: { type: string }
                       planSource: { type: string, enum: [user, agent, unknown] }
+                  pendingPlanHash:
+                    type: string
+                    description: >-
+                      The proposal waiting for the user's answer, as recorded in the `step-plan` session entry. A
+                      session fact, not UI state: the client marks exactly this snapshot's card actionable, and the
+                      host holds its queue only while plan mode is on and this is present. Absent when nothing waits.
                   entries:
                     type: array
                     items:
