@@ -45,7 +45,6 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "name", description: "Set session display name" },
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "hotkeys", description: "Show all keyboard shortcuts" },
-	{ name: "warnings", description: "Show the warnings collected in this session" },
 	{
 		name: "fork",
 		description: "Create a new fork from a previous user message",
