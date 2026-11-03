@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -461,6 +462,165 @@ printf 'UNTERM_KEEP:%s\n' "$(grep -c 'IMPORTANT=keepme' "$2")"
 			);
 		} finally {
 			await rm(dir, { recursive: true, force: true });
+		}
+	},
+);
+
+// ---------------------------------------------------------------------------
+// install.sh must not require awk (issue #149).
+//
+// The installer reads latest.json / manifest.json and trims sha256 output with
+// bash pattern matching, so a base system without awk (minimal Fedora/WSL image)
+// can still install. This test executes the rendered installer end to end with a
+// PATH that contains every command it needs EXCEPT awk, against a local release
+// directory, and then proves a bad checksum still aborts.
+// ---------------------------------------------------------------------------
+
+function findExecutable(command) {
+	for (const dir of (process.env.PATH ?? "").split(":")) {
+		if (!dir) continue;
+		const candidate = join(dir, command);
+		if (existsSync(candidate)) return candidate;
+	}
+	return undefined;
+}
+
+async function createNoAwkPath(dir, commands) {
+	await mkdir(dir, { recursive: true });
+	for (const command of commands) {
+		const source = findExecutable(command);
+		if (!source) return undefined;
+		await symlink(source, join(dir, command));
+	}
+	return dir;
+}
+
+const NO_AWK_COMMANDS = [
+	"bash",
+	"cat",
+	"chmod",
+	"cp",
+	"dirname",
+	"basename",
+	"env",
+	"find",
+	"grep",
+	"mkdir",
+	"mktemp",
+	"mv",
+	"rm",
+	"sed",
+	"tar",
+	"tr",
+	"uname",
+];
+
+test(
+	"install.sh installs a release with no awk on PATH and still rejects a bad checksum",
+	{ skip: commandAvailable("bash", "--version") ? false : "bash unavailable" },
+	async () => {
+		const downloader = findExecutable("curl") ? "curl" : findExecutable("wget") ? "wget" : undefined;
+		const digester = findExecutable("sha256sum") ? "sha256sum" : findExecutable("shasum") ? "shasum" : undefined;
+		if (!downloader || !digester || !findExecutable("tar")) {
+			return; // Reported as a pass without a skip: the environment cannot run the scenario.
+		}
+
+		const root = await mkdtemp(join(tmpdir(), "step-install-no-awk-"));
+		const releaseDir = join(root, "release");
+		const versionDir = join(releaseDir, "0.0.1");
+		const stageDir = join(root, "stage");
+		const installDir = join(root, "install");
+		const agentDir = join(root, "agent");
+		const homeDir = join(root, "home");
+		try {
+			const stepDir = join(stageDir, "step");
+			await mkdir(join(stepDir, "theme"), { recursive: true });			await writeFile(
+				join(stepDir, "step"),
+				'#!/usr/bin/env bash\ncase "${1:-}" in\n\t--version) printf "step 0.0.1\\n" ;;\n\tmcp) : ;;\nesac\nexit 0\n',
+				"utf8",
+			);
+			await chmod(join(stepDir, "step"), 0o755);
+			await writeFile(join(stepDir, "theme", "one.json"), "{}\n", "utf8");
+			await mkdir(versionDir, { recursive: true });
+			await mkdir(homeDir, { recursive: true });
+			// Pre-place the managed search tools: their absence makes install_managed_tool
+			// fetch them from GitHub, which this hermetic test must not attempt.
+			await mkdir(join(agentDir, "bin"), { recursive: true });
+			for (const tool of ["fd", "rg"]) {
+				await writeFile(join(agentDir, "bin", tool), "#!/usr/bin/env bash\nexit 0\n", "utf8");
+				await chmod(join(agentDir, "bin", tool), 0o755);
+			}
+			const archive = join(versionDir, "step-v0.0.1-linux-x64.tar.gz");
+			const tar = spawnSync("tar", ["-czf", archive, "-C", stageDir, "step"], { encoding: "utf8" });
+			assert.equal(tar.status, 0, `tar should pack the fake release: ${tar.stderr}`);
+
+			const digest = spawnSync(digester, digester === "shasum" ? ["-a", "256", archive] : [archive], {
+				encoding: "utf8",
+			});
+			const sha = String(digest.stdout).trim().split(/\s+/)[0];
+			assert.match(String(sha), /^[0-9a-f]{64}$/, "fixture digest should be a sha256 hex string");
+
+			const tarballUrl = `file://${archive}`;
+			const manifest = {
+				version: "0.0.1",
+				generatedAt: "2026-01-01T00:00:00Z",
+				packages: Object.fromEntries(
+					["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"].map((id) => [id, tarballUrl]),
+				),
+				checksums: Object.fromEntries(
+					["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"].map((id) => [id, sha]),
+				),
+			};
+			const writeManifest = async (checksum) => {
+				const document = {
+					...manifest,
+					checksums: Object.fromEntries(Object.keys(manifest.checksums).map((id) => [id, checksum])),
+				};
+				const body = `${JSON.stringify(document, null, 2)}\n`;
+				await writeFile(join(releaseDir, "latest.json"), body, "utf8");
+				await writeFile(join(versionDir, "manifest.json"), body, "utf8");
+			};
+			await writeManifest(sha);
+
+			const installer = join(root, "install.sh");
+			await writeFile(
+				installer,
+				renderInstallTemplate(await readFile(shPath, "utf8"), `file://${releaseDir}`),
+				"utf8",
+			);
+			await chmod(installer, 0o755);
+
+			const sandboxPath = await createNoAwkPath(join(root, "bin"), [...NO_AWK_COMMANDS, downloader, digester]);
+			assert.equal(sandboxPath !== undefined, true, "sandbox PATH should contain every required command");
+			assert.equal(existsSync(join(sandboxPath, "awk")), false, "awk must not be reachable on the sandbox PATH");
+
+			const baseEnv = {
+				PATH: sandboxPath,
+				HOME: homeDir,
+				SHELL: "/bin/zsh",
+				STEP_INSTALL_DIR: installDir,
+				STEP_CODING_AGENT_DIR: agentDir,
+				STEP_NO_MODIFY_PATH: "1",
+			};
+
+			const install = spawnSync(installer, [], { encoding: "utf8", env: baseEnv });
+			assert.equal(install.status, 0, `installer should succeed without awk: ${install.stdout}${install.stderr}`);
+			assert.match(`${install.stdout}${install.stderr}`, /installed StepCode 0\.0\.1/);
+			assert.equal(existsSync(join(installDir, "step")), true, "binary should be installed");
+			assert.equal(existsSync(join(installDir, "theme", "one.json")), true, "runtime resources should be copied");
+
+			// A wrong checksum must still stop the install before anything is replaced.
+			await writeManifest("0".repeat(64));
+			const badInstallDir = join(root, "install-bad");
+			const failed = spawnSync(installer, [], {
+				encoding: "utf8",
+				env: { ...baseEnv, STEP_INSTALL_DIR: badInstallDir, STEP_CODING_AGENT_DIR: join(root, "agent-bad") },
+			});
+			assert.notEqual(failed.status, 0, "installer should fail on a checksum mismatch");
+			assert.match(`${failed.stdout}${failed.stderr}`, /checksum mismatch/);
+			assert.equal(existsSync(join(badInstallDir, "step")), false, "nothing should be installed on failure");
+		} finally {
+			await rm(root, { recursive: true, force: true });
 		}
 	},
 );
