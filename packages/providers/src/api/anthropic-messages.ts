@@ -39,14 +39,19 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 
 import { getJsonSchemaToolParameters, resolveJsonSchemaStrictSampling } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
-import { adjustMaxTokensForThinking, buildBaseOptions, clampMaxTokensToContext } from "./simple-options.ts";
+import {
+	adjustMaxTokensForThinking,
+	buildBaseOptions,
+	clampMaxTokensToContext,
+	resolveCacheRetention,
+} from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
 
 function getCacheControl(
 	model: Model<"anthropic-messages">,
 	cacheRetention?: CacheRetention,
 ): { retention: CacheRetention; cacheControl?: CacheControlEphemeral } {
-	const retention = cacheRetention ?? "short";
+	const retention = resolveCacheRetention(model, { cacheRetention });
 	if (retention === "none") {
 		return { retention };
 	}
@@ -496,7 +501,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					});
 				}
 
-				const cacheRetention = options?.cacheRetention ?? "short";
+				const cacheRetention = resolveCacheRetention(model, options);
 				const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
 
 				client = createClient(

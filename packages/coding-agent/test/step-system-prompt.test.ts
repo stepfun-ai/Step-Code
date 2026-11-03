@@ -343,6 +343,17 @@ describe("Step App system prompt product", () => {
 		expect(STEP_APP_SYSTEM_PROMPT_PRODUCT.includeDocumentation).toBe(false);
 	});
 
+	it("asks the app model to mention files as Markdown links the preview can open", () => {
+		const introduction = STEP_APP_SYSTEM_PROMPT_PRODUCT.introduction ?? "";
+		expect(introduction).toContain("[system-prompt.ts](src/step/system-prompt.ts)");
+		expect(introduction).toMatch(/code spans and code blocks as code, never links/u);
+		// The label names the file a click opens, never a package or a code span.
+		expect(introduction).toMatch(/plain text without backticks/u);
+		expect(introduction).toContain("never label a link with a package, module or symbol name");
+		// The terminal identity keeps plain paths: a CLI cannot open a link target.
+		expect(buildStepSystemPromptAppendix(["read_file"])).not.toMatch(/Markdown link/u);
+	});
+
 	it("exposes the shared product read-only to every session", () => {
 		// Freezing is only safe while the builder reads the product and never writes
 		// into it. Build twice from the same constant: no throw, identical output.
@@ -445,11 +456,12 @@ describe("one-shot interaction contract", () => {
 		expect(app).not.toContain("Call enter_plan_mode");
 		// Mode instructions come from the append-only announcement, not the
 		// app's system prefix. External exit is a handoff, not approval.
-		const announcement = buildPlanModePrompt("/workspace/app/plan.md", true);
+		const announcement = buildPlanModePrompt("/workspace/app/plan.md");
 		expect(announcement).toContain("You must not perform mutating actions");
-		expect(announcement).toContain("does not approve implementation");
-		expect(announcement).toContain("exit_plan_mode hands a new proposal to an external reviewer");
-		expect(announcement).toContain("leave planning without a proposal");
+		// Leaving is the user's decision: a missing or unchanged file is not a
+		// proposal, and the model cannot use that to turn the mode off.
+		expect(announcement).toContain("a missing or unchanged plan file is not permission to exit");
+		expect(announcement).toContain("Only the user can turn the mode off");
 		expect(render("session")).toContain("Plan mode is user-controlled");
 	});
 

@@ -26,8 +26,10 @@ import {
 	MAX_JSON_LINE_BYTES,
 	normalizeChildTools,
 	parseJsonEvent,
+	readSettledFailure,
 	type StepSubagentRunInput,
 	type StepSubagentRunResult,
+	settledTurnOutcome,
 } from "../step-subagent.ts";
 import { WORKFLOW_ACL_ENV } from "../workflow/acl-extension.ts";
 import { liveSubagentSessions } from "./lane-lifecycle.ts";
@@ -517,12 +519,12 @@ export async function createSubagentRpcSession(
 				parseJsonEvent(eventLine, active.current, active.input.onUpdate);
 				if (event.type === "agent_settled") {
 					// The run (including queued steer/follow_up messages) fully drained.
+					// A settled run is not automatically a successful one: a terminal
+					// incomplete turn reports itself here, because its assistant message
+					// keeps the provider's stop reason.
+					const failure = readSettledFailure(event);
 					settleTurn((current, aborted) => {
-						current.exitCode = 0;
-						if (aborted) {
-							current.stopReason = "aborted";
-							current.errorMessage = "Subagent was aborted";
-						}
+						Object.assign(current, settledTurnOutcome(failure, aborted));
 					});
 				}
 			},

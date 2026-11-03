@@ -22,7 +22,7 @@ Inherits the [root rules](../../AGENTS.md). This package is `@step-harness/cli`;
 
 ## Validation and documentation
 
-- Run root `pnpm run check:layer-direction` and `pnpm run check:ui-layer`; run the full `pnpm run check` after code changes.
+- Run root `pnpm run check:layer-direction` and `pnpm run check:ui-layer`.
 - Run `pnpm exec vitest --run test/package-command-paths.test.ts` here; select further regressions from `test/` for mode or startup changes.
 - For manual TUI checks, run root `./step-test.sh --no-env` and explicitly supply isolated user-resource directories. The script removes listed environment credentials but does not isolate local login or configuration. Validate built artifacts with the actual built binary.
 - Update [configuration](../../docs/step-configuration.md), the [rendering pipeline](../../docs/tui-rendering-pipeline.md), or coding-agent mode documentation as applicable.

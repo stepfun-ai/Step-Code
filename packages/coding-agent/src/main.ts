@@ -1469,7 +1469,10 @@ async function dispatchAppMode(
 ): Promise<void> {
 	const { appMode, runtimeHost } = prep;
 	if (appMode === "rpc") {
-		await runRpcMode(runtimeHost, { includeLiveEvents: prep.parsed.includeLiveEvents });
+		await runRpcMode(runtimeHost, {
+			includeLiveEvents: prep.parsed.includeLiveEvents,
+			planReviewSurface: prep.parsed.planReviewSurface,
+		});
 	} else if (appMode === "interactive") {
 		// The interactive TUI moved to @step-harness/cli (S4-0). coding-agent's own
 		// main() no longer dispatches it; product shells construct InteractiveMode

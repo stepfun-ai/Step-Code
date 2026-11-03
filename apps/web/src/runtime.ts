@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
+	type AgentRunFailure,
 	type AgentSession,
 	type AgentSessionEvent,
 	type AgentSessionRuntime,
@@ -36,6 +37,7 @@ import {
 	getStepMcpStatuses,
 	getStepPlanState,
 	getSupportedThinkingLevels,
+	INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
 	type InlineExtension,
 	isChildAgentSession,
 	listAllStepSessions,
@@ -88,6 +90,7 @@ import {
 	type WebFeedbackPreview,
 } from "./feedback-report.ts";
 import { projectInspectorTasks } from "./inspector.ts";
+import { JournalCursor } from "./journal-cursor.ts";
 import {
 	MessageQueue,
 	type QueuedFile,
@@ -96,6 +99,7 @@ import {
 	SteeringImages,
 	type SteeringMessageView,
 } from "./message-queue.ts";
+import { messageImages, withoutToolResultImages } from "./omitted-images.ts";
 import {
 	LivePromptCommands,
 	PROMPT_COMMAND_TYPE,
@@ -106,6 +110,7 @@ import {
 	webPromptCommands,
 } from "./prompt-commands.ts";
 import { RetryTracker } from "./retry-state.ts";
+import { recordRunEnd, settleRunOutcome } from "./run-outcome.ts";
 import { SelectionBroker, type SelectionEvent, type SelectionRequest, selectionSelect } from "./selection.ts";
 import { generateSessionTitle, type SlashCommandKind, sessionTitleInput } from "./session-title.ts";
 import { type WebSkill, webSkills } from "./skills.ts";
@@ -113,7 +118,13 @@ import { resolveSubagentCliPath } from "./subagent-cli.ts";
 import { retainSubagentLane } from "./subagent-lane-cache.ts";
 import { projectSubagentNotification } from "./subagent-notification.ts";
 import { TextInputBroker, type TextInputEvent, textInput } from "./text-input.ts";
-import { savedThinkingTimings, THINKING_TIMING_TYPE, ThinkingClock, type ThinkingTimings } from "./thinking-timing.ts";
+import {
+	readThinkingObservation,
+	savedThinkingTimings,
+	THINKING_TIMING_TYPE,
+	ThinkingClock,
+	type ThinkingTimings,
+} from "./thinking-timing.ts";
 import {
 	type FileAtTurn,
 	fileAtTurnEnd,
@@ -196,6 +207,17 @@ export type WebEventBody =
 	  }
 	| { type: "status"; status: WebSessionStatus; unread: boolean }
 	| ({ type: "queue" } & WebQueueState)
+	| {
+			/**
+			 * Branch entries recorded since the previous `entries` event, projected like
+			 * the snapshot's (`projectEntryRange`), so the page appends them instead of
+			 * re-reading the whole session. With `reset`, the branch no longer extends
+			 * what was published (navigation, a rewind, a rebind): `entries` is all of it.
+			 */
+			type: "entries";
+			entries: readonly Record<string, unknown>[];
+			reset?: true;
+	  }
 	| { type: "error"; message: string };
 
 /**
@@ -667,7 +689,7 @@ export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 		type: entry.type,
 		timestamp: entry.timestamp,
 		...(entry.imported ? { imported: entry.imported } : {}),
-		...(entry.type === "message" ? { message: entry.message } : {}),
+		...(entry.type === "message" ? { message: withoutToolResultImages(entry.message) } : {}),
 		...(usage ? { usage } : {}),
 		...(entry.type === "custom_message" ? { content: entry.content, customType: entry.customType } : {}),
 		...(notification ? { details: notification } : {}),
@@ -687,6 +709,11 @@ export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 			: {}),
 		...(entry.type === "branch_summary" ? { summary: entry.summary } : {}),
 	};
+}
+
+/** The run-level failure a settled event reported, if any. */
+export function settledRunFailure(event: { failure?: AgentRunFailure }): AgentRunFailure | undefined {
+	return event.failure;
 }
 
 /** The echoed command line of a command-echo custom entry, or undefined for every other entry. */
@@ -753,7 +780,12 @@ export function hasInterruptedTurn(entries: readonly SessionEntry[], running: bo
 		const message = entry.message;
 		if (message.role === "user") return true;
 		if (message.role === "toolResult") return hasUnansweredToolCall(entries, index);
-		if (message.role === "assistant") return message.stopReason === "aborted" || message.stopReason === "toolUse";
+		// An empty tool-use turn has no call at all, so it cannot be the killed-host
+		// shape this looks for; its own classification already explains it.
+		if (message.role === "assistant")
+			return (
+				message.stopReason === "aborted" || (message.stopReason === "toolUse" && message.incomplete === undefined)
+			);
 	}
 	return false;
 }
@@ -765,20 +797,79 @@ export function hasInterruptedTurn(entries: readonly SessionEntry[], running: bo
  * of the whole template.
  */
 export function projectEntries(entries: readonly SessionEntry[]): Record<string, unknown>[] {
+	return projectEntryRange(entries, 0);
+}
+
+/**
+ * `projectEntries(entries)` from `start` on, for a reader that already holds the
+ * projection of `entries[0..start)`, preceded (in branch order) by every earlier
+ * entry whose projection a later one changed.
+ *
+ * Two kinds of entry reach backwards. A thinking timing is saved as its own entry,
+ * which normally lands just before the message it times (the kernel appends a
+ * message after its `message_end` listeners have run) but after it when the clock
+ * only settles at the end of the run. A hidden incomplete-turn recovery names the
+ * empty turn it answers, which then projects `incompleteTurnRecovered`.
+ * Prompt-command pairing looks only at earlier entries, so appending cannot
+ * change an entry already projected.
+ */
+export function projectEntryRange(entries: readonly SessionEntry[], start: number): Record<string, unknown>[] {
 	const timings = savedThinkingTimings(entries);
 	const promptCommands = pairPromptCommands(entries);
-	return entries.map((entry) => {
-		const thinkingTimings =
-			entry.type === "message" && entry.message.role === "assistant"
-				? timings.get(entry.message.timestamp)
-				: undefined;
+	const recovered = recoveredEmptyTurns(entries);
+	// The earlier entries a later one re-projects: a message its timing re-times,
+	// and an empty turn its recovery answers.
+	const retimed = new Set<number>();
+	for (let index = Math.max(0, start); index < entries.length; index++) {
+		const entry = entries[index];
+		if (entry?.type !== "custom" || entry.customType !== THINKING_TIMING_TYPE) continue;
+		const observation = readThinkingObservation(entry.data);
+		if (observation) retimed.add(observation.messageTimestamp);
+	}
+	const answered = start > 0 ? recoveredEmptyTurns(entries.slice(start)) : recovered;
+	const projected: Record<string, unknown>[] = [];
+	entries.forEach((entry, index) => {
+		const assistant = entry.type === "message" && entry.message.role === "assistant";
+		if (index < start && !(assistant && (retimed.has(entry.message.timestamp) || answered.has(entry.id)))) return;
+		const thinkingTimings = assistant ? timings.get(entry.message.timestamp) : undefined;
 		const promptCommand = promptCommands.get(entry.id);
-		return {
+		projected.push({
 			...projectEntry(entry),
 			...(thinkingTimings ? { thinkingTimings } : {}),
 			...(promptCommand ? { promptCommand } : {}),
-		};
+			// Only a turn that was actually empty can be a recovered one; a stale or
+			// hand-edited pairing must not relabel a completed answer.
+			...(recovered.has(entry.id) && assistant && isIncompleteTurn(entry.message)
+				? { incompleteTurnRecovered: true }
+				: {}),
+		});
 	});
+	return projected;
+}
+
+/** Whether this message carries the kernel's empty-turn classification. */
+function isIncompleteTurn(message: object): boolean {
+	return "incomplete" in message && message.incomplete !== undefined;
+}
+
+/**
+ * The assistant entries whose empty turn the session already recovered.
+ *
+ * The recovery message names the entry it answers, so this is identity, not
+ * adjacency: a session also writes usage provenance, a compaction, a model or
+ * thinking-level change, and a session-name entry between the two. Anything that
+ * relied on neighbours would break the first time one of those landed there.
+ */
+function recoveredEmptyTurns(entries: readonly SessionEntry[]): Set<string> {
+	const recovered = new Set<string>();
+	for (const entry of entries) {
+		if (entry.type !== "custom_message" || entry.customType !== INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE) continue;
+		const details = entry.details;
+		if (!details || typeof details !== "object") continue;
+		const recovers = "recoversEntryId" in details ? details.recoversEntryId : undefined;
+		if (typeof recovers === "string" && recovers) recovered.add(recovers);
+	}
+	return recovered;
 }
 
 /** The summary board's goal section data, or undefined when the session has no goal to show. */
@@ -903,8 +994,12 @@ export class WebSession {
 	private readonly steeringImages = new SteeringImages();
 	/** Set by `interrupt`: the run it stops settles without starting the next queued message. */
 	private holdQueue = false;
-	/** The last run ended in an error or abort; its settle leaves the queue for the user. */
+	/** Messages taken from the queue whose prompt has not started yet. */
+	private dispatchInFlight = 0;
+	/** The last run ended in an error, an abort, or without an answer; its settle leaves the queue for the user. */
 	private lastRunFailed = false;
+	/** The last `agent_end` reported a provider error the kernel was not going to retry. */
+	private lastRunErrored = false;
 	/**
 	 * The last run was stopped by the user rather than failing on its own.
 	 *
@@ -922,6 +1017,10 @@ export class WebSession {
 	 * a reader that still applied it would resurrect a stopped turn's status.
 	 */
 	private revision = 0;
+	/** How far the bound branch has been published through `entries` events; reset on every bind. */
+	private journal = new JournalCursor([]);
+	/** An `entries` check is already queued for the current microtask checkpoint. */
+	private journalQueued = false;
 	/** Settles when the bound session's `session_start` handlers (MCP startup included) have finished. */
 	private extensionsReady: Promise<void> = Promise.resolve();
 	/** Startup of the bound session; replaced on fork or /new so a stale binding cannot report into it. */
@@ -1228,7 +1327,17 @@ export class WebSession {
 		}
 		this.unsubscribeSession?.();
 		this.session = session;
+		// A bound session starts published at its current leaf: a page opening it reads
+		// what is already there from the snapshot, and the stream adds what follows. A
+		// page already following this object (a rebind to another file) holds the old
+		// branch, so it gets the new one whole.
+		const branch = session.sessionManager.getBranch();
+		this.journal = new JournalCursor(branch);
+		if (this.listeners.size) this.emit({ type: "entries", reset: true, entries: projectEntries(branch) });
 		this.retry.clear();
+		// Run-scoped outcome state belongs to the session that produced it; a rebound
+		// session has run nothing yet.
+		this.lastRunErrored = false;
 		void this.adoptFallbackModel(session);
 		const thinkingClock = new ThinkingClock();
 		this.unsubscribeSession = session.subscribe((event) => {
@@ -1252,16 +1361,36 @@ export class WebSession {
 				this.setStatus("running", false);
 				this.holdQueue = false;
 				this.lastRunFailed = false;
+				this.lastRunErrored = false;
 				this.lastRunAborted = false;
 			}
-			if (event.type === "agent_settled") this.setStatus("completed", this.unseen());
+			if (event.type === "agent_settled") {
+				// Settled is not success. An empty turn keeps the provider's stop reason on
+				// its message, so the run's outcome can only come from this event — and a
+				// provider error, which this event does not carry, still has to be kept
+				// from being overwritten here by the earlier `agent_end`.
+				// Read once: a run can settle without emitting its own `agent_start` (an
+				// abort during the pre-prompt compaction, a CLM fault), and a stale `true`
+				// would report the user's own stop as a failure.
+				const settled = settleRunOutcome({ errored: this.lastRunErrored }, event);
+				this.lastRunErrored = settled.cleared.errored;
+				const status = settled.outcome.failed ? "failed" : "completed";
+				if (status === "failed") this.lastRunFailed = true;
+				this.setStatus(status, this.unseen());
+				// Classification is only a turn explanation. The settled event proves that
+				// the run failed; never suppress its error based on similar display text.
+				const failure = settledRunFailure(event);
+				if (failure) this.emit({ type: "notice", level: "error", text: failure.message, transient: true });
+			}
 			if (event.type === "agent_end") {
 				const stops = event.messages.flatMap((message) =>
 					message.role === "assistant" ? [message.stopReason] : [],
 				);
 				// A failure the kernel is about to retry is not the run's outcome: the
 				// session keeps running through the backoff (`auto_retry_start` follows).
-				if (stops.includes("error") && !event.willRetry) this.setStatus("failed", this.unseen());
+				const failed = recordRunEnd(stops, event.willRetry).errored;
+				this.lastRunErrored = failed;
+				if (failed) this.setStatus("failed", this.unseen());
 				this.lastRunFailed = stops.includes("error") || stops.includes("aborted");
 				// An error may also carry `aborted` after a retry gave up; the user's
 				// own stop is the case with no error at all.
@@ -1283,17 +1412,18 @@ export class WebSession {
 				...(promptCommand ? { promptCommand } : {}),
 			});
 			if (event.type === "agent_settled") {
-				const hold = this.holdQueue || this.lastRunFailed;
-				this.holdQueue = false;
+				// `holdQueue` is cleared when the next run starts, not here: the edges
+				// below read it through `canDispatchAutomatically`, and clearing it first
+				// would let a stopped run's queue start on its own.
 				// Deferred: the kernel finishes settling after its listeners return,
 				// and an extension may have started a follow-up run in the meantime.
-				if (!hold) setImmediate(() => this.dispatchQueued());
+				setImmediate(() => this.dispatchQueued(undefined, "automatic"));
 			}
 			// A manual compaction settles no run, so queued messages wait for this
 			// event instead. Auto compaction is part of a run: its retry continues
 			// the turn, and `agent_settled` dispatches the queue after that.
 			if (event.type === "compaction_end" && event.reason === "manual" && !this.session.isStreaming) {
-				setImmediate(() => this.dispatchQueued());
+				setImmediate(() => this.dispatchQueued(undefined, "automatic"));
 			}
 		});
 		// Extension startup (MCP servers above all) registers tools after binding.
@@ -1303,6 +1433,10 @@ export class WebSession {
 		this.extensionsStartup = bound;
 		const binding = session.bindExtensions({
 			mode: "rpc",
+			// This host draws the proposal and collects the decision, so plan mode
+			// stays on until the user answers. An rpc client without this surface
+			// keeps the handoff-and-exit behavior.
+			planReviewSurface: true,
 			uiContext: webUiContext(
 				this.broker,
 				this.clarifications,
@@ -1348,6 +1482,44 @@ export class WebSession {
 		this.revision += 1;
 		const stamped: WebEvent = { ...event, revision: this.revision };
 		for (const listener of this.listeners) listener(stamped);
+		// Streaming deltas record nothing; any other event may follow a write, the
+		// kernel's or this host's own (a command echo, a status change after a command).
+		if (event.type === "entries") return;
+		if (
+			event.type === "agent" &&
+			(event.event.type === "message_update" || event.event.type === "tool_execution_update")
+		)
+			return;
+		this.queueJournalPublication(this.session);
+	}
+
+	/**
+	 * Publish what the kernel recorded for an event once it is on the branch.
+	 *
+	 * `AgentSession` notifies its listeners first and appends a finished message
+	 * afterwards, synchronously, so the entry exists only after this listener
+	 * returns: the check runs on a microtask, once per checkpoint however many
+	 * events arrived. Host-written entries (command echoes, thinking timings) ride
+	 * along with the next event's check.
+	 */
+	private queueJournalPublication(session: AgentSession): void {
+		// Nothing is bound before the constructor's first `bindSession`.
+		if (!session || this.journalQueued) return;
+		this.journalQueued = true;
+		queueMicrotask(() => {
+			this.journalQueued = false;
+			// A rebind meanwhile started its own cursor at the new branch's leaf.
+			if (this.session !== session) return;
+			const branch = session.sessionManager.getBranch();
+			const start = this.journal.advance(branch);
+			if (start === undefined) return;
+			if (start === "reset") {
+				// Not an extension of what the page holds: send the branch whole, in order with everything else.
+				this.emit({ type: "entries", reset: true, entries: projectEntries(branch) });
+				return;
+			}
+			this.emit({ type: "entries", entries: projectEntryRange(branch, start) });
+		});
 	}
 
 	publishError(message: string): void {
@@ -1460,6 +1632,12 @@ export class WebSession {
 		} finally {
 			this.pendingPrompts -= 1;
 		}
+		// A command can settle no run at all — leaving plan mode, an approval the
+		// plan file outran, `/goal pause` — so `agent_settled` never fires and the
+		// queue would stay parked while a newer message overtook it. One edge here
+		// covers every caller; the automatic check keeps a parked queue parked and a
+		// real run's own settle in charge.
+		if (this.queue.size > 0) setImmediate(() => this.dispatchQueued(undefined, "automatic"));
 	}
 
 	private async sendWithinTurn(text: string, attachments: readonly WebAttachment[], followUp: boolean): Promise<void> {
@@ -1503,7 +1681,9 @@ export class WebSession {
 		const images = imagesOf(attachments);
 		const sent = withTextAttachments(text, attachments);
 		const promptCommand = this.recordPromptCommand(text, sent);
-		if (promptCommand) this.nameAfterPromptCommand(promptCommand);
+		if (promptCommand) this.nameSessionAfter(promptCommand);
+		// No words to generate a title from: without a name the listing reads "(no messages)".
+		else if (!text.trim() && attachments[0]) this.nameSessionAfter(attachments[0].name);
 		await this.session.prompt(sent, {
 			source: "rpc",
 			...(images.length ? { images } : {}),
@@ -1544,11 +1724,12 @@ export class WebSession {
 	}
 
 	/**
-	 * A session opened by a prompt command is named after that line. Without a
-	 * name the sidebar falls back to the first message, which is the whole
-	 * expanded template, and a slash line is never sent for a generated title.
+	 * A session opened by a prompt command is named after that line, and one opened
+	 * by attachments alone after the first file. Without a name the sidebar falls
+	 * back to the first message: the whole expanded template, or nothing at all.
+	 * Neither is ever sent for a generated title.
 	 */
-	private nameAfterPromptCommand(line: string): void {
+	private nameSessionAfter(line: string): void {
 		if (this.sessionTitleGenerated || this.session.sessionName) return;
 		if (this.session.sessionManager.getBranch().some(isUserEntry)) return;
 		this.sessionTitleGenerated = true;
@@ -1628,15 +1809,34 @@ export class WebSession {
 		}));
 	}
 
-	/** Whether a message sent now has to wait: a run is active, the context is being compacted, or the session waits on the user. */
+	/** Whether a message sent now has to wait: a run is active, the context is being compacted, or the page is blocked on a decision. */
 	private mustQueue(): boolean {
 		return (
 			this.session.isStreaming ||
 			this.session.isCompacting ||
+			// A message left the queue but its prompt has not started yet: dispatching
+			// past that point starts a second run beside it.
+			this.dispatchInFlight > 0 ||
+			this.pendingPrompts > 0 ||
 			this.startingPrompt !== undefined ||
 			this.status === "waiting" ||
+			this.awaitingPlanDecision() ||
 			this.isReverting()
 		);
+	}
+
+	/**
+	 * The page is blocked on a plan card: plan mode is on and the session records a
+	 * proposal waiting for its answer.
+	 *
+	 * Only that state closes the composer, so it is the only state that holds the
+	 * host queue. A wait recorded with the mode already off — a caller handoff
+	 * opened here — has no card to answer; holding on it would strand what the user
+	 * types with nothing to click.
+	 */
+	private awaitingPlanDecision(): boolean {
+		const state = getStepPlanState(this.session.sessionManager.getBranch());
+		return state?.enabled === true && state.pendingProposalHash !== undefined;
 	}
 
 	/**
@@ -1648,7 +1848,7 @@ export class WebSession {
 		// Shutdown is in progress: nothing queued now will ever run.
 		if (this.closing) return;
 		const item = this.queue.add(input);
-		if (!this.mustQueue() && this.queue.size === 1) this.dispatchQueued(item.id);
+		if (!this.mustQueue() && this.queue.size === 1) this.dispatchQueued(item.id, "user");
 	}
 
 	editQueued(id: string, text: string): boolean {
@@ -1660,26 +1860,61 @@ export class WebSession {
 	}
 
 	/**
+	 * Whether the queue may start its next message without the user asking again.
+	 *
+	 * A stopped or failed run parks the queue until the user acts: continuing on
+	 * their behalf is what `holdQueue` exists to prevent, and retrying a failure
+	 * they did not retry repeats it. `awaitingPlanDecision` is the other hold —
+	 * the page is blocked on a proposal, so the next message has to wait for the
+	 * answer. Every automatic dispatch point asks this; a user action (`enqueue`,
+	 * `steerQueued`) does not, because that is the user asking again.
+	 */
+	private canDispatchAutomatically(): boolean {
+		return !this.holdQueue && !this.lastRunFailed && !this.awaitingPlanDecision();
+	}
+
+	/**
 	 * Start the next queued message (or `id`) as a new turn, unless one must
 	 * still wait. Its run's settle dispatches the one after it.
+	 *
+	 * `reason` records who asked: the automatic edges check the parked queue, a
+	 * user action does not.
 	 */
-	private dispatchQueued(id?: string): boolean {
+	private dispatchQueued(id?: string, reason: "automatic" | "user" = "user"): boolean {
 		// Shutdown is in progress: a turn started now would be disposed mid-stream.
 		if (this.closing) return false;
+		if (reason === "automatic" && !this.canDispatchAutomatically()) return false;
 		if (this.mustQueue()) return false;
 		const item = id ? this.queue.take(id) : this.queue.shift();
 		if (!item) return false;
-		void this.sendQueued(item).catch((caught: unknown) => {
-			this.publishError(caught instanceof Error ? caught.message : String(caught));
-		});
+		// Counted from here, before `sendQueued` starts: reading uploaded files is an
+		// await, and a second edge must not take the next message in the meantime.
+		this.dispatchInFlight += 1;
+		void this.sendQueued(item)
+			.catch((caught: unknown) => {
+				this.publishError(caught instanceof Error ? caught.message : String(caught));
+			})
+			.finally(() => {
+				this.dispatchInFlight -= 1;
+			});
 		return true;
 	}
 
 	private async sendQueued(item: QueuedMessage): Promise<void> {
-		const text = await withUploadedFiles(
-			item.text,
-			item.files.map((file) => file.id),
-		);
+		let text: string;
+		try {
+			text = await withUploadedFiles(
+				item.text,
+				item.files.map((file) => file.id),
+			);
+		} catch (caught) {
+			// The message never took shape, so nothing of it reached the kernel: it stays
+			// where the user put it, ahead of anything queued behind it, instead of
+			// vanishing with the error that stopped it. A failure after this point may
+			// already be a started turn, and restoring then would send it twice.
+			this.queue.restore([item]);
+			throw caught;
+		}
 		await this.send(text, item.attachments, true);
 	}
 
@@ -1697,7 +1932,9 @@ export class WebSession {
 		if (!this.session.isStreaming) {
 			if (this.status === "waiting" || this.isReverting())
 				throw new Error("The session is waiting; try again later");
-			return this.dispatchQueued(targets[0]);
+			// Steering is the user asking for this message to run now, so a parked
+			// queue does not hold it.
+			return this.dispatchQueued(targets[0], "user");
 		}
 		const refused: QueuedMessage[] = [];
 		let failure: unknown;
@@ -2173,7 +2410,11 @@ export class WebSession {
 	async setMode(mode: WebMode, enabled: boolean, goal?: string): Promise<void> {
 		const prompt =
 			mode === "plan"
-				? "/plan"
+				? // Absolute verbs: a toggle whose effect depends on the state a turn
+					// left behind is what turned a queued "exit" into a re-entry.
+					enabled
+					? "/plan on"
+					: "/plan off"
 				: mode === "ultraloop"
 					? enabled
 						? "/ultraloop on"
@@ -2216,9 +2457,17 @@ export class WebSession {
 		});
 	}
 
-	snapshot(): Record<string, unknown> {
+	/**
+	 * The session as a page reads it. `after` names the last entry the caller
+	 * already holds: when it is still on the branch, only the entries after it
+	 * (and earlier ones whose projection changed, see `projectEntryRange`) are
+	 * sent, flagged by `entriesAfter`. A caller on another branch, or with no id,
+	 * gets every entry and no flag.
+	 */
+	snapshot(after?: string): Record<string, unknown> {
 		const manager = this.session.sessionManager;
 		const branch = manager.getBranch();
+		const known = after === undefined ? -1 : branch.findIndex((entry) => entry.id === after);
 		return {
 			id: this.id,
 			cwd: this.cwd,
@@ -2236,7 +2485,9 @@ export class WebSession {
 			// interrupted: its reply simply has not arrived yet.
 			interruptedTurn: hasInterruptedTurn(branch, this.isBusy()),
 			compacting: this.session.isCompacting,
-			entries: projectEntries(branch),
+			...(known < 0
+				? { entries: projectEntries(branch) }
+				: { entries: projectEntryRange(branch, known + 1), entriesAfter: after }),
 			subagentLanes: [...this.subagentLanes.values()],
 			pendingApprovals: this.broker.pendingRequests(),
 			pendingClarifications: this.clarifications.pendingRequests(),
@@ -2259,7 +2510,23 @@ export class WebSession {
 			// client draws a goal strip and a plan review card from these.
 			goal: projectGoal(getStepGoal(manager.getBranch(), manager.getSessionId())),
 			planMode: projectPlanMode(getStepPlanState(manager.getBranch())),
+			// The proposal the user has not answered yet, as a session fact. The
+			// client marks exactly this snapshot's card actionable, so an answered
+			// proposal cannot look pending and a question cannot look like consent.
+			pendingPlanHash: getStepPlanState(manager.getBranch())?.pendingProposalHash,
 		};
+	}
+
+	/**
+	 * Image `index` (counting only images, in content order) of a recorded message,
+	 * data included: the snapshot and stream carry tool-result images only as
+	 * placeholders. Any entry of the session file is accepted, not only the
+	 * current branch, because a page may still show an entry from before a rewind.
+	 */
+	entryImage(entryId: string, index: number): { readonly data: string; readonly mimeType: string } | undefined {
+		const entry = this.session.sessionManager.getEntry(entryId);
+		if (entry?.type !== "message" || !("content" in entry.message)) return undefined;
+		return messageImages(entry.message.content)[index];
 	}
 
 	sessionFile(): string | undefined {

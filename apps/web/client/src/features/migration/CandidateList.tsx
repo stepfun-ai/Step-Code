@@ -102,7 +102,8 @@ const CandidateRow = memo(function CandidateRow({ candidate }: { readonly candid
 							className="migration-row-title"
 							disabled={busy || draft?.loading}
 							onClick={() =>
-								candidate.kind !== "mcp"
+								// Sessions and MCP have no detail panel: the title toggles the row like its checkbox.
+								candidate.kind !== "mcp" && candidate.kind !== "sessions"
 									? void previewCandidate(candidate.id)
 									: !canSelect
 										? undefined
@@ -283,6 +284,8 @@ export function CandidateList(_: { readonly onPickTarget?: () => Promise<string 
 	const allReviewed = cliReviewed.length > 0 && candidates.length === 0;
 	// No global CLAUDE.md / AGENTS.md: explain that there is nothing to do instead of an empty filtered list.
 	const noRules = kind === "rules" && !!scan && candidates.length === 0;
+	// Session scans are bounded by time and count, so the empty state points at those controls.
+	const noCandidates = t(kind === "sessions" ? "migrationNoSessionCandidates" : "migrationNoCandidates");
 	const reviewedNames = cliReviewed.map((value) => t(`migrationSource.${value}`)).join(" / ");
 	return (
 		<div className="migration-list">
@@ -416,12 +419,12 @@ export function CandidateList(_: { readonly onPickTarget?: () => Promise<string 
 				groups.length ? (
 					groups.map((group) => <SourceGroup key={group.id} group={group} />)
 				) : (
-					<EmptyState>{t("migrationNoCandidates")}</EmptyState>
+					<EmptyState>{noCandidates}</EmptyState>
 				)
 			) : matches.length ? (
 				matches.map((candidate) => <CandidateRow key={candidate.id} candidate={candidate} />)
 			) : (
-				<EmptyState>{t("migrationNoCandidates")}</EmptyState>
+				<EmptyState>{noCandidates}</EmptyState>
 			)}
 			{scan?.truncated ? <p className="migration-attention">{t("migrationTruncated")}</p> : null}
 			{kind === "sessions" && scan?.sessionSummary ? (

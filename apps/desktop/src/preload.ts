@@ -93,6 +93,14 @@ const bridge: StepcodeDesktopBridge = {
 			};
 		},
 	},
+	requestMicrophoneAccess() {
+		return ipcRenderer.invoke(DESKTOP_IPC.requestMicrophoneAccess) as ReturnType<
+			StepcodeDesktopBridge["requestMicrophoneAccess"]
+		>;
+	},
+	openMicrophoneSettings() {
+		return ipcRenderer.invoke(DESKTOP_IPC.openMicrophoneSettings) as Promise<void>;
+	},
 	defaultBrowser() {
 		return ipcRenderer.invoke(DESKTOP_IPC.defaultBrowser) as ReturnType<StepcodeDesktopBridge["defaultBrowser"]>;
 	},

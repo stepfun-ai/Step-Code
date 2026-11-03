@@ -49,3 +49,9 @@
 	position-area: top span-left;
 	margin-bottom: var(--popover-gap, 4px);
 }
+/* A submenu: beside the trigger, top edges aligned; flips to the left when the right has no room. */
+.rightStart {
+	position-area: right span-bottom;
+	margin-left: var(--popover-gap, 4px);
+	position-try-fallbacks: flip-inline, flip-block;
+}

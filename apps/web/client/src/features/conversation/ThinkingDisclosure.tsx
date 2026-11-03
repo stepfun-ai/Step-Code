@@ -4,12 +4,22 @@ import { copyText } from "../../state/session";
 import { thinkingElapsed } from "../../state/thinking-timing";
 import type { ThinkingTimelineItem } from "../../state/types";
 import { Icon, MarkdownView } from "../../ui";
-import { useSmoothText, useTypewriter } from "./streaming";
-import { thinkingPreview } from "./thinking-preview";
+import { useSmoothText } from "./streaming";
 
 const copyCode = (code: string) => copyText(code, null);
 
-/** Folded by default inside the Simple process group; only an actual live block animates. */
+/** How long a folding block keeps its body mounted, so the closing transition still has content. */
+const BODY_UNMOUNT_DELAY_MS = 320;
+
+/**
+ * Folded by default inside the Simple process group; only an actual live block animates.
+ * The folded header carries no excerpt of the reasoning: a fast model rewrote that line
+ * several times a second, and the text read as flicker rather than progress.
+ *
+ * Folded reasoning renders no Markdown: the hidden body was still parsed and laid out
+ * on every streamed frame. The body mounts when the block opens and stays until its
+ * closing transition has run, so it still slides shut instead of vanishing.
+ */
 export const ThinkingDisclosure = memo(function ThinkingDisclosure({
 	item,
 	active = false,
@@ -23,22 +33,23 @@ export const ThinkingDisclosure = memo(function ThinkingDisclosure({
 	const t = useT();
 	const running = active && item.running;
 	const [expanded, setExpanded] = useState(false);
-	// The reader may linger over the preview line: hold it while the pointer or the
-	// keyboard focus is on the row, so a sentence can be finished without it moving.
-	const [held, setHeld] = useState(false);
+	const [bodyShown, setBodyShown] = useState(false);
 	const wasRunning = useRef(running);
 	const id = useId();
-	const text = useSmoothText(item.content, running);
-	const labels = useMarkdownLabels();
 	useEffect(() => {
 		if (wasRunning.current && !running) setExpanded(false);
 		wasRunning.current = running;
 	}, [running]);
+	useEffect(() => {
+		if (expanded) {
+			setBodyShown(true);
+			return;
+		}
+		// Longer than the disclosure's 240ms row transition, and fine where motion is reduced.
+		const timer = setTimeout(() => setBodyShown(false), BODY_UNMOUNT_DELAY_MS);
+		return () => clearTimeout(timer);
+	}, [expanded]);
 	const label = t(running ? "thinkingIndicator" : "thinkingLabel");
-	// A sentence-aligned window that only grows at its tail, revealed at a reading
-	// pace, instead of the trailing-character slice that used to sweep the line.
-	const preview = running ? thinkingPreview(item.content) : undefined;
-	const previewText = useTypewriter(preview?.text ?? "", Boolean(preview), preview?.key, held);
 	return (
 		<section className="thinking" data-entry-id={item.entryId} data-running={running} data-expanded={expanded}>
 			<button
@@ -50,10 +61,6 @@ export const ThinkingDisclosure = memo(function ThinkingDisclosure({
 					setExpanded(!expanded);
 					onExpandedChange?.(!expanded);
 				}}
-				onPointerEnter={() => setHeld(true)}
-				onPointerLeave={() => setHeld(false)}
-				onFocus={() => setHeld(true)}
-				onBlur={() => setHeld(false)}
 			>
 				<Icon name="brain" size="xs" />
 				<span className="tool-verb">
@@ -62,7 +69,6 @@ export const ThinkingDisclosure = memo(function ThinkingDisclosure({
 				</span>
 				<ThinkingElapsed timing={item.timing} active={running} />
 				<Icon name="disclosure" size="xs" className="thinking-chevron" />
-				{!expanded && preview ? <span className="thinking-preview">{previewText}</span> : null}
 			</button>
 			<div
 				id={id}
@@ -71,19 +77,31 @@ export const ThinkingDisclosure = memo(function ThinkingDisclosure({
 				inert={!expanded}
 			>
 				<div className="thinking-body">
-					<MarkdownView
-						className="message-body"
-						source={text}
-						labels={labels}
-						streaming={running}
-						onCopyCode={copyCode}
-						copiedLabel={t("copied")}
-					/>
+					{/* Folded, nothing is parsed or laid out, and no reveal clock runs. */}
+					{expanded || bodyShown ? <ThinkingBody content={item.content} running={running} /> : null}
 				</div>
 			</div>
 		</section>
 	);
 });
+
+/** The reasoning itself, mounted only while its disclosure is open or closing. */
+function ThinkingBody({ content, running }: { readonly content: string; readonly running: boolean }) {
+	const t = useT();
+	const labels = useMarkdownLabels();
+	// Opened mid-thought: what has arrived shows at once; only what follows is revealed.
+	const text = useSmoothText(content, running, content);
+	return (
+		<MarkdownView
+			className="message-body"
+			source={text}
+			labels={labels}
+			streaming={running}
+			onCopyCode={copyCode}
+			copiedLabel={t("copied")}
+		/>
+	);
+}
 
 /** Only the live label ticks; settled history has no timer or invented endpoint. */
 export function ThinkingElapsed({

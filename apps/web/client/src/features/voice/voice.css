@@ -111,3 +111,40 @@
 	background: var(--danger);
 	filter: brightness(1.1);
 }
+
+/*
+ * Desktop microphone-permission notice: above the button like the pill, but
+ * wide enough for the settings path, centred on the button. Hidden by the
+ * `hidden` attribute.
+ */
+.voice-permission {
+	position: absolute;
+	bottom: calc(100% + 8px);
+	left: 50%;
+	transform: translateX(-50%);
+	width: 320px;
+	padding: 12px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-panel);
+	background: var(--surface);
+	box-shadow: var(--elev-2);
+	z-index: 6;
+}
+
+.voice-permission[hidden] {
+	display: none;
+}
+
+.voice-permission-text {
+	margin: 0 0 10px;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--ink);
+	white-space: normal;
+}
+
+.voice-permission-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}

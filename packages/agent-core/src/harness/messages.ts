@@ -1,5 +1,10 @@
 import type { ImageContent, Message, TextContent } from "@step-harness/providers";
 import type { AgentMessage } from "../types.ts";
+import {
+	type CommandExecutionOutcome,
+	commandExecutionNotice,
+	readCommandExecutionOutcome,
+} from "./command-outcome.ts";
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
 
@@ -24,6 +29,7 @@ export interface BashExecutionMessage {
 	cancelled: boolean;
 	truncated: boolean;
 	fullOutputPath?: string;
+	execution?: CommandExecutionOutcome;
 	timestamp: number;
 	excludeFromContext?: boolean;
 }
@@ -67,6 +73,21 @@ export function bashExecutionToText(msg: BashExecutionMessage): string {
 	} else {
 		text += "(no output)";
 	}
+	if (msg.execution) {
+		// Validate persisted facts: an older or hand-edited record must not project
+		// a malformed status into the model view.
+		const observed = readCommandExecutionOutcome(msg.execution);
+		if (observed) {
+			const notice = commandExecutionNotice(observed);
+			if (notice) text += `\n\n${notice}`;
+			if (msg.truncated && msg.fullOutputPath) {
+				text += `\n\n[Output truncated. Full output: ${msg.fullOutputPath}]`;
+			}
+			return text;
+		}
+	}
+	// Legacy or malformed records keep their original projection rather than
+	// claiming a clean success.
 	if (msg.cancelled) {
 		text += "\n\n(command cancelled)";
 	} else if (msg.exitCode !== null && msg.exitCode !== undefined && msg.exitCode !== 0) {
@@ -77,7 +98,6 @@ export function bashExecutionToText(msg: BashExecutionMessage): string {
 	}
 	return text;
 }
-
 export function createBranchSummaryMessage(
 	summary: string,
 	fromId: string,

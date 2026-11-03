@@ -5,8 +5,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, test, vi } from "vitest";
 import { prepareStepInstallation } from "../src/step/installation.ts";
-import { uninstallPlugin } from "../src/step/plugins.ts";
-import { ensureStepPageReady } from "../src/step/steppage-provision.ts";
+import { provisionInstallCommand, uninstallPlugin } from "../src/step/plugins.ts";
+import { ensureStepPageReady, stepPageBundleUrl } from "../src/step/steppage-provision.ts";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -48,6 +48,62 @@ async function fixture() {
 	};
 	return { root, bin, installer, env, input: { env, executablePath: join(root, "step-bin", "step") } };
 }
+
+test("installer guidance names a command that works on the platform", () => {
+	const provision = { command: "steppage-mcp", installer: "steppageInstaller" };
+	const env = { STEPCODE_STEPPAGE_INSTALLER_URL: "https://example.test/install.sh" };
+	expect(provisionInstallCommand(provision, env, "darwin")).toBe("curl -fsSL 'https://example.test/install.sh' | sh");
+	expect(provisionInstallCommand(provision, env, "win32")).toBe("step mcp prepare");
+	expect(stepPageBundleUrl(env)).toBe("https://example.test/latest/steppage-mcp.mjs");
+});
+
+async function windowsFixture() {
+	const root = await mkdtemp(join(tmpdir(), "step-installation-win-"));
+	roots.push(root);
+	const installer = join(root, "installer.sh");
+	const bundle = join(root, "latest", "steppage-mcp.mjs");
+	await mkdir(dirname(bundle), { recursive: true });
+	await writeFile(bundle, 'if (process.argv.includes("--version")) console.log("1.2.3");\n');
+	const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
+	const env: NodeJS.ProcessEnv = {
+		HOME: root,
+		USERPROFILE: root,
+		SystemRoot: systemRoot,
+		PATH: `${dirname(process.execPath)};${join(systemRoot, "System32")}`,
+		STEPCODE_STEPPAGE_INSTALLER_URL: pathToFileURL(installer).href,
+	};
+	return { root, bundle, env, wrapper: join(root, ".local", "bin", "steppage-mcp.cmd") };
+}
+
+test.runIf(process.platform === "win32")(
+	"Windows installs the bundle with a cmd wrapper and reuses it afterwards",
+	async () => {
+		const f = await windowsFixture();
+		expect(await ensureStepPageReady({ env: f.env })).toEqual({ command: f.wrapper, installed: true });
+		expect(await readFile(join(f.root, ".steppage-mcp", "bin", "steppage-mcp.mjs"), "utf8")).toBe(
+			await readFile(f.bundle, "utf8"),
+		);
+		expect(await readFile(f.wrapper, "utf8")).toContain('"%~dp0..\\..\\.steppage-mcp\\bin\\steppage-mcp.mjs" %*');
+		await rm(f.bundle);
+		expect(await ensureStepPageReady({ env: f.env })).toEqual({ command: f.wrapper, installed: false });
+	},
+	30_000,
+);
+
+test.runIf(process.platform === "win32")(
+	"a failed Windows download leaves no wrapper and suggests a Windows remedy",
+	async () => {
+		const f = await windowsFixture();
+		await rm(f.bundle);
+		const readiness = await ensureStepPageReady({ env: f.env });
+		expect(readiness.installed).toBe(false);
+		expect(readiness.error).toContain("StepPage is not ready");
+		expect(readiness.error).toContain("Run: step mcp prepare, then restart Step.");
+		expect(readiness.error).not.toContain("| sh");
+		await expect(readFile(f.wrapper)).rejects.toMatchObject({ code: "ENOENT" });
+	},
+	30_000,
+);
 
 test.skipIf(process.platform === "win32")(
 	"fresh installation waits for a verified executable and preserves credentials",

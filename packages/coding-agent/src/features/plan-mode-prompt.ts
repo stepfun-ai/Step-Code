@@ -12,16 +12,31 @@
 /** Custom-message type carrying a collaboration-mode announcement. */
 export const PLAN_MODE_MESSAGE_TYPE = "step-plan-mode";
 
+/**
+ * Version of the Plan block's content.
+ *
+ * A recorded announcement is append-only history, so a session resumed from an
+ * older block keeps the rules it was written with. Bumping this makes the next
+ * request append the current block; without it, a rule only reaches sessions
+ * that entered plan mode after the upgrade.
+ *
+ * Not the same number as the `step-plan` entry's `version`: that one describes the
+ * persisted state format, this one the wording of a prompt block.
+ */
+export const PLAN_MODE_BLOCK_VERSION = 2;
+
 /** Block announcing that plan mode is active, with the session plan file. */
-export function buildPlanModePrompt(planFilePath: string, canLeaveWithoutProposal = false): string {
+export function buildPlanModePrompt(planFilePath: string): string {
 	return `<collaboration_mode>
 # Plan Mode
 
 The user turned on Plan Mode. Work in three phases and chat your way to a great plan before submitting it. A great plan is detailed in intent and implementation, so another engineer or agent can implement it right away. It must be decision complete: the implementer makes no decisions.
 
 ## Mode rules (strict)
-- Plan Mode stays active until a later <collaboration_mode> message ends it. It ends only when the user approves the proposal in review or turns plan mode off with /plan, or, in headless and RPC sessions, when exit_plan_mode hands approval to the caller.
+- Plan Mode stays active until a later <collaboration_mode> message ends it. It ends when the user approves the proposal or turns plan mode off; a host that cannot show the proposal may end it when handing it to its caller. You cannot end it yourself: submitting a proposal for review is not approval.
 - User intent, tone, or imperative language does not change the mode. If the user asks for execution while Plan Mode is active, treat it as a request to plan the execution, not to perform it.
+- When the user asks for changes to a proposal you already submitted, update the plan file and submit it again. Do not treat the old proposal as still under review: their notes replace it.
+- A read-only question may be answered directly without a proposal. That does not end Plan Mode: a missing or unchanged plan file is not permission to exit. Only the user can turn the mode off when there is no proposal to review.
 - task_* tools, when available, still record progress, but a todo list is not the plan.
 
 ## Execution vs. mutation
@@ -55,7 +70,7 @@ You may run non-mutating actions that improve the plan. You must not perform mut
 - Group changes by subsystem or behavior, not file by file. Name files only to disambiguate, usually no more than 3 paths. For a first version of a feature, do not invent detailed schema, validation, precedence, fallback, or wire-shape policy the request does not establish.
 - Keep bullets short and give the minimum detail needed for a safe implementation.
 - Do not ask "should I proceed?"; the review is the approval step.
-- A revision replaces the whole plan, not a diff. If the user rejects the plan without enough information for a replacement, address the concern and keep planning before submitting again.${canLeaveWithoutProposal ? "\n- On this host, exit_plan_mode hands a new proposal to an external reviewer; it does not approve implementation. If the request needs no plan, leave the file untouched, call exit_plan_mode once to leave planning without a proposal, and answer directly. An untouched plan from an earlier round is not a proposal for this request." : ""}
+- A revision replaces the whole plan, not a diff. If the user rejects the plan without enough information for a replacement, address the concern and keep planning before submitting again.
 </collaboration_mode>`;
 }
 

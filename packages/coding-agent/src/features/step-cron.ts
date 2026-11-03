@@ -844,6 +844,9 @@ function formatCronStatus(jobs: readonly CronJob[]): string {
  * switchSession or reload — and touching a stale ctx throws. Timer callbacks can
  * land in that window, and an uncaught throw there takes down the whole host
  * rather than just skipping one notification, so treat it as "nothing to read".
+ *
+ * The plan-mode gate is read through the same helper: it asks the session
+ * whether a human decision is pending, and a stale ctx cannot answer.
  */
 function withLiveContext<T>(context: ExtensionContext | undefined, read: (ctx: ExtensionContext) => T): T | undefined {
 	if (!context) return undefined;
@@ -863,7 +866,19 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 			options.runtime ??
 			new StepCronRuntime({
 				telemetry: options.telemetry,
-				isIdle: () => Boolean(withLiveContext(currentContext, (ctx) => ctx.isIdle() && !ctx.hasPendingMessages())),
+				isIdle: () =>
+					Boolean(
+						withLiveContext(
+							currentContext,
+							(ctx) =>
+								ctx.isIdle() &&
+								!ctx.hasPendingMessages() &&
+								// A job whose delivery would start a turn stays due instead of
+								// being fired into a queue, so an approval does not replay work
+								// the user may reject.
+								ctx.hasPendingUserDecision?.() !== true,
+						),
+					),
 				warn: (message) => {
 					withLiveContext(currentContext, (ctx) => ctx.ui.notify(message, "warning"));
 				},

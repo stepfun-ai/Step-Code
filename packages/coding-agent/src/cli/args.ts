@@ -60,6 +60,13 @@ export interface Args {
 	 * would keep every one of them.
 	 */
 	includeLiveEvents?: boolean;
+	/**
+	 * The rpc client draws plan proposals and collects the user's decision.
+	 *
+	 * Not implied by `--mode rpc`: a client with no review surface must keep the
+	 * handoff behavior, so this is stated, never guessed.
+	 */
+	planReviewSurface?: boolean;
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
@@ -414,6 +421,8 @@ export function parseArgs(args: string[]): Args {
 			}
 		} else if (arg === "--include-live-events") {
 			result.includeLiveEvents = true;
+		} else if (arg === "--plan-review-surface") {
+			result.planReviewSurface = true;
 		} else if (arg === "--no-tools" || arg === "-nt") {
 			result.noTools = true;
 		} else if (arg === "--no-builtin-tools" || arg === "-nbt") {
@@ -678,6 +687,7 @@ ${chalk.bold("Options:")}
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
   --mode <mode>                  Output mode: text (default), json, or rpc
   --include-live-events          Live consumers/debugging only; makes JSON/RPC logs much larger
+  --plan-review-surface          RPC client draws plan proposals and collects the decision
 ${stepPermissionOptionsText}
   --sdk-stdio                    Run the Step Agent SDK length-prefixed stdio host
   --print, -p                    Non-interactive mode: process prompt and exit

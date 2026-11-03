@@ -25,6 +25,8 @@ import {
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
+import { pendingHandoffText } from "../../features/plan-handoff.ts";
+import { pendingProposalOf } from "../../features/step-plan.ts";
 import { type Theme, theme } from "../../theme/theme.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { toJsonEvent } from "../json-event.ts";
@@ -61,6 +63,15 @@ export type {
  */
 export interface RpcModeOptions {
 	includeLiveEvents?: boolean;
+	/**
+	 * This client can draw a plan proposal and collect the user's decision.
+	 *
+	 * `mode: "rpc"` alone cannot say so: every rpc host has a dialog bridge. A
+	 * client that renders the proposal itself sets this and plan mode stays on
+	 * until the user answers; without it the handoff-and-exit behavior is
+	 * unchanged. Read from `--plan-review-surface`.
+	 */
+	planReviewSurface?: boolean;
 }
 
 export async function runRpcMode(runtimeHost: AgentSessionRuntimeHost, options: RpcModeOptions = {}): Promise<never> {
@@ -352,6 +363,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntimeHost, options: 
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
 			mode: "rpc",
+			// The client, not the transport, answers a plan review: declare only what
+			// it was told at startup.
+			planReviewSurface: options.planReviewSurface === true,
 			commandContextActions: {
 				waitForIdle: () => session.waitForIdle(),
 				newSession: async (options) => runtimeHost.newSession(options),
@@ -663,7 +677,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntimeHost, options: 
 			}
 
 			case "get_last_assistant_text": {
-				const text = session.getLastAssistantText();
+				// The caller needs the proposal it has to approve, not the line that
+				// introduced it — but only while the decision fact says one is waiting.
+				const pending = pendingHandoffText(pendingProposalOf(session), session.messages);
+				const text = pending ?? session.getLastAssistantText();
 				return success(id, "get_last_assistant_text", { text });
 			}
 

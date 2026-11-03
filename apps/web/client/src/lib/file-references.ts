@@ -8,7 +8,8 @@ export function localFileReference(value: string): string | undefined {
 			if (url.hostname || url.search) return;
 			path = decodeURIComponent(url.pathname);
 		} else {
-			if (/^[a-z][a-z\d+.-]*:/i.test(value) && !/^[a-z]:[\\/]/i.test(value)) return;
+			// Markdown percent-encodes a Windows path's backslashes (`D:%5CWork`), so a drive letter may precede one.
+			if (/^[a-z][a-z\d+.-]*:/i.test(value) && !/^[a-z]:(?:[\\/]|%5c|%2f)/i.test(value)) return;
 			path = decodeURIComponent(value.split("#", 1)[0]);
 		}
 	} catch {

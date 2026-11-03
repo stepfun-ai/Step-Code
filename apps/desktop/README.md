@@ -60,8 +60,10 @@ Electron main (src/main.ts)
  ├─ preload.ts (dist/preload.cjs) ── contextBridge ──▶ window.stepcodeDesktop
  │     beginTagGroupClose / completeTagGroupClose ──▶ tag-group-close.ts (native intention + document gate)
  └─ ipc.ts ── pickDirectory / openExternal / revealPath / defaultBrowser / getTheme / setTheme / readTagGroups / saveTagGroups
-       / browserGuest / releaseBrowserGuest (only from the window's top frame on the server origin);
-       browserEvent is main ──▶ page only
+       / browserGuest / releaseBrowserGuest / requestMicrophoneAccess / openMicrophoneSettings
+       (only from the window's top frame on the server origin); browserEvent is main ──▶ page only
+       microphone-access.ts: OS microphone permission (macOS prompt, Windows privacy switch) asked before
+       recording, and the fixed macOS / Windows microphone settings URLs
 ```
 
 On quit, the renderer first drains accepted pending group edits. Only after the actual window closes does the server
@@ -74,13 +76,16 @@ unexpected Host exit attempts that page but a dirty renderer can veto replacemen
 
 | Command | What it does |
 | --- | --- |
-| `pnpm --filter @step-harness/desktop start` | Build `@step-harness/web`, bundle the desktop, launch Electron. |
-| `pnpm --filter @step-harness/desktop dev` | Bundle the desktop and launch; builds the web app only if its output is missing. |
+| `pnpm --filter @step-harness/desktop start` | Build `@step-harness/web` and any stale workspace packages, bundle the desktop, launch Electron. |
+| `pnpm --filter @step-harness/desktop dev` | Bundle the desktop and launch; rebuilds the web app and its workspace packages only when their output is missing or older than their sources. |
 | `pnpm --filter @step-harness/desktop build` | esbuild: `src/main.ts` → `dist/main.js` (ESM), `src/preload.ts` → `dist/preload.cjs`. |
 | `pnpm --filter @step-harness/desktop typecheck` | `tsgo --noEmit` (source and tests). |
 | `pnpm --filter @step-harness/desktop test` | Offline Node-environment, hosted-child, release-envelope and embedded-browser guest-policy regressions. |
 
-The packages the server imports (`@step-harness/coding-agent` and below) must be built (`pnpm build` at the root).
+The packages the server imports (`@step-harness/coding-agent` and below) are built by `src/dist-freshness.ts` checks in
+`scripts/build.mjs`: when an output is missing or older than the package sources, the launcher rebuilds that package
+chain with type-only scripts before building the web app. `dist/` is git-ignored, so this is what makes a branch switch
+or pull work without a manual `pnpm build`. A full root build is still needed for the CLI and for packaging.
 
 ## Environment variables
 

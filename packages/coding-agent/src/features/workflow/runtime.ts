@@ -568,8 +568,8 @@ export class WorkflowRuntime {
 							if (event.type === "succeeded") {
 								this.semaphore.succeeded(requestEpoch);
 								shared.succeeded(sharedEpoch);
-								// The next request in this turn (a resample after leaked tool-call
-								// markup) has no "started" event of its own.
+								// A provider-internal follow-up can begin without a new "started"
+								// event of its own.
 								requestEpoch = this.semaphore.epoch;
 								sharedEpoch = shared.epoch;
 							}

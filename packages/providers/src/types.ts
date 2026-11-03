@@ -5,6 +5,7 @@ import type { OpenAIResponsesOptions } from "./api/openai-responses.ts";
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.ts";
 import type { ProviderErrorKind } from "./utils/error-kind.ts";
 import type { AssistantMessageEventStream } from "./utils/event-stream.ts";
+import type { IncompleteTurnReason } from "./utils/incomplete-turn.ts";
 
 export type { AssistantMessageEventStream } from "./utils/event-stream.ts";
 
@@ -380,6 +381,12 @@ export interface AssistantMessage {
 	diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
 	usage: Usage;
 	stopReason: StopReason;
+	/**
+	 * Set when the finished turn carries nothing a client can act on: no visible
+	 * text and no structured tool call. The stop reason keeps the provider's own
+	 * value; consumers use this field instead of inferring an outcome from it.
+	 */
+	incomplete?: IncompleteTurnReason;
 	deferred?: DeferredHandle;
 	errorMessage?: string;
 	/**
@@ -766,6 +773,12 @@ export interface Model<TApi extends Api> {
 	maxTokens: number;
 	/** Default sampling parameters for this model. See {@link StreamOptions.samplingParams}; per-request keys override these. */
 	samplingParams?: Record<string, unknown>;
+	/**
+	 * Default prompt-cache retention for requests to this model. A request's
+	 * {@link StreamOptions.cacheRetention} takes precedence; when both are unset
+	 * adapters use `"short"`.
+	 */
+	cacheRetention?: CacheRetention;
 	headers?: Record<string, string>;
 	/** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
 	compat?: TApi extends "openai-completions"

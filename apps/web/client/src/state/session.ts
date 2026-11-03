@@ -12,6 +12,7 @@ import { t } from "../i18n";
 import { api, apiSend, errorMessage, setUnauthorizedHandler } from "../lib/api";
 import { splitAttachedFiles } from "../lib/attached-files";
 import { writeClipboard } from "../lib/clipboard";
+import { toolResultFailed } from "../lib/command-outcome";
 import { basename, clipDetail, compact, toolArgs, toolInputDetail, toolInputSummary } from "../lib/format";
 import { stripImportedUserControls } from "../lib/imported-content";
 import { contentText, skillInvocation } from "../lib/markdown";
@@ -24,7 +25,9 @@ import {
 	retainComposerDraftWork,
 	sessionComposerDraft,
 } from "./composer-drafts";
+import { LiveMessageAssembler } from "./live-message";
 import { observePerformance } from "./performance";
+import { coalesced, type Throttle, throttled } from "./refresh-schedule";
 import { arrangementChanged, pruneSessionPreferences, writeSessionPreferences } from "./session-order";
 import { type AppState, getState, mapWith, setState, setUi, type ToastState } from "./store";
 import {
@@ -38,6 +41,7 @@ import {
 import { restoreTagGroups, updateTagGroups } from "./tag-group-persistence";
 import { pruneTagGroups, withoutSessionTag } from "./tag-groups";
 import { readThinkingTimings } from "./thinking-timing";
+import { completeSnapshot, mergeEntries, reuseTimelineItems } from "./timeline-reuse";
 import type {
 	AccountReport,
 	ApprovalRequest,
@@ -50,6 +54,7 @@ import type {
 	FileChange,
 	LoginReport,
 	NoticeItem,
+	PlanReview,
 	QueueState,
 	SelectionRequest,
 	SessionEntry,
@@ -103,6 +108,21 @@ let noticeSeq = 0;
  */
 const GOAL_STATUS_NOTICE =
 	/^(Goal set: |Goal (paused|resumed|cleared|updated)\.|Goal commands: |Goal: .*\(iteration |Stopped a queued goal turn |Goal .+ is (paused|blocked|usage_limited))/u;
+
+/**
+ * Explain an assistant turn that carried nothing the client could act on.
+ *
+ * The kernel keeps the provider's stop reason on such a turn and classifies it as
+ * `incomplete`, so the row says what happened instead of rendering empty. An
+ * unknown value still gets an explanation: `incomplete` being set at all is the
+ * kernel's verdict, and a newer reason must not bring back the blank row this
+ * classification exists to remove.
+ */
+function incompleteTurnText(incomplete: unknown): string {
+	if (incomplete === "missing_tool_call") return t("incompleteMissingToolCall");
+	if (incomplete) return t("incompleteNoVisibleOutput");
+	return "";
+}
 
 /** Whether a notice only restates goal state the goal panel already renders. */
 export function goalStatusNotice(text: string): boolean {
@@ -188,15 +208,27 @@ export function showError(message: string, danger = true): void {
 	showToast(message, danger ? "danger" : "neutral");
 }
 
+/** How long a toast stays; one that offers an action stays longer so it can be reached. */
+const TOAST_MS = 4200;
+const TOAST_ACTION_MS = 6000;
+
 /** A short, self-dismissing announcement. State the UI already draws says nothing else. */
-export function showToast(message: string, tone: ToastState["tone"] = "neutral"): void {
+export function showToast(message: string, tone: ToastState["tone"] = "neutral", action?: ToastState["action"]): void {
 	toastSeq += 1;
 	const seq = toastSeq;
-	setState({ toast: { message, tone, seq } });
+	setState({ toast: { message, tone, seq, ...(action ? { action } : {}) } });
 	if (toastTimer !== undefined) clearTimeout(toastTimer);
-	toastTimer = setTimeout(() => {
-		if (getState().toast?.seq === seq) setState({ toast: null });
-	}, 4200);
+	toastTimer = setTimeout(
+		() => {
+			if (getState().toast?.seq === seq) setState({ toast: null });
+		},
+		action ? TOAST_ACTION_MS : TOAST_MS,
+	);
+}
+
+/** Close the toast now (its action ran); a newer toast is left alone. */
+export function dismissToast(seq: number): void {
+	if (getState().toast?.seq === seq) setState({ toast: null });
 }
 
 /**
@@ -367,24 +399,32 @@ const FILE_CHANGE_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "edit_f
 
 /**
  * The file change of a finished edit/write call. `edit`, `write` and Step's
- * `edit_file` record a unified patch in their result details; `write` says why
- * when it recorded none. Step's `write_file` records no patch (an untracked
- * change), and `changed: false` when the file already held the content.
+ * `edit_file` record a unified patch in their result details, and say why when
+ * they recorded none. Step's `write_file` records the same patch as `write`; a
+ * `write_file` from older sessions has neither a patch nor a reason, and both
+ * report `changed: false` when the file already held the content.
  * `result` is the recorded tool result, or a live `tool_execution_end`'s
  * result with the event's own `isError`.
+ *
+ * Whether the file was written is answered by the change record, not by
+ * `isError`: a call can fail after its write landed (a cancelled `then_run`, a
+ * failure preparing the result) and still record the patch. A call that failed
+ * before writing records neither a patch nor a reason for its absence.
  */
 function fileChange(
 	name: string,
 	args: unknown,
 	result: { readonly details?: unknown; readonly isError?: boolean } | undefined,
 ): FileChange | undefined {
-	if (!FILE_CHANGE_TOOLS.has(name) || !result || result.isError) return undefined;
+	if (!FILE_CHANGE_TOOLS.has(name) || !result) return undefined;
 	const details = (result.details ?? {}) as {
 		patch?: unknown;
 		untracked?: unknown;
 		changed?: unknown;
 	};
 	if (details.changed === false) return undefined;
+	if (result.isError === true && typeof details.patch !== "string" && details.untracked === undefined)
+		return undefined;
 	const input = (args ?? {}) as { path?: unknown; file_path?: unknown };
 	const path = typeof input.path === "string" ? input.path : input.file_path;
 	if (typeof path !== "string" || !path.trim()) return undefined;
@@ -519,7 +559,12 @@ function compactedMessageCount(
  * Such failures fold into one `retry` row. `retry` is the kernel's retry under
  * way, which makes the trailing failure part of the live series.
  */
-export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry?: SessionRetry): TimelineItem[] {
+export function timelineFromEntries(
+	entries: readonly SessionEntry[] = [],
+	retry?: SessionRetry,
+	/** The proposal the kernel says is waiting; exactly its card is actionable. */
+	pendingPlanHash?: string,
+): TimelineItem[] {
 	const items: TimelineItem[] = [];
 	/*
 	 * A command that expands into its own user message (`/plan <task>`) journals
@@ -596,13 +641,34 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 			message.role === "assistant" && message.stopReason === "error"
 				? String(message.errorMessage || t("modelRequestFailed"))
 				: "";
+		/*
+		 * An empty turn is a different thing. The provider called it a normal stop and
+		 * the session may already have recovered it with one hidden follow-up, so it
+		 * reads as a retry — its thinking and text stay — while a terminal one needs
+		 * its own explanation. Suppressing the body is only right for a provider
+		 * failure, whose content is a truncated attempt.
+		 */
+		const incomplete = message.role === "assistant" ? incompleteTurnText(message.incomplete) : "";
+		// The host pairs this turn with the hidden follow-up that recovered it.
+		const recovered = incomplete !== "" && entry.incompleteTurnRecovered === true;
 		const next = messages[index + 1]?.message;
-		if (error && (next ? next.role === "assistant" : retry !== undefined)) {
+		// A provider failure folds into the retry the kernel is running. A recovered
+		// empty turn folds into one too, whether or not its follow-up produced an
+		// assistant message — an abort mid-recovery still has to say what happened.
+		// A provider failure folds only when a retry or a reply follows; otherwise its
+		// card below stands alone. A recovered turn always folds: it was retried.
+		const errorFolds = error !== "" && (next ? next.role === "assistant" : retry !== undefined);
+		const foldedRetry = errorFolds || recovered;
+		const note = recovered ? "" : incomplete;
+		if (foldedRetry) {
 			// The kernel dropped the attempt from its context, so tool calls it streamed before failing never ran.
+			const folded = error || incomplete;
 			const last = items.at(-1);
-			if (last?.kind === "retry") items[items.length - 1] = { ...last, errors: [...last.errors, error] };
-			else items.push({ itemId: `retry-${entry.id}`, kind: "retry", errors: [error] });
-			continue;
+			if (last?.kind === "retry") items[items.length - 1] = { ...last, errors: [...last.errors, folded] };
+			else items.push({ itemId: `retry-${entry.id}`, kind: "retry", errors: [folded] });
+			// A failed attempt's body is truncated, so it is not worth showing. A recovered
+			// empty turn's thinking and text are the model's real output: keep them.
+			if (error) continue;
 		}
 		if (message.role !== "assistant" && (text || message.role === "user")) {
 			// A prompt command's expansion is shown as the line the user typed.
@@ -619,7 +685,7 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 				content: promptCommand ?? text,
 				...(promptCommand ? { promptCommand: true } : {}),
 				...(images.length ? { images } : {}),
-				...(error ? { error } : {}),
+				...(note ? { error: note } : {}),
 				usage: entry.usage,
 				timestamp: entry.timestamp,
 			});
@@ -667,7 +733,15 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 				items.push({
 					itemId: `tool-${block.id}`,
 					kind: "tool",
-					state: importedUnknown ? "unknown" : result?.isError ? "failed" : result ? "completed" : "pending",
+					// A command that ran and reported a nonzero exit, a deadline or a signal
+					// is a failure to show, even though the invocation itself succeeded.
+					state: importedUnknown
+						? "unknown"
+						: toolResultFailed(result?.isError, result?.details)
+							? "failed"
+							: result
+								? "completed"
+								: "pending",
 					...(imported ? { imported: true } : {}),
 					toolName: String(block.name ?? ""),
 					inputSummary: toolInputSummary(block.arguments),
@@ -699,14 +773,17 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 						: {}),
 				});
 			}
-			if (error)
+			if (error || note)
 				items.push({
-					itemId: `message-${entry.id}`,
+					// Its own id: the text block above already owns `message-${entry.id}`.
+					itemId: `message-${entry.id}-note`,
 					entryId: entry.id,
 					kind: "message",
 					role: "assistant",
 					content: "",
-					error,
+					error: error || note,
+					// This labels the response, not the eventual run outcome.
+					errorKind: error ? "request" : "incomplete",
 					usage: entry.usage,
 					timestamp: entry.timestamp,
 				});
@@ -718,27 +795,58 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 		// The failed attempt is not recorded yet (or not in this branch): the retry still shows.
 		else items.push({ itemId: "retry-live", kind: "retry", errors: [retry.errorMessage], live: retry });
 	}
-	return settlePlanReviews([...withSubagentLaneState(items, undefined, entries)]);
+	return settlePlanReviews([...withSubagentLaneState(items, undefined, entries)], pendingPlanHash);
 }
 
 /**
- * A plan review is actionable only while nothing has superseded it.
+ * The proposal the page is blocked on, or undefined when nothing waits.
  *
- * Each decision the card sends is an ordinary user message, so a user message
- * after the proposal is the decision. A newer `exit_plan_mode` proposal
- * supersedes an older one. The card itself stays in the transcript as the
- * record of that round; it just stops offering buttons.
+ * Two facts, both required: the kernel records the reviewed snapshot as waiting,
+ * and the mode is still on so this page can actually ask. A pending left by a
+ * caller handoff (`enabled` false) has no surface here — its session is not
+ * blocked, and the next message answers it.
  */
-function settlePlanReviews(items: TimelineItem[]): TimelineItem[] {
-	let latest = -1;
-	items.forEach((item, index) => {
-		if (item.kind === "tool" && item.planReview) latest = index;
-	});
-	if (latest < 0) return items;
-	const decided = items.some((item, index) => index > latest && item.kind === "message" && item.role === "user");
+function pendingPlanReviewFrom(
+	items: readonly TimelineItem[],
+	snapshot: SessionSnapshot | null,
+): PlanReview | undefined {
+	const waiting = snapshot?.pendingPlanHash;
+	if (waiting === undefined || snapshot?.planMode?.enabled !== true) return undefined;
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index]!;
+		if (item.kind === "tool" && item.planReview?.pending && item.planReview.planHash === waiting) {
+			return item.planReview;
+		}
+	}
+	return undefined;
+}
+
+/**
+ * A plan review is actionable only while the kernel says it is waiting.
+ *
+ * `pendingPlanHash` is a session fact: the handoff records it and every decision
+ * clears it. Comparing the transcript instead — newest card, or "no user message
+ * after it" — reads a question as consent and an answered proposal as still
+ * pending. The card itself stays in the transcript as the record of that round;
+ * it just stops offering buttons.
+ */
+function settlePlanReviews(items: TimelineItem[], pendingPlanHash: string | undefined): TimelineItem[] {
+	if (pendingPlanHash === undefined) {
+		return items.map((item) => {
+			if (item.kind !== "tool" || !item.planReview?.pending) return item;
+			return { ...item, planReview: { ...item.planReview, pending: false } };
+		});
+	}
+	// A resubmitted proposal can carry byte-identical text, so the hash alone may
+	// match more than one card. Only the newest is the one waiting; an earlier
+	// round keeps its record unmarked.
+	const waiting = items.reduce(
+		(index, item, at) => (item.kind === "tool" && item.planReview?.planHash === pendingPlanHash ? at : index),
+		-1,
+	);
 	return items.map((item, index) => {
 		if (item.kind !== "tool" || !item.planReview) return item;
-		const pending = item.planReview.pending && index === latest && !decided;
+		const pending = index === waiting;
 		return pending === item.planReview.pending ? item : { ...item, planReview: { ...item.planReview, pending } };
 	});
 }
@@ -784,6 +892,33 @@ function approvalItems(snapshot: SessionSnapshot): TimelineItem[] {
 		kind: "approval",
 		approval,
 	}));
+}
+
+/**
+ * The transcript rows for `entries` (the recorded branch) in `session`'s state:
+ * the projection, the live subagent lanes and completed answers over it, and the
+ * approvals still waiting at the end.
+ */
+function transcriptItems(
+	session: SessionSnapshot,
+	entries: readonly SessionEntry[] | undefined,
+	approvals: readonly TimelineItem[],
+): readonly TimelineItem[] {
+	return [
+		...withSubagentLaneState(
+			// Only a proposal this page can answer is actionable: a handoff that
+			// already left the mode has no card here, and marking it pending
+			// would both hide it from the transcript and block the composer.
+			timelineFromEntries(
+				entries,
+				session.retry,
+				session.planMode?.enabled === true ? session.pendingPlanHash : undefined,
+			),
+			session.subagentLanes,
+			entries,
+		),
+		...approvals,
+	];
 }
 
 /**
@@ -833,18 +968,20 @@ export function renderSnapshot(
 	const inputPatch = composerDraftPatch(
 		sessionComposerDraft(snapshot.id, options.adoptDraft ? getState().composerDraftId : undefined),
 	);
+	// Another session, or this page's own stream starting over: its buffered and
+	// streaming rows belong to a stream that is gone. A new connection starts its
+	// frames complete, so only then does the assembler start over too.
+	const restart = options.fromStream || previousSessionId !== snapshot.id;
+	if (restart) discardLiveFrames();
+	if (options.fromStream) liveMessage.reset();
 	setState((state) => {
 		const live = state.current?.id === snapshot.id ? state.current : undefined;
 		const timelineItems = holdStream
 			? state.timelineItems
-			: [
-					...withSubagentLaneState(
-						timelineFromEntries(snapshot.entries, snapshot.retry),
-						snapshot.subagentLanes,
-						snapshot.entries,
-					),
-					...approvalItems(snapshot),
-				];
+			: reuseTimelineItems(
+					live ? state.timelineItems : [],
+					transcriptItems(snapshot, snapshot.entries, approvalItems(snapshot)),
+				);
 		const pendingTurn = holdStream
 			? state.pendingTurn
 			: state.pendingTurn && countUserMessages(timelineItems) > state.pendingTurn.userCount
@@ -861,11 +998,14 @@ export function renderSnapshot(
 						queuedMessages: live.queuedMessages,
 						steeringMessages: live.steeringMessages,
 						subagentLanes: live.subagentLanes,
+						// The transcript is the stream's too: its `entries` events are newer than this answer.
+						entries: live.entries,
 					}
 				: snapshot;
 		return {
 			...inputPatch,
 			current,
+			...(restart ? { liveItems: [] } : {}),
 			performanceRun: !holdStream && state.current?.id !== snapshot.id ? null : state.performanceRun,
 			policiesCache: snapshot.policies ?? state.policiesCache,
 			draftCwd: snapshot.cwd,
@@ -882,6 +1022,9 @@ export function renderSnapshot(
 			unreadById: holdStream ? state.unreadById : mapWith(state.unreadById, snapshot.id, false),
 			sessions: mergeSessionSummary(state.sessions, current),
 			timelineItems,
+			// Derived, not read from the snapshot: the answer to "is a proposal
+			// waiting" is the newest pending card plus the mode still being on.
+			pendingPlanReview: pendingPlanReviewFrom(timelineItems, current),
 			pendingTurn,
 			// The snapshot is authoritative when the page (re)loads; live
 			// `compaction_start` / `compaction_end` events refine it afterwards.
@@ -916,12 +1059,18 @@ export function applyQueueState(sessionId: string, queue: QueueState): void {
 /* ── Live stream ─────────────────────────────────────────────────────────── */
 
 let stream: EventSource | null = null;
+/** Rebuilds the streaming message from the current connection's shortened frames (`live-message.ts`). */
+const liveMessage = new LiveMessageAssembler();
 
 /** Close the current session's event stream, if any. */
 export function closeStream(): void {
 	stream?.close();
 	stream = null;
-	setState({ performanceRun: null, compacting: false });
+	discardLiveFrames();
+	liveMessage.reset();
+	refreshSchedule.cancel();
+	refreshSchedule = streamRefresh();
+	setState({ performanceRun: null, compacting: false, liveItems: [] });
 	liveApprovals.clear();
 	liveClarifications.clear();
 	resolvedClarifications.clear();
@@ -931,7 +1080,14 @@ export function closeStream(): void {
 interface AgentStreamEvent {
 	readonly entry?: unknown;
 	readonly type: string;
-	readonly message?: { readonly role?: string; readonly content?: unknown; readonly usage?: unknown };
+	readonly message?: {
+		readonly role?: string;
+		readonly content?: unknown;
+		readonly usage?: unknown;
+		readonly timestamp?: unknown;
+		readonly customType?: string;
+		readonly details?: unknown;
+	};
 	readonly toolCallId?: string;
 	readonly toolName?: string;
 	readonly args?: unknown;
@@ -944,6 +1100,27 @@ interface AgentStreamEvent {
 	readonly errorMessage?: string;
 }
 
+/** A live recovery start is evidence of an attempt; a turn classification is not. */
+export function incompleteRecoveryNotice(event: AgentStreamEvent): string | undefined {
+	if (
+		event.type !== "message_start" ||
+		event.message?.role !== "custom" ||
+		event.message.customType !== "step-incomplete-turn-recovery"
+	)
+		return undefined;
+	const details = event.message.details;
+	const attempt =
+		typeof details === "object" && details !== null && "attempt" in details ? details.attempt : undefined;
+	const max =
+		typeof details === "object" && details !== null && "maxAttempts" in details ? details.maxAttempts : undefined;
+	const positiveInteger = (value: unknown) =>
+		typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 1;
+	return t("incompleteRetryStarted", {
+		attempt: positiveInteger(attempt),
+		max: positiveInteger(max),
+	});
+}
+
 /** Remember the newest revision this page has applied for `id`. */
 function noteRevision(id: string, revision: number | undefined): void {
 	if (revision === undefined || !Number.isSafeInteger(revision)) return;
@@ -951,13 +1128,16 @@ function noteRevision(id: string, revision: number | undefined): void {
 }
 
 function updateTimeline(update: (items: readonly TimelineItem[]) => readonly TimelineItem[]): void {
-	setState((state) => ({
-		timelineItems: withSubagentLaneState(
-			update(state.timelineItems),
-			state.current?.subagentLanes,
-			state.current?.entries,
-		),
-	}));
+	setState((state) => {
+		const updated = update(state.timelineItems);
+		// Unchanged rows publish nothing, so no reader of the transcript re-renders for them.
+		if (updated === state.timelineItems) return {};
+		const timelineItems = withSubagentLaneState(updated, state.current?.subagentLanes, state.current?.entries);
+		return {
+			timelineItems,
+			pendingPlanReview: pendingPlanReviewFrom(timelineItems, state.current),
+		};
+	});
 }
 
 export function applySubagentLane(sessionId: string, value: unknown): void {
@@ -994,6 +1174,44 @@ export function applyCompletedSubagentEntry(sessionId: string, value: unknown): 
 	});
 }
 
+/**
+ * Entries the host recorded since its previous `entries` event (runtime.ts
+ * `queueJournalPublication`), applied in stream order: the transcript grows
+ * without re-reading the session. `reset` carries the whole branch instead,
+ * when it no longer extends what was published (a rewind, another file).
+ */
+export function applyRecordedEntries(
+	sessionId: string,
+	incoming: readonly SessionEntry[],
+	options: { readonly reset?: boolean } = {},
+): void {
+	setState((state) => {
+		const current = state.current;
+		if (current?.id !== sessionId) return {};
+		const entries = options.reset ? incoming : mergeEntries(current.entries ?? [], incoming);
+		if (entries === current.entries) return {};
+		const next = { ...current, entries };
+		// Approval rows belong to approval events and snapshots: recomputing them from the
+		// snapshot this page last read would bring back one that was decided since.
+		const approvals = state.timelineItems.filter((item) => item.kind === "approval");
+		const rebuilt = transcriptItems(next, entries, approvals);
+		// The prompt's own row stays until its recorded message arrives.
+		const promptRow = incoming.some((entry) => entry.type === "message" && entry.message?.role === "user")
+			? undefined
+			: state.timelineItems.find((item) => item.itemId === "message-user-live");
+		const timelineItems = reuseTimelineItems(state.timelineItems, promptRow ? [...rebuilt, promptRow] : rebuilt);
+		return {
+			current: next,
+			timelineItems,
+			pendingPlanReview: pendingPlanReviewFrom(timelineItems, next),
+			pendingTurn:
+				state.pendingTurn && countUserMessages(timelineItems) > state.pendingTurn.userCount
+					? null
+					: state.pendingTurn,
+		};
+	});
+}
+
 /** Replace the row with the same id in place, or append it. */
 function upsertItem(items: readonly TimelineItem[], item: TimelineItem): readonly TimelineItem[] {
 	const index = items.findIndex((candidate) => candidate.itemId === item.itemId);
@@ -1024,9 +1242,24 @@ export function liveMessageTimeline(
 	thinkingIndex?: number,
 	thinkingTimings?: ThinkingTimings,
 ): readonly TimelineItem[] {
+	const rows = liveMessageRows(items, content, thinkingIndex, thinkingTimings);
+	const ids = new Set(rows.map((row) => row.itemId));
+	return [...items.filter((item) => !item.itemId.startsWith("message-live") && !ids.has(item.itemId)), ...rows];
+}
+
+/**
+ * The rows of the streaming message alone, in content order. `items` is the
+ * transcript they follow: a call whose execution already started keeps the row
+ * its tool events own, and a call still streaming keeps what they added.
+ */
+export function liveMessageRows(
+	items: readonly TimelineItem[],
+	content: unknown,
+	thinkingIndex?: number,
+	thinkingTimings?: ThinkingTimings,
+): readonly TimelineItem[] {
 	const blocks = assistantBlocks(content);
-	const callIds = new Set(blocks.filter((block) => block.type === "toolCall").map((block) => `tool-${block.id}`));
-	const next = items.filter((item) => !item.itemId.startsWith("message-live") && !callIds.has(item.itemId));
+	const next: TimelineItem[] = [];
 	let hasText = false;
 	for (const call of blocks) {
 		if (call.type === "thinking") {
@@ -1079,45 +1312,154 @@ export function liveMessageTimeline(
 	return next;
 }
 
-/** message_update fires per token; render at most once per frame. */
+/**
+ * The streaming message's latest content, drawn at most once per frame into
+ * `liveItems` only: the recorded transcript (`timelineItems`) and everything
+ * derived from it stay untouched while a reply streams.
+ */
 let pendingLiveContent: {
 	readonly content: unknown;
 	readonly thinkingIndex?: number;
 	readonly thinkingTimings?: ThinkingTimings;
 } | null = null;
+/** Latest partial result per running call (`tool_execution_update`), applied once per frame. */
+const pendingToolUpdates = new Map<string, AgentStreamEvent>();
 let liveFrame = 0;
 
-function scheduleLiveMessage(content: unknown, thinkingIndex?: number, thinkingTimings?: ThinkingTimings): void {
-	pendingLiveContent = { content, thinkingIndex, thinkingTimings };
+function scheduleLiveFrame(): void {
 	if (liveFrame) return;
 	liveFrame = requestAnimationFrame(() => {
 		liveFrame = 0;
-		const pending = pendingLiveContent;
-		pendingLiveContent = null;
-		if (pending)
-			updateTimeline((items) =>
-				liveMessageTimeline(items, pending.content, pending.thinkingIndex, pending.thinkingTimings),
-			);
+		applyLiveFrame();
 	});
 }
 
-/** Apply a buffered message_update now, so later events land after it. */
-function flushLiveMessage(): void {
-	if (liveFrame) cancelAnimationFrame(liveFrame);
-	liveFrame = 0;
+function scheduleLiveMessage(content: unknown, thinkingIndex?: number, thinkingTimings?: ThinkingTimings): void {
+	pendingLiveContent = { content, thinkingIndex, thinkingTimings };
+	scheduleLiveFrame();
+}
+
+function scheduleToolUpdate(event: AgentStreamEvent): void {
+	// The newest partial result carries all output so far, so it replaces any that waited.
+	pendingToolUpdates.delete(String(event.toolCallId));
+	pendingToolUpdates.set(String(event.toolCallId), event);
+	scheduleLiveFrame();
+}
+
+function applyLiveFrame(): void {
 	const pending = pendingLiveContent;
 	pendingLiveContent = null;
 	if (pending)
-		updateTimeline((items) =>
-			liveMessageTimeline(items, pending.content, pending.thinkingIndex, pending.thinkingTimings),
-		);
+		setState((state) => ({
+			liveItems: liveMessageRows(
+				state.timelineItems,
+				pending.content,
+				pending.thinkingIndex,
+				pending.thinkingTimings,
+			),
+		}));
+	const updates = [...pendingToolUpdates.values()];
+	pendingToolUpdates.clear();
+	for (const update of updates) applyToolUpdate(update);
 }
+
+/** Apply buffered stream frames now, so later events land after them. */
+function flushLiveMessage(): void {
+	if (liveFrame) cancelAnimationFrame(liveFrame);
+	liveFrame = 0;
+	applyLiveFrame();
+}
+
+/** Drop buffered frames of a stream that is gone (another session, a new connection). */
+function discardLiveFrames(): void {
+	if (liveFrame) cancelAnimationFrame(liveFrame);
+	liveFrame = 0;
+	pendingLiveContent = null;
+	pendingToolUpdates.clear();
+}
+
+/**
+ * The streamed message ended: its rows join the transcript as they are, until
+ * the `entries` event that follows replaces them with the recorded entry.
+ */
+function commitLiveMessage(): void {
+	setState((state) => {
+		if (!state.liveItems.length) return {};
+		const ids = new Set(state.liveItems.map((item) => item.itemId));
+		// A previous message's rows that no recorded entry replaced give way, as they did while streaming.
+		const kept = state.timelineItems.filter(
+			(item) => !item.itemId.startsWith("message-live") && !ids.has(item.itemId),
+		);
+		const timelineItems = withSubagentLaneState(
+			[...kept, ...state.liveItems],
+			state.current?.subagentLanes,
+			state.current?.entries,
+		);
+		return {
+			liveItems: [],
+			timelineItems,
+			pendingPlanReview: pendingPlanReviewFrom(timelineItems, state.current),
+		};
+	});
+}
+
+function applyToolUpdate(agentEvent: AgentStreamEvent): void {
+	const output = contentText(agentEvent.partialResult?.content);
+	updateToolItem(agentEvent.toolCallId, (item) => ({
+		...item,
+		outputSummary: compact(output),
+		outputDetail: clipDetail(output),
+		// A running subagent call already knows its children's session ids.
+		...childAgents(item.toolName, agentEvent.partialResult?.details),
+		...(item.toolName === "subagent"
+			? {
+					subagentTasks: subagentTasks(
+						undefined,
+						agentEvent.partialResult?.details,
+						"pending",
+						item.subagentTasks,
+					),
+				}
+			: {}),
+	}));
+}
+
+/** Thinking rows of the streaming message, in the live rows or already committed to the transcript. */
+function updateLiveThinking(update: (item: TimelineItem & { kind: "thinking" }) => TimelineItem): void {
+	const apply = (items: readonly TimelineItem[]) => {
+		let changed = false;
+		const next = items.map((item) => {
+			if (item.kind !== "thinking") return item;
+			const updated = update(item);
+			changed ||= updated !== item;
+			return updated;
+		});
+		return changed ? next : items;
+	};
+	setState((state) => ({ liveItems: apply(state.liveItems) }));
+	updateTimeline(apply);
+}
+
+/**
+ * Refreshes asked for by stream events: at most one snapshot and one session
+ * list read per `REFRESH_INTERVAL_MS`, never two at a time. The transcript
+ * itself arrives through `entries` events; these reads catch up on the rest
+ * (retry state, the title, goal and plan state). Each stream connection owns
+ * its schedule, so a new session's first refresh never waits on the last one's.
+ */
+const REFRESH_INTERVAL_MS = 400;
+function streamRefresh(): Throttle {
+	return throttled(() => Promise.all([refreshCurrent(), refreshSessions()]).then(() => {}), REFRESH_INTERVAL_MS);
+}
+let refreshSchedule: Throttle = streamRefresh();
 
 function handleAgentEvent(
 	agentEvent: AgentStreamEvent,
 	thinkingTimings?: ThinkingTimings,
 	promptCommand?: string,
 ): void {
+	const recoveryNotice = incompleteRecoveryNotice(agentEvent);
+	if (recoveryNotice) showToast(recoveryNotice, "neutral");
 	if (
 		agentEvent.type === "agent_start" ||
 		agentEvent.type === "message_start" ||
@@ -1151,28 +1493,31 @@ function handleAgentEvent(
 		);
 		return;
 	}
+	if (agentEvent.type === "tool_execution_update") {
+		scheduleToolUpdate(agentEvent);
+		return;
+	}
 	flushLiveMessage();
 	if (thinkingTimings) {
-		updateTimeline((items) =>
-			items.map((item) => {
-				if (item.kind !== "thinking" || !item.itemId.startsWith("message-live-thinking-")) return item;
-				const index = item.itemId.slice("message-live-thinking-".length);
-				return thinkingTimings[index] ? { ...item, timing: thinkingTimings[index] } : item;
-			}),
-		);
+		updateLiveThinking((item) => {
+			if (!item.itemId.startsWith("message-live-thinking-")) return item;
+			const timing = thinkingTimings[item.itemId.slice("message-live-thinking-".length)];
+			return timing ? { ...item, timing } : item;
+		});
 	}
 	if (
 		agentEvent.type === "message_end" ||
 		agentEvent.type === "tool_execution_start" ||
 		agentEvent.type === "agent_settled"
 	) {
-		updateTimeline((items) =>
-			items.map((item) => (item.kind === "thinking" && item.running ? { ...item, running: false } : item)),
-		);
+		updateLiveThinking((item) => (item.running ? { ...item, running: false } : item));
 	}
+	// The message the live rows belong to is over (or the run is): they join the transcript.
+	if (agentEvent.type === "message_end" || agentEvent.type === "agent_end" || agentEvent.type === "agent_settled")
+		commitLiveMessage();
 	if (agentEvent.type === "message_start" && agentEvent.message?.role === "user") {
-		// The prompt entered the loop: show it in place now; the refresh after
-		// its message_end replaces this row with the recorded entry. A prompt
+		// The prompt entered the loop: show it in place now; the `entries` event
+		// after its message_end replaces this row with the recorded entry. A prompt
 		// command shows as the line the user typed, not the template it became.
 		const content = promptCommand ?? contentText(agentEvent.message.content);
 		const images = imageSources(agentEvent.message.content);
@@ -1209,31 +1554,13 @@ function handleAgentEvent(
 			}),
 		);
 	}
-	if (agentEvent.type === "tool_execution_update") {
-		const output = contentText(agentEvent.partialResult?.content);
-		updateToolItem(agentEvent.toolCallId, (item) => ({
-			...item,
-			outputSummary: compact(output),
-			outputDetail: clipDetail(output),
-			// A running subagent call already knows its children's session ids.
-			...childAgents(item.toolName, agentEvent.partialResult?.details),
-			...(item.toolName === "subagent"
-				? {
-						subagentTasks: subagentTasks(
-							undefined,
-							agentEvent.partialResult?.details,
-							"pending",
-							item.subagentTasks,
-						),
-					}
-				: {}),
-		}));
-	}
 	if (agentEvent.type === "tool_execution_end") {
 		const output = contentText(agentEvent.result?.content) || JSON.stringify(agentEvent.result ?? {});
 		updateToolItem(agentEvent.toolCallId, (item) => ({
 			...item,
-			state: agentEvent.isError ? "failed" : "completed",
+			// Same rule as the historical projection: the command's own outcome counts,
+			// not only whether the invocation failed.
+			state: toolResultFailed(agentEvent.isError, agentEvent.result?.details) ? "failed" : "completed",
 			outputSummary: compact(output),
 			outputDetail: clipDetail(output),
 			// The end event carries no arguments: the row kept the path from the start event.
@@ -1273,8 +1600,7 @@ function handleAgentEvent(
 		agentEvent.type === "auto_retry_start" ||
 		agentEvent.type === "auto_retry_end"
 	) {
-		void refreshCurrent().catch(() => {});
-		void refreshSessions().catch(() => {});
+		refreshSchedule.request();
 	}
 }
 
@@ -1285,7 +1611,12 @@ export function connectStream(id: string): void {
 	// A new stream is a new order: its own snapshot is the current state, and the
 	// revisions this page saw before it belong to a connection that is gone.
 	streamRevisions.delete(id);
-	const source = new EventSource(`/api/v1/sessions/${id}/events`);
+	// The host remembers what it sent per connection, so a new one starts with complete frames.
+	liveMessage.reset();
+	refreshSchedule.cancel();
+	refreshSchedule = streamRefresh();
+	// `delta=1`: streamed text arrives as appended tails, which `liveMessage` rebuilds.
+	const source = new EventSource(`/api/v1/sessions/${id}/events?delta=1`);
 	stream = source;
 	source.addEventListener("snapshot", (event) => {
 		if (stream === source) renderSnapshot(JSON.parse((event as MessageEvent).data), { fromStream: true });
@@ -1299,10 +1630,30 @@ export function connectStream(id: string): void {
 			revision?: number;
 		};
 		noteRevision(id, payload.revision);
-		if (payload.event.type === "entry_appended") applyCompletedSubagentEntry(id, payload.event.entry);
+		const agentEvent = payload.event;
+		if (agentEvent.type === "entry_appended") applyCompletedSubagentEntry(id, agentEvent.entry);
+		if (agentEvent.type === "message_start" || agentEvent.type === "message_end") liveMessage.reset();
 		const promptCommand =
 			typeof payload.promptCommand === "string" && payload.promptCommand ? payload.promptCommand : undefined;
-		handleAgentEvent(payload.event, readThinkingTimings(payload.thinkingTimings), promptCommand);
+		handleAgentEvent(
+			agentEvent.type === "message_update" && agentEvent.message
+				? { ...agentEvent, message: { ...agentEvent.message, content: liveMessage.apply(agentEvent.message) } }
+				: agentEvent,
+			readThinkingTimings(payload.thinkingTimings),
+			promptCommand,
+		);
+	});
+	source.addEventListener("entries", (event) => {
+		if (stream !== source) return;
+		const payload = JSON.parse((event as MessageEvent).data) as {
+			entries?: unknown;
+			reset?: boolean;
+			revision?: number;
+		};
+		noteRevision(id, payload.revision);
+		applyRecordedEntries(id, Array.isArray(payload.entries) ? (payload.entries as SessionEntry[]) : [], {
+			reset: payload.reset === true,
+		});
 	});
 	source.addEventListener("status", (event) => {
 		if (stream !== source) return;
@@ -1342,6 +1693,9 @@ export function connectStream(id: string): void {
 				? items
 				: [...items, { itemId: `approval-${approval.id}`, kind: "approval", approval }],
 		);
+		// The decision panel reads the snapshot's pending approvals. A read the stream asked
+		// for earlier may have been answered before this request existed; this one is not.
+		refreshSchedule.request();
 	});
 	source.addEventListener("clarification_required", (event) => {
 		const request = JSON.parse((event as MessageEvent).data).clarification as ClarificationRequest;
@@ -1527,6 +1881,11 @@ let sessionListRequest = 0;
 let sessionListApplied = 0;
 
 /** Reload the list immediately; successful recovery only gates the later group prune. */
+/**
+ * Reload the session list. Overlapping reads may answer out of order; the
+ * request counters above keep an older answer from replacing a newer one.
+ * Stream-driven reloads go through the stream's refresh schedule, one at a time.
+ */
 export async function refreshSessions(): Promise<void> {
 	const request = ++sessionListRequest;
 	const recovery = restoreTagGroups();
@@ -1610,36 +1969,81 @@ export async function renameSession(name: string): Promise<void> {
 
 /**
  * Rename / archive / delete one session (legacy `openSessionMenu` click
- * handler, 1297-1328). Called from the sidebar's row menu and the
- * conversation header's menu. Rename only opens `#renameSessionDialog`
- * (`renameSession` saves); archive and delete patch the open session's
- * snapshot so the header does not wait for the next SSE snapshot.
+ * handler, 1297-1328). Called from the sidebar's row menu, its hover archive
+ * button and the conversation header's menu. Rename only opens
+ * `#renameSessionDialog` (`renameSession` saves). Archive and delete change the
+ * list and the open session's snapshot before the host answers, so the row moves
+ * at once; a refused request puts the row back and reports the error.
  */
 export async function runSessionAction(action: SessionAction, session: SessionSummary): Promise<void> {
+	if (action === "rename") {
+		// The dialog submits through renameSession; nothing changed yet, so there is nothing to refresh.
+		setUi({ renameSession: { sessionId: session.id, name: sessionTitle(session), pending: false } });
+		return;
+	}
+	if (action === "delete" && !window.confirm(t("confirmDelete", { name: sessionTitle(session) }))) return;
 	try {
-		if (action === "rename") {
-			// The dialog submits through renameSession; nothing changed yet, so there is nothing to refresh.
-			setUi({ renameSession: { sessionId: session.id, name: sessionTitle(session), pending: false } });
-			return;
-		}
-		if (action === "archive") {
-			const archived = !session.archived;
-			await apiSend(`/api/v1/sessions/${session.id}/archive`, "PATCH", { archived });
-			patchCurrentSession(session.id, { archived });
-		}
-		if (action === "delete" && window.confirm(t("confirmDelete", { name: sessionTitle(session) }))) {
-			await apiSend(`/api/v1/sessions/${session.id}`, "DELETE");
-			forgetDeletedSession(session.id);
-			const state = getState();
-			if (state.current?.id === session.id) startDraft(state.bootstrapCwd);
-			// After leaving it: leaving a session stashes its tabs.
-			forgetPreviewSession(session.id);
-			forgetComposerDraft(session.id);
-		}
-		await refreshSessions();
+		if (action === "archive") await archiveSessionOptimistically(session);
+		else await deleteSessionOptimistically(session);
 	} catch (error) {
 		showError(errorMessage(error));
 	}
+	// The host's list is the authority once the request settled; a failed refresh changes nothing shown.
+	void refreshSessions().catch(() => {});
+}
+
+/**
+ * Replace the listed sessions ahead of the host. A list read already in flight
+ * was answered before this change, so it must not land after it and put the
+ * row back where it was.
+ */
+function updateListedSessions(update: (sessions: readonly SessionSummary[]) => SessionSummary[]): void {
+	sessionListApplied = ++sessionListRequest;
+	setState((state) => ({ sessions: update(state.sessions) }));
+}
+
+async function archiveSessionOptimistically(session: SessionSummary): Promise<void> {
+	const setArchived = (archived: boolean) => {
+		updateListedSessions((sessions) =>
+			sessions.map((entry) => (entry.id === session.id ? { ...entry, archived } : entry)),
+		);
+		patchCurrentSession(session.id, { archived });
+	};
+	const archived = !session.archived;
+	setArchived(archived);
+	if (archived)
+		showToast(t("sessionArchivedToast"), "success", { label: t("sessionArchivedView"), run: showArchivedList });
+	try {
+		await apiSend(`/api/v1/sessions/${session.id}/archive`, "PATCH", { archived });
+	} catch (error) {
+		setArchived(session.archived === true);
+		throw error;
+	}
+}
+
+/** The archive toast's "View": reveal the sidebar's archived list (project view, archive open). */
+function showArchivedList(): void {
+	setState({ currentView: "project", showArchived: true });
+	setUi({ sidebarHidden: false });
+}
+
+async function deleteSessionOptimistically(session: SessionSummary): Promise<void> {
+	updateListedSessions((sessions) => sessions.filter((entry) => entry.id !== session.id));
+	const state = getState();
+	if (state.current?.id === session.id) startDraft(state.bootstrapCwd);
+	try {
+		await apiSend(`/api/v1/sessions/${session.id}`, "DELETE");
+	} catch (error) {
+		// The session still exists: its row comes back (the page stays where the delete left it).
+		updateListedSessions((sessions) =>
+			sessions.some((entry) => entry.id === session.id) ? [...sessions] : [...sessions, session],
+		);
+		throw error;
+	}
+	forgetDeletedSession(session.id);
+	// After leaving it: leaving a session stashes its tabs.
+	forgetPreviewSession(session.id);
+	forgetComposerDraft(session.id);
 }
 
 /**
@@ -1694,11 +2098,27 @@ export function backgroundSessionBusy(state: Pick<AppState, "current" | "statusB
 }
 
 /** Reload the current session's snapshot (legacy `refreshCurrent`, 3117-3120). */
-export async function refreshCurrent(): Promise<void> {
+export const refreshCurrent: () => Promise<void> = coalesced(loadCurrent);
+
+/**
+ * Read the open session's snapshot. A page holding the branch asks only for
+ * what follows its last entry (`?after=`) and folds the answer into what it
+ * holds; when the branch moved under it, it reads the whole session instead.
+ */
+async function loadCurrent(): Promise<void> {
 	const current = getState().current;
 	if (!current) return;
-	const snapshot = await api<SessionSnapshot>(`/api/v1/sessions/${current.id}`);
-	if (getState().current?.id === current.id) renderSnapshot(snapshot);
+	const path = `/api/v1/sessions/${current.id}`;
+	const after = current.entries?.at(-1)?.id;
+	const answer = await api<SessionSnapshot>(after ? `${path}?after=${encodeURIComponent(after)}` : path);
+	if (getState().current?.id !== current.id) return;
+	const whole = completeSnapshot(answer, getState().current?.entries);
+	if (whole) {
+		renderSnapshot(whole);
+		return;
+	}
+	const full = await api<SessionSnapshot>(path);
+	if (getState().current?.id === current.id) renderSnapshot(full);
 }
 
 /**
@@ -1794,6 +2214,10 @@ export function startDraft(cwd: string = getState().bootstrapCwd, options: { rea
 			draftThinking: current ? "" : state.draftThinking,
 			current: null,
 			timelineItems: [],
+			liveItems: [],
+			// The new conversation has answered nothing, and the previous session's
+			// waiting proposal does not belong to it.
+			pendingPlanReview: undefined,
 			pendingTurn: null,
 			draftCwd: startIn,
 		};

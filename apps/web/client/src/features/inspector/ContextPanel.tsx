@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { useT } from "../../i18n";
 import { copyText, sessionTitle } from "../../state/session";
 import { useAppStore } from "../../state/store";
@@ -35,7 +35,22 @@ function MessageJson({ entry }: { readonly entry: SessionEntry }) {
 	);
 }
 
-function MessageRow({ entry }: { readonly entry: SessionEntry }) {
+/**
+ * Row previews by entry object. A message's preview runs three regular
+ * expressions over its whole text; recorded entries keep their object across
+ * stream updates, so each preview is computed once instead of per render.
+ */
+const previews = new WeakMap<SessionEntry, string>();
+function rowPreview(entry: SessionEntry): string {
+	let preview = previews.get(entry);
+	if (preview === undefined) {
+		preview = messagePreview(entry).slice(0, 180);
+		previews.set(entry, preview);
+	}
+	return preview;
+}
+
+const MessageRow = memo(function MessageRow({ entry }: { readonly entry: SessionEntry }) {
 	const t = useT();
 	const [open, setOpen] = useState(false);
 	const role = entry.message?.role ?? "custom";
@@ -44,15 +59,15 @@ function MessageRow({ entry }: { readonly entry: SessionEntry }) {
 		<details className="context-message" onToggle={(event) => setOpen(event.currentTarget.open)}>
 			<summary>
 				<span className="context-message-role">{t(roleKey) === roleKey ? role : t(roleKey)}</span>
-				<span>{messagePreview(entry).slice(0, 180) || entry.type}</span>
+				<span>{rowPreview(entry) || entry.type}</span>
 				<Icon name="chevronRight" size="xs" />
 			</summary>
 			{open ? <MessageJson entry={entry} /> : null}
 		</details>
 	);
-}
+});
 
-export function ContextPanel({ data }: { readonly data?: SessionInspector }) {
+export const ContextPanel = memo(function ContextPanel({ data }: { readonly data?: SessionInspector }) {
 	const t = useT();
 	const current = useAppStore((state) => state.current);
 	/* The same title the session header and sidebar show: an unnamed session is titled by its first message. */
@@ -184,4 +199,4 @@ export function ContextPanel({ data }: { readonly data?: SessionInspector }) {
 			</section>
 		</div>
 	);
-}
+});

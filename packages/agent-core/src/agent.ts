@@ -144,19 +144,45 @@ class PendingMessageQueue {
 		return this.messages.length > 0;
 	}
 
-	drain(): AgentMessage[] {
+	/**
+	 * Take the messages that may be delivered now.
+	 *
+	 * `allow` is asked per message, and a refused one stays queued: a caller can
+	 * hold part of the queue without dropping what it holds or reordering what it
+	 * releases. With no predicate this drains everything the mode allows.
+	 */
+	drain(allowed?: (message: AgentMessage) => boolean): AgentMessage[] {
+		// Wrapped so a predicate that also declares (index, array) cannot be handed
+		// them by findIndex/some.
+		const allow = allowed === undefined ? undefined : (message: AgentMessage): boolean => allowed(message);
+		if (!allow) {
+			if (this.mode === "all") {
+				const drained = this.messages.slice();
+				this.messages = [];
+				return drained;
+			}
+			const first = this.messages[0];
+			if (!first) return [];
+			this.messages = this.messages.slice(1);
+			return [first];
+		}
 		if (this.mode === "all") {
-			const drained = this.messages.slice();
-			this.messages = [];
-			return drained;
+			const released: AgentMessage[] = [];
+			const held: AgentMessage[] = [];
+			for (const message of this.messages) (allow(message) ? released : held).push(message);
+			this.messages = held;
+			return released;
 		}
+		const index = this.messages.findIndex(allow);
+		if (index === -1) return [];
+		const [first] = this.messages.splice(index, 1);
+		return [first!];
+	}
 
-		const first = this.messages[0];
-		if (!first) {
-			return [];
-		}
-		this.messages = this.messages.slice(1);
-		return [first];
+	/** Whether any queued message would pass `allowed`. */
+	hasDeliverable(allowed?: (message: AgentMessage) => boolean): boolean {
+		if (!allowed) return this.messages.length > 0;
+		return this.messages.some((message: AgentMessage) => allowed(message));
 	}
 
 	clear(): void {
@@ -324,6 +350,29 @@ export class Agent {
 		return this.steeringQueue.hasItems() || this.followUpQueue.hasItems();
 	}
 
+	/**
+	 * Whether either queue holds a message that may be delivered now.
+	 *
+	 * A caller that has to decide whether continuing is safe asks this rather than
+	 * `hasQueuedMessages`: work the predicate refuses does not justify a turn.
+	 */
+	hasDeliverableQueuedMessage(allow: (message: AgentMessage) => boolean): boolean {
+		return this.steeringQueue.hasDeliverable(allow) || this.followUpQueue.hasDeliverable(allow);
+	}
+
+	/**
+	 * Filter consulted whenever the loop takes a queued message.
+	 *
+	 * Holding a message is the only way to keep automatic work out of a turn while
+	 * the user's own input still runs: the queues are drained by the loop, one
+	 * batch at a time, so a check made before starting the run cannot govern what
+	 * it delivers later.
+	 */
+	private queueDeliveryFilter: ((message: AgentMessage) => boolean) | undefined;
+	setQueueDeliveryFilter(filter: ((message: AgentMessage) => boolean) | undefined): void {
+		this.queueDeliveryFilter = filter;
+	}
+
 	/** Active abort signal for the current run, if any. */
 	get signal(): AbortSignal | undefined {
 		return this.activeRun?.abortController.signal;
@@ -371,8 +420,16 @@ export class Agent {
 		await this.runPromptMessages(messages);
 	}
 
-	/** Continue from the current transcript. The last message must be a user or tool-result message. */
-	async continue(): Promise<void> {
+	/**
+	 * Continue from the current transcript.
+	 *
+	 * `deliverQueued` asks for the queued input that may be delivered now to become
+	 * this turn's prompt, instead of continuing from the transcript. A caller that
+	 * is resuming after a retry or a context repair must leave it false: those
+	 * resume the same work, and a follow-up the person queued is meant to arrive
+	 * after it finishes, not to replace it.
+	 */
+	async continue(options: { deliverQueued?: boolean } = {}): Promise<void> {
 		if (this.activeRun) {
 			throw new Error("Agent is already processing. Wait for completion before continuing.");
 		}
@@ -383,19 +440,36 @@ export class Agent {
 		}
 
 		if (lastMessage.role === "assistant") {
-			const queuedSteering = this.steeringQueue.drain();
+			const queuedSteering = this.steeringQueue.drain(this.queueDeliveryFilter);
 			if (queuedSteering.length > 0) {
 				await this.runPromptMessages(queuedSteering, { skipInitialSteeringPoll: true });
 				return;
 			}
 
-			const queuedFollowUps = this.followUpQueue.drain();
+			const queuedFollowUps = this.followUpQueue.drain(this.queueDeliveryFilter);
 			if (queuedFollowUps.length > 0) {
 				await this.runPromptMessages(queuedFollowUps);
 				return;
 			}
 
 			throw new Error("Cannot continue from message role: assistant");
+		}
+
+		// `runContinuation` only polls steering before its first request, so a queued
+		// follow-up would otherwise wait behind a request the model takes without ever
+		// seeing it. Delivering it here makes it that request's input.
+		if (options.deliverQueued) {
+			const queuedSteering = this.steeringQueue.drain(this.queueDeliveryFilter);
+			if (queuedSteering.length > 0) {
+				await this.runPromptMessages(queuedSteering, { skipInitialSteeringPoll: true });
+				return;
+			}
+
+			const queuedFollowUps = this.followUpQueue.drain(this.queueDeliveryFilter);
+			if (queuedFollowUps.length > 0) {
+				await this.runPromptMessages(queuedFollowUps);
+				return;
+			}
 		}
 
 		await this.runContinuation();
@@ -495,9 +569,9 @@ export class Agent {
 					skipInitialSteeringPoll = false;
 					return [];
 				}
-				return this.steeringQueue.drain();
+				return this.steeringQueue.drain(this.queueDeliveryFilter);
 			},
-			getFollowUpMessages: async () => this.followUpQueue.drain(),
+			getFollowUpMessages: async () => this.followUpQueue.drain(this.queueDeliveryFilter),
 		};
 	}
 

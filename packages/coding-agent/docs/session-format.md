@@ -51,6 +51,8 @@ Source on GitHub ([step-harness](https://gitlab.basemind.com/aiagent/step-harnes
 - [`packages/providers/src/types.ts`](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/providers/src/types.ts) - Base message types (UserMessage, AssistantMessage, ToolResultMessage)
 - [`packages/agent/src/types.ts`](https://gitlab.basemind.com/aiagent/step-harness/-/blob/main/packages/agent/src/types.ts) - AgentMessage union type
 
+`BashExecutionMessage` now lives in [`packages/agent-core/src/harness/messages.ts`](https://github.com/stepfun-ai/step-harness/blob/main/packages/agent-core/src/harness/messages.ts); the coding-agent module re-exports it.
+
 For TypeScript definitions in your project, inspect `node_modules/@step-harness/coding-agent/dist/` and `node_modules/@step-harness/providers/dist/`.
 
 ## Message Types
@@ -104,6 +106,10 @@ interface AssistantMessage {
   usage: Usage;
   stopReason: "stop" | "length" | "toolUse" | "error" | "aborted";
   errorMessage?: string;
+  // Present when the turn carried nothing a client could act on; the stop reason
+  // keeps the provider's own value. See "Incomplete turns" below.
+  incomplete?: "no_visible_output" | "missing_tool_call";
+  diagnostics?: AssistantMessageDiagnostic[];
   timestamp: number;
 }
 
@@ -136,6 +142,65 @@ interface Usage {
 
 The exported `StopReason` type also includes `"pending"`, but that value is reserved for partial messages in streaming events. Terminal `done`/`error` messages replace it with a completion reason before step persists the assistant message, so `"pending"` should never appear in session JSONL.
 
+### Command tool outcomes
+
+For `run_command`, `bash`, and `powershell`, `isError` describes whether the tool
+invocation failed, not whether the command met the user's objective. A nonzero
+exit code, an execution deadline, or termination by a signal returns an ordinary
+tool result with `isError: false`, and `details.execution` carries the
+observations:
+
+```typescript
+interface CommandExecutionOutcome {
+  status: "exited" | "timed_out" | "signaled" | "canceled" | "unknown";
+  exitCode: number | null;
+  signal: string | null;
+  timedOut: boolean;
+  aborted: boolean;
+  timeoutSeconds?: number;
+}
+```
+
+Model-visible text states the outcome only when it is worth stating. A clean
+`exited` result with exit code 0 adds no status line; a nonzero exit, deadline,
+signal, cancellation, or unknown exit appends one sentence. Consumers must read
+`details.execution` rather than parse that sentence.
+
+Timeout and cancellation facts remain independent of the exit code: a command
+that exits with zero after a deadline still has `timedOut: true`. Missing exit
+information is `unknown`, not a fabricated zero. Caller cancellation continues
+to stop the agent and retains available execution facts in its error result.
+Unknown tools, invalid arguments, denied calls, startup failures, and output
+processing faults remain tool errors. An error after execution does not imply
+that effects were rolled back; verify state before repeating a mutation.
+
+An embedded `then_run` retains the same facts under
+`details.thenRun.execution`, alongside its existing summary fields. A nonzero
+exit or deadline does not undo the edit or write. A check that could not be
+invoked is recorded as `details.thenRun.invocationError`; the enclosing result
+stays successful because the file mutation already applied, and the check's
+diagnostic remains in the result text.
+
+Producers also declare their display framing in `details.outputFooter`
+(`{ notice, status }`): `notice` is the truncation or full-output reference and
+`status` is the trailing outcome sentence. It is presentation metadata, not a
+source of execution facts; `details.execution` is authoritative.
+
+Provider dialects differ in what they can express. `openai-responses` and
+`openai-completions` send only the result text, so this classification does not
+change the model request at all. `anthropic-messages` sends `is_error`, which now
+reports only an invocation failure; the command's outcome still reaches the model
+through the same trailing sentence.
+
+Existing records without `details.execution` remain readable and are not
+reclassified by parsing their output. The JSONL format version is unchanged.
+
+User-initiated bash executions keep the same optional facts in
+`BashExecutionMessage.execution`. They survive session recording and are shown
+in the next model request, including deadlines whose observed exit code is zero.
+A user-initiated command has no deadline of its own, so `timeoutSeconds` is
+present only when an executing adapter reported one.
+
 Session totals and the cost breakdown use the shared [`usage-totals.ts`](../src/core/usage-totals.ts) ledger. It includes assistant, tool, compaction, branch-summary and incremental `step-auto-clm-usage` records; cumulative maintenance summaries are excluded. Token increments must contain nonnegative safe integers and must not overflow the accumulated total. A missing/invalid cost does not hide valid tokens. `SessionStats.tokens.input` excludes caches, which are reported separately; the [Account summary](account-usage.md) combines them into complete input.
 
 ### Extended Message Types (from the coding agent)
@@ -149,6 +214,7 @@ interface BashExecutionMessage {
   cancelled: boolean;
   truncated: boolean;
   fullOutputPath?: string;
+  execution?: CommandExecutionOutcome;
   excludeFromContext?: boolean;  // true for !! prefix commands
   timestamp: number;
 }
@@ -309,6 +375,12 @@ Fields:
 - `content`: String or `(TextContent | ImageContent)[]` (same as UserMessage)
 - `display`: `true` = show in TUI with distinct styling, `false` = hidden
 - `details`: Optional extension-specific metadata (not sent to LLM)
+
+Step uses a hidden `step-incomplete-turn-recovery` custom message when a normal assistant response contains neither visible text nor an executable tool call, or reports `toolUse` without a tool call. The incomplete assistant message remains in the transcript unchanged — its `stopReason` stays the provider's own value and the structural fact is recorded as `incomplete` on the message — and the recovery message becomes a user-role message for the next model request. Recovery is bounded by a streak of consecutive empty turns: any turn with visible text or an executed tool call resets it, any user input resets it, and the second consecutive empty turn ends the run with `failure` on `agent_settled`. A response that also exceeded the context window is compacted before recovery; if compaction cannot complete, the run fails without rewriting the assistant message that `message_end` already published, and the failure travels on `agent_settled`. If automatic compaction is disabled for that overflow, the run fails immediately instead. Every incomplete turn carries an `incomplete_turn` diagnostic recorded before the message is persisted, whose details include `reason`, `consecutiveTurns`, `overflowKind` when known, and the provider's `rawStopReason` when present. The classifier reads only stop reasons and content-block types; it never parses thinking, and reads text only to decide whether any is visible.
+
+The recovery message carries `details.recoversEntryId`, the session entry of the turn it answers. A reader pairs the two by identity: a session also writes usage provenance, compaction, and session-state entries in between, so their positions never imply a pairing. A recovery message without it was written by an older build and should be read as an unpaired follow-up rather than guessed at.
+
+The run-level outcome is not a session entry. `agent_settled.failure` exists only in the live event stream, because a message the transcript already holds must not change after it is written: reload a session and the per-turn `incomplete` classification and its diagnostic are still there, but "did this run end without an answer" is reconstructed from the last turn. A recorder that needs the run's own verdict has to capture the event.
 
 ### LabelEntry
 

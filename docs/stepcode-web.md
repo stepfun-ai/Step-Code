@@ -124,16 +124,15 @@ alias for the same keyword and is what older sessions carry. The appendix
 renders that model, and the CLI keeps the default `session` rendering:
 
 - **plan** — `/plan <task>` still enters plan mode and sends the task. Planning  
-  means investigation and a written proposal, never carrying the work out, and  
-  exiting is part of that: `exit_plan_mode` reports that the investigation is  
-  finished. The tool leaves plan mode immediately (`ctx.mode` is `rpc` and  
-  `ui.custom` is unsupported), returning the proposal in its structured  
-  `details` (`planFilePath`, `planContents`, `planHash`). The client renders  
-  those details as a review card — see [Plan review card](#plan-review-card) —  
-  and the prompt tells the model to end the turn there and wait for the user's  
-  decision. The pick marks one message, but plan mode itself stays on until the  
-  model calls `exit_plan_mode` or the user toggles `/plan`. A picked skill rides  
-  after the prefix (`/plan /skill:<name> <task>`); the plan command expands it.
+  means investigation and a written proposal, never carrying the work out. The host
+  declares a review surface, so `exit_plan_mode` keeps plan mode on, ends the turn
+  and returns the proposal in its structured `details` (`planFilePath`,
+  `planContents`, `planHash`); the reviewed snapshot is recorded in the
+  `step-plan` entry as `pendingProposalHash`, which is the one answer to "is a
+  human decision pending". The client renders the card as the stream's last
+  element — see [Plan review card](#plan-review-card) — and blocks the composer
+  until it is answered. A picked skill rides after the prefix
+  (`/plan /skill:<name> <task>`); the plan command expands it.
 - **goal** — the goal is still how it always was: started once, then continued  
   automatically at idle boundaries until complete (the one-shot pick changes  
   only how the user starts it). The prompt forbids starting a goal on the  
@@ -198,6 +197,50 @@ and a live thought after the reader stopped that turn. Each stream connection
 starts a new order — its opening snapshot is authoritative — so a reconnected
 page, a restarted Host and a host that predates revisions all still render.
 
+### How the transcript reaches the page
+
+A session's stream carries its transcript; snapshot reads do not repeat it.
+After every non-delta event the Host publishes, as an `entries` SSE event, the
+branch entries recorded since its previous one, projected like the snapshot's.
+The kernel appends a finished message after notifying its listeners, so the
+Host checks on a microtask, once however many events arrived. When the branch no
+longer extends what was published (tree navigation, a rewind, a rebind to
+another file) the event carries `reset: true` and the whole branch. An earlier
+assistant message whose thinking timing was saved after it, or whose empty turn
+a later recovery answers (`incompleteTurnRecovered`), is sent again.
+
+Stream events still ask for a snapshot (for retry state, the title, goal and
+plan state), but through one throttled schedule per connection: one read in
+flight at a time, at most one per 400 ms, and each read names the last entry
+the page holds (`GET /api/v1/sessions/{id}?after=<entryId>`), so the answer
+carries only what follows it. A page that no longer holds that entry reads the
+whole session again.
+
+Streaming deltas are coalesced per connection (`apps/web/src/sse-writer.ts`): at
+most one `message_update` per 40 ms, the newest, and the newest
+`tool_execution_update` per running call, each flushed before any other event
+so the order the kernel published is kept. A `message_update` carries its
+message once (no `partial` copy, no tool-call `partialArgs`). The page opens
+its stream with `?delta=1`, so a text, thinking or top-level string argument
+that only grew since the connection's previous update carries just its new
+tail (`appendedTo`, `appendedArguments`), and rebuilds the full message
+(`client/src/state/live-message.ts`); a subscriber without the flag, such as a
+tab still running an older bundle, gets whole messages. The first update of a
+connection and of each message is complete. On a long reply
+this took the stream from about 5.4 MB/s to about 12 KB/s.
+
+Tool-result images (a `read_file` of a screenshot) are model input the page does
+not draw. Snapshots, `entries` and agent events carry them as
+`{ type: "image", mimeType, omitted: true }` placeholders, and
+`GET /api/v1/sessions/{id}/entries/{entryId}/images/{index}` serves one when a
+viewer needs it. The transcript file keeps the data.
+
+On the page, the streaming message's rows (`liveItems`) are kept apart from the
+recorded transcript (`timelineItems`), so a streamed frame re-renders only those
+rows; they join the transcript at the message's end, and the `entries` event
+that follows replaces them with the recorded entry. Rebuilt rows reuse every
+unchanged row object, so memoised rows do not redraw.
+
 ### Restarting with a turn in flight
 
 The kernel writes an assistant message on `message_end`, so a turn that is only
@@ -223,8 +266,10 @@ write to fall back on.
 `interruptedTurn` in the snapshot tells the client the newest turn was cut off,
 derived from the entries (`hasInterruptedTurn`): a prompt with no reply, a branch
 ending in tool work (a tool result, or an assistant that stopped with calls), or a
-reply recorded as `aborted`. Errors and truncated replies are not interrupted; the
-transcript already renders them. It is false while a turn runs or is starting, so
+reply recorded as `aborted`. Errors, truncated replies, and a turn the kernel
+classified as carrying nothing actionable (`message.incomplete`) are not
+interrupted: the last one has its own explanation and may already be recovered.
+The transcript already renders them. It is false while a turn runs or is starting, so
 a prompt waiting for its first token is not called interrupted. The client draws
 it as a quiet divider under the transcript. Because it is read from the file, a
 reopened session says the same thing a live page did, instead of the run silently
@@ -232,6 +277,16 @@ disappearing. Imported message tails are source snapshots with unobserved outcom
 not evidence of native interruption; later native continuation messages still use
 the same interruption checks. Shutdown drains imports alongside stopping live turns,
 then closes their shared session index after both cleanup operations settle.
+
+Incomplete response cards explain the recorded turn, not whether its run ended.
+The host marks `incompleteTurnRecovered` only when a persisted hidden recovery
+message names that assistant entry in `details.recoversEntryId`; intervening
+compaction and metadata entries do not break the pairing. Actual live recovery
+starts announce the message's `attempt/maxAttempts`. Final `agent_settled.failure`
+sets the session status to failed and emits an error notice (red toast), rather
+than being overwritten as completed. No run-outcome entry is added: history
+reload keeps the response explanation and recorded recovery pairing, not a
+guessed terminal outcome.
 
 The transcript file itself starts at the first prompt, not at the first reply
 (`SessionManager`'s conversation guard), so a first turn cut off by a restart
@@ -242,22 +297,36 @@ the whole conversation vanished with the process.
 
 An `exit_plan_mode` result without a host dialog is a decision waiting for the  
 user. The client turns the tool's persisted `details` into `#planReviewCard`: the  
-proposal, "view full plan", and two buttons. The card is projected from the tool  
-result in the session entries, not only from the live stream event, because every  
-finished message refreshes the snapshot; a card that existed only on the stream  
-disappeared before anyone could answer it, and a reopened session showed none.
+proposal, "view full plan", and three buttons — request changes, exit, approve. The card is projected from the tool  
+result in the session entries, not only from the live stream event, because the
+recorded entry replaces the live row as soon as the message is recorded; a card
+that existed only on the stream disappeared before anyone could answer it, and a
+reopened session showed none.
 
-- **Request changes** sends the notes through `/plan`, so the revision round is  
-  planned again and produces a new proposal. Plan mode is already off when this  
-  card is shown, and a plain message would have let the model implement instead  
-  of revise.
-- **Approve and run** sends a normal message that authorizes implementation.
+- **Request changes** sends the notes through `/plan`. The pending snapshot is
+  cleared and the notes are the whole message: plan mode already tells the model
+  that a change request means updating the plan file and submitting it again, so a
+  second hidden instruction would only arrive on its own and could send the model
+  back to submit a plan it had not revised.
+- **Approve and run** sends `/plan approve <hash>`, naming the snapshot this card
+  shows: a decision that arrives after a newer submission must not approve that
+  one. It rereads the plan file, refuses if the text changed since the review,
+  then leaves plan mode and starts the implementation turn as one decision.
+- **Exit plan mode** sends `/plan off`: it leaves without implementing.
 
-Both are ordinary user messages: the decision is in the transcript, starts one  
-turn, and needs no separate execution channel. Only the newest proposal without a  
-user message after it is actionable; an older or already-decided card stays in the  
-transcript as the record of that round but offers no buttons. `planHash` identifies  
-the reviewed text.
+The verbs go to the kernel directly rather than into the host queue. A decision
+cannot wait behind the turn it is meant to answer, and the host queue is held
+while a proposal is open, so a queued answer would never be dispatched. The
+composer keeps its normal queue semantics; only the card takes this path. The
+card also stays actionable until the session stops reporting the proposal as
+waiting, so a decision the kernel refused — because the plan file changed under
+it — is never hidden behind a card that thinks it is done.
+
+Which card is actionable is not inferred from the transcript:
+it is the snapshot the kernel recorded as waiting, so a question typed past the
+proposal cannot read as consent and an answered proposal cannot look pending. A
+decided card stays in the transcript as the record of that round but offers no
+buttons.
 
 Building a prompt runs `git symbolic-ref` and `git status` synchronously, now in  
 the multi-session host rather than a single CLI process. The appendix bounds each  
@@ -722,32 +791,38 @@ names the plan file (`.stepcode/plans/session-<id>.md`), limits file mutations t
 that file, and explains how to submit a decision-complete proposal. The system
 prefix and existing tool order stay unchanged. Context projection restores a
 missing announcement after compaction and announces Default mode after exit;
-it does not append a new reminder on every unchanged request. The app's external
-handoff instruction permits leaving without a new proposal but never treats
-submission as approval to implement.
+it does not append a new reminder on every unchanged request.
 
-Announcement details record whether the current host can leave planning without
-a proposal, so restoring the same plan on another host refreshes its handoff
-instructions. A pending Default announcement is reused by context projection
-rather than appended twice before it reaches the transcript.
+Plan mode ends only on the user's decision, the same rule as the terminal: the
+model cannot leave it, and a missing or unchanged plan file is not permission to
+try. The web host draws the proposal itself, so `exit_plan_mode` hands the plan
+over and ends the turn while the mode stays on; the review card then offers the
+three verbs the kernel owns. `/plan approve <hash>` names the snapshot the card
+shows, leaves the mode, and starts the implementation turn as one decision.
+`/plan <notes>` keeps planning with the notes as the next task. `/plan off`
+leaves the mode without implementing, and the plan strip's exit button sends
+exactly that — an absolute verb, because a queued toggle would flip whatever
+state the turn left behind.
 
-Plan mode ends the way it does in the terminal: the model calls  
-`exit_plan_mode`, or the user toggles `/plan`. A request that needs no proposal  
-calls the tool once without writing the file; with nothing new to review it just  
-leaves plan mode and the model answers directly. "Nothing new" means the plan  
-file still holds the content it had when this round entered plan mode  
-(`planHashAtEnter` in the `step-plan` entry) or the proposal already submitted in  
-an earlier round (`submittedPlanHash`). The first check covers a file left over  
-from an earlier round or from an older build, which the submitted hash alone  
-cannot recognise; either way, re-entering with the Plan chip never posts the old  
-plan for review again. The terminal, which has a review  
-dialog, keeps refusing a missing file and tells the model to let the user leave  
-with `/plan`. Tool results say the outcome plainly and persist it: after a  
-submit or a plain exit they report that plan mode (which the host turned on for  
-`/plan`) is now off and not to call the tool again. A call while already off
-reports that only the user can start another plan round. The hidden Default-mode
-announcement reaches the model, not the visible transcript: the strip closing
-and (for a proposal) the review card are the user-facing report.
+While the card waits the composer is closed: the page is blocked on one decision,
+and text typed past the card would read as an answer to it. The file boundary
+still holds, and the kernel keeps the automatic turn starters (goal continuation,
+cron delivery, lane wake-ups, the host's own queue) held until the user answers.
+
+The host queue is held on one condition, the same one that decides whether a card
+is on screen: plan mode is on and the session records a proposal waiting. Both are
+read from the session fact, so the queue is never held for a card the page cannot
+show — a wait recorded with the mode already off is a caller handoff, whose owner
+answers with its next message. A stopped or failed run parks the queue too, and
+every automatic dispatch point asks the same gate; a user action (sending, or
+unqueueing a message) does not.
+
+Tool results say the outcome plainly and persist it: a submission reports that
+plan mode stays on until the user answers, and an ordinary user message after it
+does not count as consent. A call while the mode is off reports that only the
+user can start another plan round. The hidden Default-mode announcement reaches
+the model, not the visible transcript: the strip closing and (for a proposal) the
+review card are the user-facing report.
 
 The host mounts the same tool profile as the CLI (`createStepToolProfile`), so  
 the model is offered `read_file` / `write_file` / `edit_file` / `run_command`  
@@ -845,6 +920,34 @@ through coding-agent's public `models.json` / `auth.json` APIs.
 - Sources, read-only: `~/.stepgo/config/config.json` (`apiKey`, `baseUrl`) and  
   `~/.stepgo/config/agent/managed/config.json` (one provider per API dialect with  
   its model catalog). `STEPGO_HOME` / `STEPCODE_HOME` relocate the stepgo home.
+- stepgo writes the managed file only on a launch that reaches Step, so a
+  launcher whose `step` command is missing never writes it. Without it the
+  import falls back to `config.json` alone: the models stepgo launches Step with
+  (`agentModels.stepcli.model` and `smallModel`, else the top-level `model`; a
+  model without its own `modelSupportApis` inherits the top-level list). Each
+  model goes under the provider id stepgo gives its dialect — `stepcode-anthropic`
+  for `claude_native`, else `stepcode-responses` for `responses`, else
+  `stepcode-chat` for `chat` — at the `config.json` address. A model with no
+  supported API is reported and skipped. `config.json` carries no
+  capabilities, so each model takes its dialect's fallback values, all editable
+  on the model settings page:
+
+  | Provider | `contextWindow` | `maxTokens` | `compat` |
+  | --- | --- | --- | --- |
+  | `stepcode-anthropic` | 1000000 | 128000 | `{ "forceAdaptiveThinking": true }` |
+  | `stepcode-responses` | 1000000 | 128000 | — |
+  | `stepcode-chat` | kernel default (128000) | kernel default (16384) | — |
+
+  The Anthropic values are those of the current Claude models in stepgo's model
+  metadata, which refuse the budget thinking format; remove the flag for a model
+  that needs it. The Responses values are those of the current GPT-5.x / 6.x
+  models; lower the context of a smaller-window variant (the 272K Codex ones)
+  on the model settings page, or a long session overflows it. The managed file
+  states these per model and is kept as written.
+- A model whose source does not state `reasoning` or `input` is imported with
+  `reasoning: true` (thinking levels off/low/medium/high, default medium) and
+  `input: ["text", "image"]`, instead of the kernel's text-only, no-reasoning
+  defaults for a bare entry. A value stepgo did state is kept as written.
 - Each provider becomes a `models.json` declaration under its own id  
   (`tokens.maxContext` / `tokens.maxOutput` become `contextWindow` / `maxTokens`).  
   Its key becomes an `api_key` entry in `auth.json` under the same id; the  
@@ -854,8 +957,10 @@ through coding-agent's public `models.json` / `auth.json` APIs.
 - A completed import writes `<agent dir>/stepgo-model-import.json`. While that  
   file exists stepgo is not read again: the imported providers are ordinary  
   custom providers the user edits or deletes on the model settings page. Delete  
-  the marker to import again. Without stepgo installed, or when a provider fails  
-  to write, no marker is written and the next start retries.
+  the marker to import again. A fallback import records the marker too, so a
+  managed file stepgo writes later is not read. Without stepgo installed, with
+  nothing importable, or when a provider fails to write, no marker is written
+  and the next start retries.
 - `STEPCODE_STEPGO_IMPORT=0` (or `false` / `off` / `no`) disables the import; the  
   web e2e suite and `scripts/check-web-runtime.mjs` set it.
 - Failures never stop the host; the host logs one `[models]` line when it  
@@ -868,10 +973,17 @@ The model settings page declares providers and keys through
 shows the address, protocol, name and, per model, the id, context window, max
 output, input kinds, reasoning flag and thinking-level map; a save rebuilds
 exactly those. Everything it cannot show is kept from the stored declaration:
-provider-level `headers`, `compat`, `authHeader` and `modelOverrides`, and
-per-model `api`, `baseUrl`, `cost`, `samplingParams`, `headers` and `compat`. A
+provider-level `headers`, `compat`, `cacheRetention`, `authHeader` and `modelOverrides`, and
+per-model `api`, `baseUrl`, `cost`, `samplingParams`, `cacheRetention`, `headers` and `compat`. A
 model row the form no longer sends is removed, because deleting a model is an
 edit too.
+
+For those fields the page header has an "打开配置文件" (Open config file) button:
+`POST /api/v1/settings/models/open-config` opens the `models.json` the kernel
+reads in the application the system associates with it (on macOS, the default
+text editor when none is), creating an empty `{ "providers": {} }` file first if
+there is none. The provider list reloads when the window regains focus, and
+like form edits, hand edits apply to sessions started afterwards.
 
 That rule is not cosmetic: `compat.forceAdaptiveThinking`
 ([models](../packages/coding-agent/docs/models.md#anthropic-messages-compatibility))
@@ -911,6 +1023,10 @@ Terminal toggle right after Context. The toggle is not a rail panel: it opens th
 the conversation, so it stays available beside any inspector. Summary is excluded from the  
 Escape chain while a turn is running or waiting, so Escape stops the turn as it does with no  
 inspector open.  
+Every panel stays mounted and toggles `hidden`, but the Context panel builds its message
+list only while it is shown: hidden, it re-rendered every row on each inspector poll. Its
+row previews are computed once per recorded entry, and the app grid has a single definite
+row, so a layout no longer sizes it from the content of both columns.
 Summary replaces the original floating task/subagent banner, rather than  
 coexisting with it. Summary is an independent content-height surface, not the  
 full-height inspector used by other rail entries. The compact board is 320px  
@@ -1206,10 +1322,14 @@ remain outside process folds. Search can reveal recorded thinking inside a
 folded group. This grouping changes no session entries or model context.
 
 Thinking retains its folded disclosure with a Brain icon. Only the  
-currently streaming thinking block has the tool-style running label, shimmer  
-and a short content preview. Text/tool output, message completion or a settled  
+currently streaming thinking block has the tool-style running label and its
+shimmer; the folded row carries no excerpt of the reasoning. A folded thought
+renders no Markdown at all: its body mounts when opened (showing what has
+arrived, then revealing the rest at about 30 steps a second) and unmounts
+after it closes. Text/tool output, message completion or a settled
 session stops the running state and folds an open live thought. A settled  
-thought can be reopened manually. Reduced-motion skips folding/shimmer effects.  
+thought can be reopened manually. Reduced-motion skips folding/shimmer effects.
+The staged mode's border sweep plays twice and then rests.
 The host observes each block's structured thinking start/delta/end events.  
 The label shows elapsed seconds, ticks once per second only while\
 that block is active, and freezes before prose or tool arguments start.  

@@ -235,6 +235,15 @@ function formFromProvider(provider: SettingsModelProvider | undefined): FormStat
  */
 const DEFAULT_CONTEXT_WINDOW = 1_000_000;
 
+/**
+ * The output cap a row is saved with when its max-output field is left blank.
+ * Like the context window it is written into `models.json`, because the kernel's
+ * own fallback (16384) is a ceiling on one reply that the thinking budget is
+ * also spent from, so a long answer or a high effort ends in
+ * `stopReason: "length"`. The field's placeholder names this number.
+ */
+const DEFAULT_MAX_TOKENS = 64_000;
+
 const MIN_COMPACTION_THRESHOLD = 0.5;
 const MAX_COMPACTION_THRESHOLD = 0.95;
 
@@ -253,12 +262,9 @@ function parseCompactionThreshold(value: string): number | undefined | null {
 /**
  * The request body: rows without an id are dropped rather than rejected.
  *
- * A blank max-output field is written as no `maxTokens` at all, unlike the
- * context window: the kernel then applies its own 16384-token default, which is
- * also what a hand-declared model without the field gets. The field exists
- * because that default is a ceiling on one reply and the thinking budget is
- * spent from the same ceiling, so a long answer or a high effort can end in
- * `stopReason: "length"` until the user raises it.
+ * Blank context-window and max-output fields are written as
+ * {@link DEFAULT_CONTEXT_WINDOW} and {@link DEFAULT_MAX_TOKENS}, the values their
+ * placeholders name.
  *
  * A blank compaction threshold is likewise left out so the runtime default
  * applies. The host stores it as `compaction.modelTriggerRatios["provider/id"]`
@@ -273,7 +279,7 @@ function modelsPayload(rows: readonly ModelRowState[]): Array<Record<string, unk
 				id: row.id.trim(),
 				...(row.name.trim() ? { name: row.name.trim() } : {}),
 				contextWindow: Number(row.contextWindow) > 0 ? Number(row.contextWindow) : DEFAULT_CONTEXT_WINDOW,
-				...(Number(row.maxTokens) > 0 ? { maxTokens: Number(row.maxTokens) } : {}),
+				maxTokens: Number(row.maxTokens) > 0 ? Number(row.maxTokens) : DEFAULT_MAX_TOKENS,
 				...(row.input.length > 0 ? { input: row.input } : {}),
 				...(typeof compactionThreshold === "number" ? { compactionThreshold } : {}),
 				reasoning: row.reasoning !== false,
@@ -510,20 +516,19 @@ export function ModelEditor({
 			models: current.models.map((row) => (row.key === key ? { ...row, ...patch } : row)),
 		}));
 
-	/** Rows whose parameter panel is open, by row key. Typed-in rows open; stored and discovered rows start closed. */
-	const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+	/**
+	 * Rows whose parameter panel the user folded, by row key. Every row starts
+	 * open so its context window, max output and threshold are visible at a glance.
+	 */
+	const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
 	const toggleExpanded = (key: string) =>
-		setExpanded((current) => {
+		setCollapsed((current) => {
 			const next = new Set(current);
 			if (next.has(key)) next.delete(key);
 			else next.add(key);
 			return next;
 		});
-	const addRow = () => {
-		const row = newRow();
-		update({ models: [...form.models, row] });
-		setExpanded((current) => new Set(current).add(row.key));
-	};
+	const addRow = () => update({ models: [...form.models, newRow()] });
 
 	/** Connection tests started this visit, keyed by row key (rows are re-keyed, not reused). */
 	const [tests, setTests] = useState<Record<string, ModelTestState>>({});
@@ -587,7 +592,11 @@ export function ModelEditor({
 			(row) => row.id.trim() && parseCompactionThreshold(row.compactionThreshold) === null,
 		);
 		if (invalidThreshold) {
-			setExpanded((current) => new Set(current).add(invalidThreshold.key));
+			setCollapsed((current) => {
+				const next = new Set(current);
+				next.delete(invalidThreshold.key);
+				return next;
+			});
 			// The panel opens on the next render; focus once it is visible.
 			requestAnimationFrame(() =>
 				document.getElementById(field(`${invalidThreshold.key}-compactionThreshold`))?.focus(),
@@ -752,7 +761,7 @@ export function ModelEditor({
 					) : (
 						<ul className="settings-model-rows">
 							{form.models.map((row) => {
-								const isExpanded = expanded.has(row.key);
+								const isExpanded = !collapsed.has(row.key);
 								const thresholdInvalid =
 									submitted && parseCompactionThreshold(row.compactionThreshold) === null;
 								const detailsId = field(`${row.key}-details`);
@@ -831,8 +840,7 @@ export function ModelEditor({
 													onChange={(event) => updateRow(row.key, { contextWindow: event.target.value })}
 												/>
 											</label>
-											{/* The kernel's own default is smaller than a long answer needs,
-											    and it is shared with the thinking budget; say so once, here. */}
+											{/* The cap is shared with the thinking budget; say so once, here. */}
 											<label className="settings-model-field">
 												<Tooltip content={t("settingsModelsMaxTokensHint")}>
 													<span>{t("settingsModelsMaxTokens")}</span>

@@ -8,6 +8,7 @@ import {
 	type AgentToolUpdateCallback,
 	type StreamFn,
 	setDefaultStreamFn,
+	ToolExecutionError,
 } from "../src/index.ts";
 import { stepModel } from "./step-model.ts";
 
@@ -438,9 +439,70 @@ describe("Agent", () => {
 		const end = events.find((event) => event.type === "tool_execution_end");
 		expect(end).toMatchObject({
 			isError: true,
-			result: { content: [{ type: "text", text: "frame subscriber failed" }] },
+			result: {
+				isError: true,
+				content: [
+					{
+						type: "text",
+						text: "frame subscriber failed\nThe tool may already have run; check its effects before repeating a state-changing call.",
+					},
+					{ type: "text", text: "done" },
+				],
+			},
 		});
 		expect(events.at(-1)?.type).toBe("agent_end");
+	});
+
+	it("keeps one diagnostic when a typed execution failure also loses a frame", async () => {
+		const schema = Type.Object({});
+		const tool: AgentTool<typeof schema> = {
+			name: "typed_failure",
+			label: "Typed Failure",
+			description: "Fails with retained observations",
+			parameters: schema,
+			async execute(_id, _params, _signal, onUpdate) {
+				onUpdate?.({ content: [{ type: "text", text: "first" }], details: {} });
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				throw new ToolExecutionError("executor unavailable", {
+					content: [{ type: "text", text: "observed output" }],
+					details: { fullOutputPath: "/fixture/output.log" },
+				});
+			},
+		};
+		let calls = 0;
+		const agent = new Agent({
+			initialState: { tools: [tool] },
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				const message =
+					calls++ === 0
+						? createAssistantToolUseMessage([
+								{ type: "toolCall", id: "typed-1", name: "typed_failure", arguments: {} },
+							])
+						: createAssistantMessage("settled");
+				queueMicrotask(() =>
+					stream.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message }),
+				);
+				return stream;
+			},
+		});
+		const events: AgentEvent[] = [];
+		agent.subscribe((event) => {
+			events.push(event);
+			if (event.type === "tool_execution_update") throw new Error("frame subscriber failed");
+		});
+		await agent.prompt("run the failing tool");
+
+		const end = events.find((event) => event.type === "tool_execution_end");
+		const texts = (end as { result: { content: Array<{ type: string; text?: string }> } } | undefined)?.result.content
+			.filter((part) => part.type === "text")
+			.map((part) => part.text);
+		// The tool's own message must appear once; only the delivery cause is
+		// prepended, and the observed output is retained.
+		expect(texts?.filter((text) => text?.includes("executor unavailable"))).toHaveLength(1);
+		expect(texts?.join("\n")).toContain("frame subscriber failed");
+		expect(texts?.join("\n")).toContain("observed output");
+		expect(end).toMatchObject({ isError: true });
 	});
 
 	it("should ignore tool updates after the tool execution settles", async () => {
@@ -641,6 +703,181 @@ describe("Agent", () => {
 
 		// The message is queued but not yet in state.messages
 		expect(agent.state.messages).not.toContainEqual(message);
+	});
+
+	it("delivers a queued message before continuing from a tool result", async () => {
+		// The loop polls steering only before its first request, so continuing from a
+		// tool result would ask the model without the queued follow-up — a request
+		// taken on the user's behalf, past the decision the tool result waits for.
+		let responseCount = 0;
+		const seen: string[][] = [];
+		const agent = new Agent({
+			streamFn: (_model, context) => {
+				const stream = new MockAssistantStream();
+				responseCount++;
+				seen.push(
+					context.messages.map((message) =>
+						typeof message.content === "string"
+							? message.content
+							: message.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+					),
+				);
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage(`Reply ${responseCount}`) });
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: [{ type: "text", text: "Initial" }], timestamp: 1 },
+			createAssistantMessage("Thinking"),
+			{ role: "user", content: [{ type: "text", text: "Plan prompt" }], timestamp: 2 },
+			{
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "exit_plan_mode",
+				content: [{ type: "text", text: "Submitted for review." }],
+				isError: false,
+				timestamp: 3,
+			},
+		];
+		const followUp = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "Their words" }],
+			timestamp: 4,
+		};
+		agent.followUp(followUp);
+
+		await agent.continue({ deliverQueued: true });
+
+		// One request, and the message it would have missed is the last thing in it.
+		expect(seen).toHaveLength(1);
+		expect(seen[0]?.at(-1)).toBe("Their words");
+	});
+
+	it("continues from a tool result when the queue stays rejected", async () => {
+		// The ordinary continuation is unchanged: nothing deliverable means the model
+		// resumes from the transcript, and held work stays where it is.
+		let responseCount = 0;
+		const agent = new Agent({
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				responseCount++;
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage(`Reply ${responseCount}`) });
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: [{ type: "text", text: "Initial" }], timestamp: 1 },
+			{
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "read_file",
+				content: [{ type: "text", text: "Contents" }],
+				isError: false,
+				timestamp: 2,
+			},
+		];
+		const held = { role: "user" as const, content: [{ type: "text" as const, text: "Held" }], timestamp: 3 };
+		agent.followUp(held);
+		agent.setQueueDeliveryFilter(() => false);
+
+		await agent.continue({ deliverQueued: true });
+
+		expect(responseCount).toBe(1);
+		expect(agent.hasQueuedMessages()).toBe(true);
+	});
+
+	it("holds a queued message a delivery filter refuses", async () => {
+		// Holding is per message: the loop takes a batch at a time, so refusing one
+		// message must not carry the ones behind it along, and the held message has
+		// to stay queued rather than be dropped.
+		let responseCount = 0;
+		const agent = new Agent({
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				responseCount++;
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage(`Reply ${responseCount}`) });
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: [{ type: "text", text: "Initial" }], timestamp: Date.now() - 10 },
+			createAssistantMessage("Initial response"),
+		];
+		const held = { role: "user" as const, content: [{ type: "text" as const, text: "Held work" }], timestamp: 1 };
+		const allowed = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "The user's words" }],
+			timestamp: 2,
+		};
+		agent.followUp(held);
+		agent.followUp(allowed);
+
+		agent.setQueueDeliveryFilter((message) => message === allowed);
+		await agent.continue();
+
+		const texts = agent.state.messages
+			.filter((message) => message.role === "user")
+			.map((message) =>
+				typeof message.content === "string"
+					? message.content
+					: message.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+			);
+		expect(texts).toContain("The user's words");
+		expect(texts).not.toContain("Held work");
+		// Refused, not dropped: it is still waiting for a turn that may deliver it.
+		expect(agent.hasQueuedMessages()).toBe(true);
+	});
+
+	it("holds only the refused messages when queue mode drains everything at once", async () => {
+		// "all" takes a batch: a filter has to split it rather than pass the whole
+		// batch through or refuse it entirely.
+		let responseCount = 0;
+		const agent = new Agent({
+			followUpMode: "all",
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				responseCount++;
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage(`Reply ${responseCount}`) });
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: [{ type: "text", text: "Initial" }], timestamp: Date.now() - 10 },
+			createAssistantMessage("Initial response"),
+		];
+		const held = { role: "user" as const, content: [{ type: "text" as const, text: "Held work" }], timestamp: 1 };
+		const first = { role: "user" as const, content: [{ type: "text" as const, text: "First words" }], timestamp: 2 };
+		const second = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "Second words" }],
+			timestamp: 3,
+		};
+		agent.followUp(held);
+		agent.followUp(first);
+		agent.followUp(second);
+
+		agent.setQueueDeliveryFilter((message) => message !== held);
+		await agent.continue();
+
+		const texts = agent.state.messages
+			.filter((message) => message.role === "user")
+			.map((message) =>
+				typeof message.content === "string"
+					? message.content
+					: message.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+			);
+		expect(texts).toContain("First words");
+		expect(texts).toContain("Second words");
+		expect(texts).not.toContain("Held work");
+		expect(agent.hasQueuedMessages()).toBe(true);
 	});
 
 	it("should handle abort controller", () => {

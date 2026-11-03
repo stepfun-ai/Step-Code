@@ -10,7 +10,7 @@ import { shallowEqual, useAppStore } from "../../state/store";
 import { DiffStat, Icon, IconButton, type IconName, Tooltip } from "../../ui";
 import { openInEmbeddedBrowser, openInSystemBrowser, type SystemBrowser, useSystemBrowser } from "../browser";
 import { toggleDeliveryChanges, toggleDeliveryFile, turnSiteUrl, workspaceSiteUrl } from "../files/actions";
-import type { TurnArtifact } from "./turn-artifacts";
+import { artifactDescription, type TurnArtifact } from "./turn-artifacts";
 
 /** Collapsed cards before "N more"; four fill the two-column grid. */
 const COLLAPSED_COUNT = 4;
@@ -47,7 +47,7 @@ function SystemBrowserIcon({ browser }: { readonly browser: SystemBrowser | null
 
 /**
  * The finished answer's deliverables, attached under its closing bubble: one
- * card per file (type tile, name, description) in a two-column grid.
+ * card per file (type tile, name, and the link's description or else the file kind) in a two-column grid.
  *
  * A page the embedded browser can render opens there when the card is clicked,
  * as the card's turn left it; its actions show that turn's change of the file
@@ -133,12 +133,11 @@ function AttachmentCard({
 	const t = useT();
 	const [pending, setPending] = useState(false);
 	const name = basename(artifact.path);
-	const dir = artifact.path.slice(0, artifact.path.length - name.length).replace(/[\\/]+$/, "");
+	// A descriptive link label ("贪吃蛇小游戏") says more than the kind; without one the card names the kind
+	// (图片, 网页, 演示文稿). The folder is left to the path tooltip.
+	const meta = artifactDescription(artifact) ?? t(`deliveryKind.${artifact.kind}`);
 	const embedded = EMBEDDED_RENDERABLE.test(name);
 	const system = SYSTEM_RENDERABLE.test(name);
-	// A Markdown link label ("贪吃蛇小游戏") describes the file better than its folder does.
-	const described = artifact.label && artifact.label !== name && artifact.label !== artifact.path;
-	const meta = described ? artifact.label : [t(`deliveryKind.${artifact.kind}`), dir].filter(Boolean).join(" · ");
 	const change = artifact.change;
 	const toggleSource = () => void toggleDeliveryFile(cwd, artifact.path);
 	// The URL is minted per click: the Host forgets tokens on restart, and a stale one would 404. Every card
@@ -178,23 +177,19 @@ function AttachmentCard({
 					<span className="attachment-icon" aria-hidden="true">
 						<Icon name={KIND_ICONS[artifact.kind]} size="md" />
 					</span>
+					{/* The name and this turn's line counts; below, the link's description or else the file kind. The full path is the tooltip. */}
 					<span className="attachment-text">
-						<span className="attachment-name">{name}</span>
-						<span className="attachment-meta">
-							<span className="attachment-meta-text">
-								{meta}
-								{change && (change.file.additions || change.file.deletions) ? (
-									<DiffStat
-										className="attachment-diffstat"
-										additions={change.file.additions}
-										deletions={change.file.deletions}
-									/>
-								) : null}
-							</span>
-							<span className="attachment-hint">
-								{t(embedded ? "deliveryPreviewInBrowser" : "deliveryPreview")}
-							</span>
+						<span className="attachment-title">
+							<span className="attachment-name">{name}</span>
+							{change && (change.file.additions || change.file.deletions) ? (
+								<DiffStat
+									className="attachment-diffstat"
+									additions={change.file.additions}
+									deletions={change.file.deletions}
+								/>
+							) : null}
 						</span>
+						<span className="attachment-meta">{meta}</span>
 					</span>
 				</button>
 			</Tooltip>

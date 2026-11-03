@@ -58,7 +58,7 @@ apps/web/
     directory-picker.ts  server-side folder chooser
     settings.ts          settings back end: MCP servers, plugins/marketplaces, skills
     model-providers.ts   model settings back end: models.json declarations, auth.json keys, model discovery
-    stepgo-import.ts     one-time import of a local stepgo launcher's providers and key (first start only)
+    stepgo-import.ts     one-time import of a local stepgo launcher's providers and key (first start only; falls back to config.json's models)
     attachments.ts, feedback.ts, banner.ts, bootstrap.ts, writer-lease.ts
   client/
     index.html           <div id="root">, loads /src/main.tsx
@@ -183,12 +183,12 @@ keep only the classes passed in. Read the component's doc comment before using i
 | `IconSprite` | The `<symbol>` sheet every `Icon` references | Rendered once in `App.tsx`; do not render again |
 | `Tooltip` | Hover / keyboard-focus hints: `<Tooltip content={text or element}>{trigger}</Tooltip>` | Placement top, centered, shifts only at viewport edges; `placement="right"` sits beside the trigger, top edges aligned (flips up / left when there is no room). One child that forwards `style`, `ref` and `aria-describedby`; the hint is its next sibling (no wrapper). Empty `content` = no hint. Rendered in the top layer (manual popover), so a neighbouring panel never covers it. Can itself be a `Popover` trigger |
 | `Modal` | Dialogs: backdrop + `section[role=dialog][aria-modal]`, toggled by `open` | `id` / `overlayClassName` on the overlay, `className` / `dialogProps` on the dialog, `labelledBy`. Escape belongs to the shell's chain unless `closeOnEscape` |
-| `Popover` | A panel or menu opened from a trigger (dropdowns, pickers, overflow menus): `<Popover content={panel} open onClose>{trigger}</Popover>` | The child is the trigger (forwards `ref` and `style`; may be a `Tooltip`); other div props go to the panel. The panel renders only while open, portaled to `body`, `--popover-gap` (4px) from the trigger: `placement` `bottom-start` (default) / `bottom-end` / `top-start` / `top-end`, or `bottom` / `top` centred on the trigger (shifted at a viewport edge), flipped when there is no room. `dismissOn`, `closeOnEscape` (refocuses the trigger) |
+| `Popover` | A panel or menu opened from a trigger (dropdowns, pickers, overflow menus): `<Popover content={panel} open onClose>{trigger}</Popover>` | The child is the trigger (forwards `ref` and `style`; may be a `Tooltip`); other div props go to the panel. The panel renders only while open, portaled to `body`, `--popover-gap` (4px) from the trigger: `placement` `bottom-start` (default) / `bottom-end` / `top-start` / `top-end`, or `bottom` / `top` centred on the trigger (shifted at a viewport edge), or `right-start` for a submenu beside its row (top edges aligned), flipped when there is no room. `dismissOn`, `closeOnEscape` (refocuses the trigger) |
 | `Menu`, `MenuItem`, `MenuDivider` | Rows inside a `Popover` | `MenuItem`: `icon`, `trailing`, `danger`; pass `role="menu"` / `"menuitem"` where it is a real menu |
 | `SegmentedControl` (alias `Tabs`) | Mutually exclusive options or tabs: `items`, `value`, `onChange` | `selection` marks the chosen item with `aria-pressed` or an `active` class |
 | `Switch` | On/off settings: `<button role="switch" aria-checked>`; `checked`, `onChange(boolean)` | Pass `aria-label` |
 | `SearchInput` | Search fields (icon + `input[type=search]`); input props go to the `<input>` | For test-driven inputs use `onInputCapture` on an uncontrolled input (convention 8) |
-| `Toast` | `role="alert"` message, `tone` `danger` / `neutral`; fixed at the top centre of the window | Empty `message` hides it; timing is the caller's. The app has one, `#errorToast` (`showError`); do not restyle it in feature CSS |
+| `Toast` | `role="alert"` message, `tone` `danger` / `neutral` / `success`; an inverse dark pill (`--toast-*` tokens, every theme) fixed at the top centre of the window | Empty `message` hides it; success/danger lead with an icon; `actionLabel` + `onAction` add a link-styled `button.toast-action`; inline `left` / `top` re-anchor it (the shell centres `#errorToast` under the conversation header, window centre over settings). Timing is the caller's. The app has one, `#errorToast` (`showError` / `showToast(message, tone, action)`); do not restyle it in feature CSS |
 | `EmptyState` | The muted "nothing here" line (`.empty-list`) | |
 | `Spinner` | Decorative running dot (`aria-hidden`) | Put the status text next to it |
 | `ShimmerText` | Animated "working on it" label | Put it in a status region to announce it |
@@ -231,6 +231,23 @@ When to add or change one:
   snapshot older than the newest revision the page has applied, so a read answered late cannot repaint a stopped turn
   as running (or restore its stop control); each stream connection starts a new order, and its opening snapshot is
   authoritative. Never apply an HTTP snapshot without that gate.
+- The stream carries the transcript; snapshots do not repeat it. After any non-delta event the host publishes the
+  branch entries recorded since its last `entries` event (`queueJournalPublication`; `reset` when the branch no longer
+  extends what was published), and the page appends them (`applyRecordedEntries`). Snapshot reads a stream event asks
+  for go through the connection's throttled schedule (`refreshSchedule`, one read in flight, at most one per 400 ms)
+  and name the last held entry (`?after=`). Do not add per-event `refreshCurrent()` calls.
+- Each SSE connection coalesces `message_update` (one per 40 ms, newest wins) and `tool_execution_update` (newest per
+  call), flushed before any other event (`src/sse-writer.ts`). Frames drop `assistantMessageEvent.partial` and
+  `partialArgs`. On a connection opened with `?delta=1` (the page's own), a grown text, thinking or string argument
+  carries only its tail (`appendedTo`, `appendedArguments`); `state/live-message.ts` rebuilds them. Page code reads
+  the rebuilt message, never those fields; other subscribers get whole messages. Tool-result images are placeholders on the wire and in snapshots, served by
+  `/entries/{entryId}/images/{index}`.
+- The streaming message's rows live in `liveItems`, not `timelineItems`, so a streamed frame re-renders only them;
+  they join the transcript at the message's end. Readers of whole turns (changes, footers, deliveries, the right
+  panel) read `timelineItems`.
+- The working-state sweep from a label's first character to its last (`ShimmerText`, `.tool-pending`) is a product
+  decision: do not swap it for another effect to save CPU. A decorative cue that repaints on an idle page (the staged
+  mode's border sweep) plays a bounded number of times and then rests static; looping, it cost about a third of a core.
 - Anything a reloaded page must show again belongs in the session snapshot (e.g. `pendingApprovals`), not only in
   an SSE event.
 - The kernel persists an assistant message only on `message_end`, so a turn that is still streaming lives nowhere but
@@ -242,6 +259,12 @@ When to add or change one:
   embedding, a CLI quit) is a session-lifecycle change: stop, wait for idle, then dispose.
 - `interruptedTurn` is derived from the recorded entries (`hasInterruptedTurn`), never from a process flag, so a
   reopened session reports the same thing a live page did. Do not infer it from UI text or from a missing live row.
+- A settled run is not automatically completed: retain a terminal provider error from `agent_end` through settlement,
+  and present `agent_settled.failure` as failed status plus a transient error notice (red toast). The recorded
+  `incomplete` response classification is not a run outcome. Pair hidden recovery entries by `details.recoversEntryId`
+  for `incompleteTurnRecovered` in snapshots and `entries` events (`projectEntryRange` re-sends the answered turn);
+  never infer recovery from adjacency. Files already produced by a turn remain
+  visible even when its closing assistant item is an error or incomplete-response card.
 - Thinking elapsed time is host-observed presentation metadata (`src/thinking-timing.ts`), persisted through
   the session manager's `stepcode-web.thinking-timing` custom entries outside model context. Snapshots and agent
   envelopes project validated `thinkingTimings` by original content index. Never infer durations for unobserved
@@ -331,7 +354,8 @@ When to add or change one:
   protection, or bring back a Host-owned browser.
 - File delivery recognition is a frontend projection, not a persisted or
   filesystem-verified registry. Settled turns collect local Markdown links
-  and supported structured successful write/edit outputs; inline basenames
+  and supported structured write/edit outputs that recorded a change (a call
+  whose own error came after the write still counts); inline basenames
   require an unambiguous observed output. References use the existing
   workspace file API and containment checks, never browser `file:` navigation.
   Delivery cards (under the closing reply of a turn) toggle only their own
@@ -345,6 +369,11 @@ When to add or change one:
   profile Web sessions use (`edit_file` and `write_file` record the same
   patches as `edit` / `write`; a `write_file` from older sessions has none and
   stays untracked; `changed: false` is no change) as well as `edit` / `write`.
+  Whether a call changed a file is read from its result details (`patch`, or
+  the reason none was recorded), never from `isError`: a call can fail after
+  its write landed (a cancelled `then_run`, a result-preparation failure) and
+  still carry the change, which must stay listed, undoable and replayable,
+  while a call that failed before writing records neither and is no change.
   Browser-renderable pages open in the
   embedded browser on click, with a system-browser action; both
   browsers load them from `src/site-preview.ts`, a separate token-scoped

@@ -17,7 +17,7 @@ Run root `pnpm run check` for code changes. It includes formatting fixes, types,
 | UI, keyboard input, or terminal rendering | From `apps/cli`, run `pnpm exec vitest --run test/tui-acceptance-snapshot.test.ts` and affected components. From `packages/tui`, use `node --test test/<name>.test.ts`, covering narrow screens, resize, focus, overlays, CJK, ANSI, and both screen modes as applicable. |
 | Public exports, package entry points, or release artifacts | Inspect manifests and guards, build affected outputs from current source, and test the actual artifact under its intended launcher. For release bundle logic, run root `node --test scripts/release-bundle.test.mjs`. |
 
-During development, run the focused checks that cover the changed behavior. Before submitting or updating a PR, follow the existing repository-wide `npm run check` and `./test.sh` requirements; do not repeat unchanged passing evidence solely to create another commit or push.
+During development, run the focused checks that cover the changed behavior. Before submitting or updating a PR, follow the existing repository-wide `pnpm run check` and `./test.sh` requirements; do not repeat unchanged passing evidence solely to create another commit or push.
 
 Documentation-only work does not introduce dependency changes, provider-data refreshes, or real model calls. Build only when the selected validation consumes artifacts; `./test.sh` may perform its offline build when outputs are missing.
 

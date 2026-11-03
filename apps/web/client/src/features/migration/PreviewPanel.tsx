@@ -4,7 +4,6 @@ import { Button, Spinner } from "../../ui";
 import { acknowledgePreview, deselectCandidate, previewCandidate } from "./actions";
 import { DiagnosticList } from "./CandidateList";
 import { useMigrationExpiry } from "./expiry";
-import { ResourcePreview } from "./ResourcePreview";
 import { useMigrationStore } from "./store";
 import { MigrationTargetPicker } from "./TargetPicker";
 
@@ -39,10 +38,9 @@ export function PreviewPanel({ onPickTarget }: MigrationFeatureProps) {
 	if (!id || !draft) return <aside className="migration-preview" hidden />;
 	const preview = draft.preview;
 	const candidateKind = preview?.candidate.kind ?? candidate?.kind;
-	// MCP and rules have no detail panel: MCP migrates as-is, enabled; a rule row already shows source and target.
-	if (candidateKind === "mcp" || candidateKind === "rules") return <aside className="migration-preview" hidden />;
-	if (candidateKind === "sessions")
-		return <ResourcePreview draft={draft} expired={expired} onPickTarget={onPickTarget} />;
+	// Only skills have a detail panel. MCP migrates as-is, enabled; a rule row already shows source and
+	// target; a session is chosen from its row, which also shows its review state and errors.
+	if (candidateKind !== "skills") return <aside className="migration-preview" hidden />;
 	return (
 		<aside className="migration-preview" aria-label={t("migrationPreview")}>
 			<header className="migration-toolbar">

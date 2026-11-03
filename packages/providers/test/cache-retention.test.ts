@@ -173,6 +173,38 @@ describe("Cache retention request options", () => {
 			expect(capturedPayload.system[0].cache_control).toBeUndefined();
 		});
 
+		async function captureAnthropicPayload(model: Model<"anthropic-messages">, cacheRetention?: "none" | "short") {
+			let capturedPayload: any = null;
+			try {
+				const s = streamAnthropic(model, context, {
+					apiKey: "fake-key",
+					...(cacheRetention ? { cacheRetention } : {}),
+					onPayload: stopAfterPayload((payload) => {
+						capturedPayload = payload;
+					}),
+				});
+				for await (const event of s) {
+					if (event.type === "error") break;
+				}
+			} catch {
+				// Expected to fail
+			}
+			return capturedPayload;
+		}
+
+		it("should use the model's default cacheRetention when the request sets none", async () => {
+			const payload = await captureAnthropicPayload({ ...anthropicModel(), cacheRetention: "long" });
+			expect(payload).not.toBeNull();
+			expect(payload.system[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+			expect(payload.messages.at(-1).content.at(-1).cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+		});
+
+		it("should let a request cacheRetention override the model default", async () => {
+			const model = { ...anthropicModel(), cacheRetention: "long" as const };
+			expect((await captureAnthropicPayload(model, "none")).system[0].cache_control).toBeUndefined();
+			expect((await captureAnthropicPayload(model, "short")).system[0].cache_control).toEqual({ type: "ephemeral" });
+		});
+
 		it("should add cache_control to string user messages", async () => {
 			const baseModel = anthropicModel();
 			let capturedPayload: any = null;

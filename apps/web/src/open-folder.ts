@@ -3,7 +3,8 @@ import { stat } from "node:fs/promises";
 
 /**
  * Show a workspace folder in the system file manager: Finder on macOS, File
- * Explorer on Windows, the desktop's default handler elsewhere. The Host only
+ * Explorer on Windows, the desktop's default handler elsewhere — and open a
+ * configuration file in its associated application. The Host only
  * listens on loopback, so the person using the page sits at this machine.
  */
 
@@ -42,18 +43,53 @@ export type Spawn = typeof spawn;
  */
 export async function openFolder(dir: string, platform: NodeJS.Platform = process.platform, run: Spawn = spawn) {
 	if (!(await stat(dir)).isDirectory()) throw new Error("Path is not a folder");
-	const { command, args, verbatim } = folderOpenCommand(platform, dir);
-	await new Promise<void>((resolve, reject) => {
+	await launch(folderOpenCommand(platform, dir), run, "Could not open the folder");
+}
+
+/**
+ * Open a file (an absolute path the caller already authorized) in the
+ * application the system associates with it. On macOS a file type without an
+ * associated application makes `open` fail, so it waits for that answer and
+ * retries in the default text editor (`open -t`); the other launchers hand the
+ * file to the desktop and are not awaited, as for folders.
+ */
+export async function openFileWithDefaultApp(
+	file: string,
+	platform: NodeJS.Platform = process.platform,
+	run: Spawn = spawn,
+): Promise<void> {
+	if (!(await stat(file)).isFile()) throw new Error("Path is not a file");
+	if (platform === "darwin") {
+		const code = await exitCode({ command: "open", args: [file], verbatim: false }, run);
+		if (code === 0) return;
+		const fallback = await exitCode({ command: "open", args: ["-t", file], verbatim: false }, run);
+		if (fallback !== 0) throw new Error(`Could not open the file (open exited with ${fallback})`);
+		return;
+	}
+	await launch(folderOpenCommand(platform, file), run, "Could not open the file");
+}
+
+function launch({ command, args, verbatim }: FolderOpenCommand, run: Spawn, failure: string): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
 		const child = run(command, [...args], {
 			stdio: "ignore",
 			detached: true,
 			windowsHide: false,
 			windowsVerbatimArguments: verbatim,
 		});
-		child.once("error", (error) => reject(new Error(`Could not open the folder: ${error.message}`)));
+		child.once("error", (error) => reject(new Error(`${failure}: ${error.message}`)));
 		child.once("spawn", () => {
 			child.unref();
 			resolve();
 		});
+	});
+}
+
+/** Run a short-lived launcher to completion; a spawn failure rejects. */
+function exitCode({ command, args }: FolderOpenCommand, run: Spawn): Promise<number> {
+	return new Promise<number>((resolve, reject) => {
+		const child = run(command, [...args], { stdio: "ignore" });
+		child.once("error", (error) => reject(new Error(`Could not open the file: ${error.message}`)));
+		child.once("close", (code) => resolve(code ?? 1));
 	});
 }

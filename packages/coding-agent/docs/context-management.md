@@ -93,8 +93,8 @@ The default maximum is two maintenance requests (one edit plus one correction),
 a 90-second wait including authentication, and 8,192 output tokens including
 thinking. An automatic edit must save at least 1,024 tokens and 5% of the mirrored
 context. Attempts consume a three-completed-turn cooldown, reconstructed from the
-active session branch on resume. Failed, aborted, truncated, and parser-resampled
-responses do not count as completed turns.
+active session branch on resume. Failed, aborted, truncated, and recovered
+incomplete responses do not count as completed turns.
 
 A correction keeps the original task context and includes the rejected edit
 draft and error as data. It does not replay the failed maintenance response's
@@ -273,9 +273,9 @@ use a revision whose source history matches that branch. The known distinction
 between persisted failed provider responses and the live retry context is
 reconciled without skipping user messages, tool results, or successful responses.
 Custom-message persistence timestamps are normalized for source matching while
-their content and control metadata remain part of the identity. When the native
-loop resamples a response, its omitted messages are tracked explicitly so later
-edits and resume still use the same source history.
+their content and control metadata remain part of the identity. An incomplete
+turn stays in canonical history when it is recovered in place, so later edits
+and resume still use the same source history.
 Malformed saved message bodies, source hashes, or source-index lists are ignored
 before activation, allowing recovery from a previous valid revision or canonical
 context.

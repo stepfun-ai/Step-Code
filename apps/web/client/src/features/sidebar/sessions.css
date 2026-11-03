@@ -146,6 +146,9 @@
 	color: var(--ink-2);
 }
 .session-title {
+	/* Fills the title column so a tag diamond after it sits at the column's end, one line for every row. */
+	flex: 1 1 auto;
+	min-width: 0;
 	overflow: hidden;
 	color: color-mix(in srgb, var(--ink) 86%, var(--ink-2));
 	font-size: 13px;
@@ -170,7 +173,7 @@
 	border-radius: var(--radius-hairline);
 	transform: rotate(45deg);
 }
-.session-tag-button {
+.session-archive-button {
 	/* Hover-only and takes the time's place; the two never show together. */
 	display: none;
 	width: 22px;
@@ -179,15 +182,14 @@
 	color: var(--ink-3);
 }
 /*
- * While either of the row's menus is open, the whole hover cluster stays as it
- * was when the menu opened: the pointer moving onto the menu leaves the row, and
- * hiding the button beside "…" would slide "…" — and the menu anchored to it —
- * sideways.
+ * While the row's "…" panel (its menu or the tag picker) is open, the whole
+ * hover cluster stays as it was when it opened: the pointer moving onto the
+ * panel leaves the row, and hiding the button beside "…" would slide "…" — and
+ * the panel anchored to it — sideways.
  */
-.session-row:hover .session-tag-button,
-.session-row:has(.session-menu-button[aria-expanded="true"]) .session-tag-button,
-.session-tag-button[aria-expanded="true"],
-.session-tag-button:focus-visible {
+.session-row:hover .session-archive-button,
+.session-row:has(.session-menu-button[aria-expanded="true"]) .session-archive-button,
+.session-archive-button:focus-visible {
 	display: grid;
 	place-items: center;
 }
@@ -196,7 +198,7 @@
  * icon buttons step up to `--selected`. `.session-row` lifts these above
  * IconButton's own `:hover:not(:disabled)` rule.
  */
-.session-row .session-tag-button:hover,
+.session-row .session-archive-button:hover,
 .session-row .session-menu-button:hover {
 	background: var(--selected);
 	color: var(--ink);
@@ -266,7 +268,6 @@
 }
 /* A button whose menu is open stays shown: the menu is anchored to it. */
 .session-row:hover .session-menu-button,
-.session-row:has(.session-tag-button[aria-expanded="true"]) .session-menu-button,
 .session-menu-button[aria-expanded="true"],
 .session-menu-button:focus-visible {
 	display: inline-grid;
@@ -275,15 +276,31 @@
 .session-time {
 	position: relative;
 	top: 1px;
+	/*
+	 * Exactly the hover actions it gives way to: archive, the 6px gap, and the pin
+	 * pulled 4px into the padding. The diamond on its left then keeps its place on
+	 * hover, and the diamonds and times of neighbouring rows form columns.
+	 */
+	min-width: calc(2 * 22px + 6px - 4px);
+	font-variant-numeric: tabular-nums;
+	text-align: right;
 }
-/* Hover (or a menu anchored open) swaps the time for the hover actions; the diamond stays beside the title. */
+/* Hover (or a menu anchored open) swaps the time for the hover actions. */
 .session-row:hover .session-time,
-.session-row:has(.session-menu-button[aria-expanded="true"]) .session-time,
-.session-row:has(.session-tag-button[aria-expanded="true"]) .session-time {
+.session-row:has(.session-menu-button[aria-expanded="true"]) .session-time {
 	display: none;
 }
-.session-title-wrap > .session-tag {
+.session-meta > .session-tag {
 	display: block;
+	margin-inline: 4px;
+}
+/*
+ * A pinned row keeps its pin beside the time, so its hover cluster is one pin
+ * narrower than what it replaces: archive takes up the difference on its left,
+ * and the diamond stays where it was.
+ */
+.session-row[data-pinned="true"]:has(.session-tag) .session-archive-button {
+	margin-left: calc(2 * 22px + 6px - 4px - 22px);
 }
 .grouped-view {
 	position: relative;
@@ -398,7 +415,6 @@
 /* Shown like the other hover actions, and kept while a menu anchored to the row is open. */
 .session-row:hover .session-pin-action,
 .session-row:has(.session-menu-button[aria-expanded="true"]) .session-pin-action,
-.session-row:has(.session-tag-button[aria-expanded="true"]) .session-pin-action,
 .session-pin-action:focus-visible {
 	display: inline-grid;
 }
@@ -446,9 +462,14 @@
 .grouped-view .session-row:hover .session-dot {
 	opacity: 0;
 }
-.grouped-view .session-tag-button,
-.grouped-view .tag-diamond {
+/* The grouped view's section already names the group. */
+.grouped-view .tag-diamond,
+.grouped-view .session-row .session-meta > .session-tag {
 	display: none;
+}
+/* Without a diamond there is no place to keep. */
+.grouped-view .session-row[data-pinned="true"]:has(.session-tag) .session-archive-button {
+	margin-left: 0;
 }
 /*
  * A row whose title the ellipsis cut shows the whole title, its age and its

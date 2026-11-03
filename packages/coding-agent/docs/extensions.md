@@ -618,11 +618,15 @@ Fired for message lifecycle updates.
 
 - `message_start` and `message_end` fire for user, assistant, and toolResult messages.
 - `message_update` fires for assistant streaming updates.
-- `message_end` handlers can return `{ message }` to replace the finalized message. The replacement must keep the same `role`.
+- `message_end` handlers can return `{ message }` to replace the finalized message. The replacement must keep the same `role`. The replacement runs before the session classifies the turn, so an extension that adds visible text or a tool call prevents an incomplete-turn recovery, and one that removes both triggers it. The stop reason is never rewritten: handlers, session listeners, `turn_end`, and persistence all observe the provider's own value, and an incomplete turn is described by `message.incomplete` plus an `incomplete_turn` diagnostic.
 
 ```typescript
 pi.on("message_start", async (event, ctx) => {
   // event.message
+  // event.fromUser — true when a person wrote this user message, false when an
+  // extension produced it. Present on user messages only; absent on other roles.
+  // A queued message and a prompt look the same in the transcript, so an extension
+  // that reacts to "the user spoke" reads this, not the content.
 });
 
 pi.on("message_update", async (event, ctx) => {
@@ -790,7 +794,7 @@ Behavior guarantees:
 - Later `tool_call` handlers see mutations made by earlier handlers
 - No re-validation is performed after your mutation
 - Return values from `tool_call` control blocking via `{ block: true, reason?: string, terminate?: boolean }`
-- `terminate` only applies to a blocked call; the agent stops early only when every finalized result in the batch is terminating
+- `terminate` only applies to a blocked call; the agent stops early only when every finalized result in the batch is terminating. Neither `tool_call` nor `tool_result` handlers can request the `stopTurn` barrier; only a tool's own `execute()` can start it
 
 ```typescript
 import { isToolCallEventType } from "@step-harness/coding-agent";
@@ -923,7 +927,8 @@ Fired when user input is received, after extension commands are checked but befo
 pi.on("input", async (event, ctx) => {
   // event.text - raw input (before skill/template expansion)
   // event.images - attached images, if any
-  // event.source - "interactive" (typed), "rpc" (API), or "extension" (via sendUserMessage)
+  // event.source - "interactive" (typed), "rpc" (API), or "extension"
+  //   (extension-generated text, including sendUserMessage without a source)
   // event.streamingBehavior - "steer" | "followUp" | undefined
   //   undefined when idle, "steer" for mid-stream interrupts,
   //   "followUp" for messages queued until the agent finishes
@@ -972,6 +977,12 @@ Current run mode: `"tui"`, `"rpc"`, `"json"`, or `"print"`. Use `ctx.mode === "t
 ### ctx.hasUI
 
 `true` in TUI and RPC modes. `false` in print mode (`-p`) and JSON mode. Use this to guard dialog methods (`select`, `confirm`, `input`, `editor`) and fire-and-forget methods (`notify`, `setStatus`, `setWidget`, `setTitle`, `setEditorText`) that work in both TUI and RPC modes. In RPC mode, some TUI-specific methods are no-ops or return defaults (see [rpc.md](rpc.md#extension-ui-protocol)).
+
+### ctx.planReviewSurface
+
+`true` when the host can show a plan proposal and collect a decision for it. `mode` and `hasUI` cannot answer this: every RPC host has a dialog bridge, including clients with no review surface and no person to answer.
+
+`exit_plan_mode` reads it. With the surface, the proposal is shown, the turn ends, and plan mode stays on until the user decides; without it, the mode ends and approval belongs to the caller. Hosts set it when they bind the session (`bindExtensions({ planReviewSurface: true })`), or across the wire with `--plan-review-surface`; an extension sees the value on every handler's `ctx`.
 
 ### ctx.cwd
 
@@ -1043,7 +1054,31 @@ pi.on("tool_result", async (event, ctx) => {
 
 ### ctx.isIdle() / ctx.abort() / ctx.hasPendingMessages()
 
-Control flow helpers. `ctx.isIdle()` is false while Step is processing an agent run, automatic retry, auto-compaction retry, or queued continuation.
+Control flow helpers. `ctx.isIdle()` is false while Step is processing an agent run, automatic retry, auto-compaction retry, or queued continuation. `ctx.hasPendingMessages()` includes messages held behind a pending decision.
+
+### ctx.registerAutomaticTurnGuard()
+
+Register a predicate that blocks turns started on the user's behalf until it
+returns false: `triggerTurn` messages, goal continuation, cron delivery,
+background-lane wake-ups, and post-run recovery all ask it first. A prompt the
+user sends always runs — that message is how a pending decision gets answered.
+
+```typescript
+pi.on("session_start", (_event, ctx) => {
+  // The call returns an unregister function; keep it only if the condition can end.
+  ctx.registerAutomaticTurnGuard?.(() => sessionStillAwaitingApproval());
+});
+```
+
+Guards read current session state and need no clearing by the extension that
+registered them: reload drops them with the runner generation that owned their
+context, and `session_start` registers the new one. A guard that throws counts as
+pending, so a failing check cannot authorize a turn the user has not approved,
+and the error is reported through the extension error listener.
+
+Features that can defer their own trigger ask `ctx.hasPendingUserDecision()` and
+retry later instead of sending a message that would replay work after the
+decision.
 
 ### ctx.shutdown()
 
@@ -1438,7 +1473,14 @@ pi.sendMessage({
 
 ### pi.sendUserMessage(content, options?)
 
-Send a user message to the agent. Unlike `sendMessage()` which sends custom messages, this sends an actual user message that appears as if typed by the user. Always triggers a turn.
+Send a user message to the agent. Unlike `sendMessage()` which sends custom messages, this sends an actual user text message that appears as if typed by the user.
+
+It starts a turn unless the session is waiting on a decision the user has not
+answered (see `ctx.hasPendingUserDecision()`): that answer is the user's own
+message, so extension-generated text is held and delivered as context in the
+turn that answers the decision. Inside a command handler the author is inherited
+from the command's origin, so a handler forwarding the user's request still
+starts a turn. A host bridge forwarding a real person's input passes `source`.
 
 The call is fire-and-forget: it returns before the turn finishes. Inside a command handler, a turn started this way is still awaited before `prompt()` resolves, so a host that disposes right after a prompt (print and JSON mode) does not tear the session down mid-turn. Await the call yourself when you need its result before continuing. The same applies to `sendMessage(..., { triggerTurn: true })`.
 
@@ -1465,6 +1507,7 @@ pi.sendUserMessage("/review src/index.ts", { expandPromptTemplates: true });
   - `"steer"` - Queues the message for delivery after the current assistant turn finishes executing its tool calls
   - `"followUp"` - Waits for agent to finish all tools
 - `expandPromptTemplates` - Dispatch extension commands and expand skill commands and prompt templates. Defaults to `false`.
+- `source` - Who authored the text: `"interactive"` for text a person typed, `"rpc"` for a remote user's input, `"extension"` (the default) for text this extension generated. Only `"extension"` waits behind a pending decision.
 
 When not streaming, the message is sent immediately and triggers a new turn. When streaming without `deliverAs`, throws an error.
 
@@ -2049,7 +2092,11 @@ pi.registerTool({
 
 **Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
 
+`isError` means the invocation failed. A command that ran and reported a nonzero exit, a deadline, or a signal is a *result*: read `details.execution` (or `details.thenRun.execution`) to decide how to present it. Throw `ToolExecutionError` from `@step-harness/agent-core` to fail the invocation while keeping the observed content and details.
+
 **Early termination:** Return `terminate: true` from `execute()` to hint that the automatic follow-up LLM call should be skipped after the current tool batch. This only takes effect when every finalized tool result in that batch is terminating. See [examples/extensions/structured-output.ts](../examples/extensions/structured-output.ts) for a minimal example where the agent ends on a final structured-output tool call.
+
+**Decision barriers:** Return `stopTurn: true` to end the turn when this result settles, regardless of sibling results. Declare `executionMode: "sequential"` on the tool when it owns a user decision: later calls in the same batch then receive paired skipped results instead of running behind the barrier. Parallel calls already in flight still settle and earlier calls are not rolled back. The barrier ends this Agent Loop invocation; the session may still start another turn for input queued after `agent_end` or for automatic context maintenance. See [plan approval](../../../docs/plan-approval.md#stop-turn-barrier).
 
 ```typescript
 // Correct: throw to signal an error
@@ -2175,6 +2222,18 @@ pi.registerTool({
 **Operations interfaces:** `ReadOperations`, `WriteOperations`, `EditOperations`, `BashOperations`, `PowerShellOperations`, `LsOperations`, `GrepOperations`, `FindOperations`
 
 For `user_bash`, extensions can reuse step's local shell backend via `createLocalBashOperations()` instead of reimplementing local process spawning, shell resolution, and process-tree termination.
+
+`BashOperations.exec` returns command facts: `exitCode`, and optional `signal`,
+`timedOut`, `aborted`, and `timeoutSeconds`. Throw only for an invocation fault,
+such as a failed spawn or executor connection. Adapters that previously threw
+strings such as `timeout:5` or `aborted` after execution must return these facts
+instead; textual status exceptions are no longer interpreted as command state.
+Report `aborted` when the command did not run to completion, whether the
+executor stopped it or the caller cancelled it; caller cancellation also reaches
+the adapter through its `signal` argument. The existing
+`{ exitCode }` result remains supported. Command tools retain the facts in
+`details.execution`; `user_bash` records them as the optional
+`BashExecutionMessage.execution`. See [command outcomes](session-format.md#command-tool-outcomes).
 
 The `bash` and `powershell` tools also support a spawn hook to adjust the command, cwd, or env before execution:
 
@@ -2958,12 +3017,12 @@ const highlighted = highlightCode(code, lang, theme);
 
 ## Mode Behavior
 
-| Mode | `ctx.mode` | `ctx.hasUI` | Notes |
-|------|------------|-------------|-------|
-| Interactive | `"tui"` | `true` | Full TUI with terminal rendering |
-| RPC (`--mode rpc`) | `"rpc"` | `true` | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`. See [rpc.md](rpc.md) |
-| JSON (`--mode json`) | `"json"` | `false` | Event stream to stdout; UI methods are no-ops |
-| Print (`-p`) | `"print"` | `false` | Extensions run but can't prompt |
+| Mode | `ctx.mode` | `ctx.hasUI` | `ctx.planReviewSurface` | Notes |
+|------|------------|-------------|------------------------|-------|
+| Interactive | `"tui"` | `true` | `false` | Full TUI with terminal rendering; a plan review is answered inside the tool call |
+| RPC (`--mode rpc`) | `"rpc"` | `true` | set by `--plan-review-surface` | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`. A client that draws the proposal passes the flag. See [rpc.md](rpc.md) |
+| JSON (`--mode json`) | `"json"` | `false` | `false` | Event stream to stdout; UI methods are no-ops |
+| Print (`-p`) | `"print"` | `false` | `false` | Extensions run but can't prompt |
 
 Use `ctx.mode === "tui"` before TUI-specific features (`custom()`, component factories, terminal input). Use `ctx.hasUI` before dialog and notification methods that work in both TUI and RPC modes.
 

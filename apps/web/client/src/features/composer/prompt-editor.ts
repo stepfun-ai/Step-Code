@@ -11,7 +11,7 @@
  * browser produces (line-break `<br>`, block `<div>`) as text.
  */
 
-import type { AttachedFile } from "../../lib/attached-files";
+import { type AttachedFile, FILE_MARKER, markAttachedFiles, splitAttachedFiles } from "../../lib/attached-files";
 import type { UploadedFile } from "../../state/types";
 import { type FileCompletionText, type FileQuery, fileQuery, sameFileQuery } from "./file-completion";
 import type { PlannedEdit, PromptEditRun, PromptRange } from "./markdown-format";
@@ -280,6 +280,53 @@ export function placeCaretAtEnd(root: HTMLElement): void {
 /** Replace the whole prompt with `text` and put the caret after it. */
 export function setPromptText(root: HTMLElement, text: string): void {
 	root.replaceChildren(...(text ? [document.createTextNode(text)] : []));
+	if (document.activeElement === root) placeCaretAtEnd(root);
+}
+
+const UPLOAD_ID = /^[0-9a-f]{64}$/;
+
+/** The upload id in a stored copy's path: the host keeps each upload at `<uploads>/<id>/<name>` (`resolveUpload`). */
+function uploadIdOf(path: string): string | undefined {
+	const id = path.split(/[\\/]/).at(-2);
+	return id && UPLOAD_ID.test(id) ? id : undefined;
+}
+
+/** A chip for a file the host already stores, ready to send again. */
+function storedFileChip(file: AttachedFile, id: string): HTMLSpanElement {
+	nextChipKey += 1;
+	const chip = createChip(file.name, String(nextChipKey));
+	chip.dataset.uploadId = id;
+	chip.dataset.path = file.path;
+	chip.dataset.size = String(file.bytes);
+	chip.dataset.state = "ready";
+	chip.title = file.path;
+	return chip;
+}
+
+/**
+ * Replace the whole prompt with a sent message and put the caret after it. The
+ * file blocks the host appended (`splitAttachedFiles`) come back as chips where
+ * their names stood, so a rewrite sends the files again instead of their blocks
+ * as typed text. A file whose stored copy cannot be named stays as its name.
+ */
+export function setPromptMessage(root: HTMLElement, message: string): void {
+	const { text, files } = splitAttachedFiles(message);
+	if (!files.length) {
+		setPromptText(root, text);
+		return;
+	}
+	const marked = markAttachedFiles(text, files);
+	const nodes: Node[] = [];
+	let position = 0;
+	for (const marker of marked.matchAll(FILE_MARKER)) {
+		if (marker.index > position) nodes.push(document.createTextNode(marked.slice(position, marker.index)));
+		const file = files[Number(marker[1])];
+		const id = file ? uploadIdOf(file.path) : undefined;
+		if (file) nodes.push(id ? storedFileChip(file, id) : document.createTextNode(file.name));
+		position = marker.index + marker[0].length;
+	}
+	if (position < marked.length) nodes.push(document.createTextNode(marked.slice(position)));
+	root.replaceChildren(...nodes);
 	if (document.activeElement === root) placeCaretAtEnd(root);
 }
 

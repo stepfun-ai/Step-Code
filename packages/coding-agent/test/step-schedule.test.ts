@@ -280,6 +280,43 @@ describe("StepGoalRuntime", () => {
 		expect(failed.runtime.get()?.status).toBe("blocked");
 	});
 
+	test("a settled run failure stops the goal even when the turn looks complete", () => {
+		// An empty turn keeps the provider's stop reason on its message, so `agent_end`
+		// alone reads as a normal stop. Only the settled failure says the run failed.
+		const failed = runtimeHarness();
+		failed.runtime.start("Recover the service", "session-1");
+		failed.runtime.onAgentStart();
+		failed.runtime.onAgentEnd([assistant("stop")]);
+		expect(failed.runtime.get()?.status).toBe("active");
+		failed.runtime.onAgentSettled({
+			message: "The model returned no visible answer or executable tool call.",
+		});
+		expect(failed.runtime.get()?.status).toBe("blocked");
+		expect(failed.continuations).toHaveLength(0);
+	});
+
+	test("an empty turn alone does not fail the goal: the settled outcome decides", () => {
+		// A turn with no visible text or call can be recovered, and the session may
+		// hand completion to a host. Reading the message here would block a goal for a
+		// run the session never called a failure.
+		const recovered = runtimeHarness();
+		recovered.runtime.start("Recover the service", "session-1");
+		recovered.runtime.onAgentStart();
+		recovered.runtime.onAgentEnd([assistant("stop")]);
+		expect(recovered.runtime.onAgentSettled()).toBeDefined();
+		expect(recovered.runtime.get()?.status).toBe("active");
+		expect(recovered.continuations).toHaveLength(1);
+	});
+
+	test("the user's own stop pauses the goal instead of blocking it", () => {
+		const interrupted = runtimeHarness();
+		interrupted.runtime.start("Recover the service", "session-1");
+		interrupted.runtime.onAgentStart();
+		interrupted.runtime.onAgentEnd([assistant("aborted")]);
+		interrupted.runtime.onAgentSettled();
+		expect(interrupted.runtime.get()?.status).toBe("paused");
+	});
+
 	test("restores a matching snapshot and honors a clear tombstone", () => {
 		const source = runtimeHarness();
 		const goal = source.runtime.start("Persist me", "session-1");
@@ -303,6 +340,15 @@ describe("StepGoalRuntime", () => {
 		expect(prompt).toContain("original/user-triggered turn");
 		expect(prompt).toContain("fresh blocked audit");
 		expect(prompt).toContain("budget is nearly exhausted");
+		expect(prompt).not.toContain("asks for these skills");
+	});
+
+	test("names the skills an objective picked with /skill:", () => {
+		const harness = runtimeHarness();
+		const goal = harness.runtime.start("/skill:caveman build the downloader, then /skill:review-pr it", "session-1");
+		const prompt = continuationPrompt(goal);
+		expect(prompt).toContain("/skill:caveman build the downloader");
+		expect(prompt).toContain("The objective asks for these skills: caveman, review-pr.");
 	});
 
 	test("returns a completion usage report only for completed budgeted goals", async () => {
@@ -414,9 +460,14 @@ function extensionHarness(options: { telemetry?: StepTelemetryReporter; idle?: b
 		cwd: "/workspace",
 		isIdle: () => idle,
 		hasPendingMessages: () => false,
+		hasPendingUserDecision: () => false,
 		abort: vi.fn(),
 		ui: { notify: vi.fn(), input: vi.fn(async () => undefined), setStatus: vi.fn() },
-		sessionManager: { getSessionId: () => "session-1", getEntries: () => entries, getBranch: () => entries },
+		sessionManager: {
+			getSessionId: () => "session-1",
+			getEntries: () => entries,
+			getBranch: () => entries,
+		},
 	} as unknown as ExtensionContext;
 	const api = {
 		registerTool(tool: ToolDefinition) {
@@ -474,6 +525,45 @@ describe("Step goal extension", () => {
 			message: { customType: "step-goal", display: false },
 			options: { triggerTurn: true },
 		});
+	});
+
+	test("a continuation blocked by a pending decision is not a stale attempt later", () => {
+		// The goal cannot continue while a decision awaits the user. When the user
+		// pauses the goal and answers, their own turn must not be mistaken for the
+		// continuation that never started.
+		const harness = runtimeHarness({ pending: true, idle: true });
+		harness.runtime.start("Wait for approval", "session-1");
+		harness.runtime.onAgentStart();
+		harness.runtime.onAgentEnd([assistant()]);
+		harness.runtime.onAgentSettled();
+		expect(harness.continuations).toHaveLength(0);
+
+		harness.runtime.setUserStatus("paused");
+		harness.setPending(false);
+		harness.runtime.onAgentStart();
+		expect(harness.runtime.isStaleContinuationAttempt()).toBe(false);
+	});
+
+	test("a pending decision keeps a continuation from being sent", async () => {
+		const harness = extensionHarness();
+		let awaitingDecision = true;
+		Object.assign(harness.ctx, { hasPendingUserDecision: () => awaitingDecision });
+		await emit(harness, "session_start");
+		await emit(harness, "agent_start");
+		await harness.tools
+			.get("create_goal")
+			?.execute("call-1", { objective: "Implement the plan" }, undefined, undefined, harness.ctx);
+		await emit(harness, "agent_end", { messages: [assistant()] });
+		await emit(harness, "agent_settled");
+		// Sending here would replay an intent the user may reject.
+		expect(harness.sent).toHaveLength(0);
+
+		// Answering the decision lets the continuation through.
+		awaitingDecision = false;
+		await emit(harness, "agent_start");
+		await emit(harness, "agent_end", { messages: [assistant()] });
+		await emit(harness, "agent_settled");
+		expect(harness.sent).toHaveLength(1);
 	});
 
 	test("uses message_end as the token baseline when a tool creates a goal", async () => {

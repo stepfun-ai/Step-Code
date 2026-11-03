@@ -497,7 +497,14 @@ Response:
     "output": "total 48\ndrwxr-xr-x ...",
     "exitCode": 0,
     "cancelled": false,
-    "truncated": false
+    "truncated": false,
+    "execution": {
+      "status": "exited",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "aborted": false
+    }
   }
 }
 ```
@@ -513,7 +520,14 @@ If output was truncated, includes `fullOutputPath`:
     "exitCode": 0,
     "cancelled": false,
     "truncated": true,
-    "fullOutputPath": "/tmp/step-bash-abc123.log"
+    "fullOutputPath": "/tmp/step-bash-abc123.log",
+    "execution": {
+      "status": "exited",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "aborted": false
+    }
   }
 }
 ```
@@ -531,6 +545,9 @@ total 48
 drwxr-xr-x ...
 ```
 ````
+
+A status sentence follows the output only for a nonzero exit, a deadline, a
+signal, cancellation, or an unknown exit.
 
 This means:
 1. Bash output is included in the LLM context on the **next prompt**, not immediately
@@ -774,7 +791,15 @@ Response:
 
 #### get_last_assistant_text
 
-Get the text content of the last assistant message.
+Get the text content of the last assistant message. While the session still
+holds an unanswered plan proposal (`pendingProposalHash` in the `step-plan`
+entry), this returns the handoff text for that exact snapshot instead, because
+the assistant message only introduces the submission. `/plan approve`, a request
+for changes, or `/plan off` clears the proposal and the assistant text returns.
+
+A newer answer wins over the proposal: on a host that draws the proposal a
+question does not settle the wait, but the model has answered it, and reporting
+the proposal instead would hide that answer.
 
 ```json
 {"type": "get_last_assistant_text"}
@@ -852,6 +877,19 @@ Each command has:
 
 **Note**: Built-in TUI commands (`/settings`, `/hotkeys`, etc.) are not included. They are handled only in interactive mode and would not execute if sent via `prompt`.
 
+## Plan Review Surface
+
+`--plan-review-surface` tells the session that this client draws the proposal and
+collects the user's decision. With it, `exit_plan_mode` keeps plan mode on, ends
+the turn, and records the proposal as waiting; the client answers with `/plan
+approve` or `/plan approve <hash>`, or ends it with `/plan off`. Without it the
+rpc host keeps the handoff behavior: plan mode exits, the turn ends, and approval
+belongs to the caller.
+
+The flag is not implied by `--mode rpc`: every rpc client has a dialog bridge,
+and only the client knows whether it can show a plan. `RpcModeOptions.planReviewSurface`
+carries the same value when the host is embedded in-process.
+
 ## Events
 
 Events are streamed to stdout as JSON lines during agent operation. Events do not generally include an `id` field; `bash_execution_update` includes the `id` of its originating `bash` command when one was provided.
@@ -862,7 +900,7 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 |-------|-------------|
 | `agent_start` | Agent begins processing |
 | `agent_end` | One low-level agent run completes (may still be followed by retry, compaction, or queued continuations); carries `willRetry` and a message count, not the messages |
-| `agent_settled` | Agent run is fully settled; no automatic retry, compaction retry, or queued continuation remains |
+| `agent_settled` | Agent run is fully settled; no automatic retry, compaction retry, or queued continuation remains. Carries `failure` when the run produced no usable answer |
 | `turn_start` | New turn begins |
 | `turn_end` | Turn completes; carries the message role and a tool-result count, not the messages |
 | `message_start` | Message begins |
@@ -900,9 +938,14 @@ What only this event says is that the run ended and whether it will be retried,
 so the record carries `messageCount` instead of the array.
 
 `messageCount` is the length of the run's `messages` array, **not** a checksum: a
-resampled tool-call leak or a throwing `shouldStopAfterTurn` can make the loop
-emit more `message_end` events than it lists. Detect a truncated run by a message
-that never got its `message_end`, not by comparing counts.
+throwing `shouldStopAfterTurn` can make the loop emit more `message_end` events
+than it lists. Detect a truncated run by a message that never got its
+`message_end`, not by comparing counts.
+
+One `agent_end` does not bound one prompt: an incomplete-turn recovery, a
+compaction retry, and queued continuations all emit their own. `willRetry`
+reports the provider retry that follows in this run, not those continuations;
+`agent_settled` is the boundary that says the run is over.
 
 ```json
 {
@@ -916,8 +959,21 @@ that never got its `message_end`, not by comparing counts.
 
 Emitted after the full session-level run settles. At this point Step will not continue automatically through retry, compaction retry, or queued follow-up messages.
 
+A run that produced no usable answer carries `failure` here. It is not reported by rewriting the assistant message: an incomplete turn keeps the provider's own `stopReason`, and a client that inferred success from the transcript would be wrong. Provider errors and cancellations keep using `stopReason`.
+
 ```json
 {"type": "agent_settled"}
+```
+
+```json
+{
+  "type": "agent_settled",
+  "failure": {
+    "kind": "incomplete_turn",
+    "reason": "no_visible_output",
+    "message": "The model returned no visible answer or executable tool call."
+  }
+}
 ```
 
 ### turn_start / turn_end
@@ -1429,8 +1485,8 @@ Parse errors:
 
 Source files:
 - [`packages/providers/src/types.ts`](../../providers/src/types.ts) - `Model`, `UserMessage`, `AssistantMessage`, `ToolResultMessage`
-- [`packages/agent/src/types.ts`](../../agent/src/types.ts) - `AgentMessage`, `AgentEvent`
-- [`src/core/messages.ts`](../src/core/messages.ts) - `BashExecutionMessage`
+- [`packages/agent-core/src/types.ts`](../../agent-core/src/types.ts) - `AgentMessage`, `AgentEvent`
+- [`packages/agent-core/src/harness/messages.ts`](../../agent-core/src/harness/messages.ts) - Canonical `BashExecutionMessage`, including optional execution facts
 - [`src/modes/json-event.ts`](../src/modes/json-event.ts) - `JsonAgentSessionEvent`
 - [`src/modes/rpc/rpc-types.ts`](../src/modes/rpc/rpc-types.ts) - RPC command/response types, extension UI request/response types
 
@@ -1532,6 +1588,13 @@ Created by the `bash` RPC command (not by LLM tool calls):
   "cancelled": false,
   "truncated": false,
   "fullOutputPath": null,
+  "execution": {
+    "status": "exited",
+    "exitCode": 0,
+    "signal": null,
+    "timedOut": false,
+    "aborted": false
+  },
   "timestamp": 1733234567890
 }
 ```

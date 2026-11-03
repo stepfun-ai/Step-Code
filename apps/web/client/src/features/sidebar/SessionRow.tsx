@@ -1,27 +1,18 @@
 import { type DragEvent, type KeyboardEvent, type MouseEvent, useRef, useState } from "react";
 import { formatRelativeTime, formatRelativeTimeLong, useRelativeTimeClock, useT } from "../../i18n";
 import { cx } from "../../lib/format";
-import { openSession, sessionTitle, taskStatus } from "../../state/session";
+import { openSession, runSessionAction, sessionTitle, taskStatus } from "../../state/session";
 import { mapWith, setState, shallowEqual, useAppStore } from "../../state/store";
 import type { SessionSummary } from "../../state/types";
 import { Icon, IconButton, LEGACY_ICONS, Popover, Tooltip } from "../../ui";
-import {
-	applyTagFilter,
-	closeSessionMenu,
-	closeTagPicker,
-	reorderSession,
-	toggleSessionMenu,
-	toggleSessionPin,
-	toggleTagPicker,
-} from "./actions";
+import { applyTagFilter, closeRowMenus, reorderSession, toggleSessionMenu, toggleSessionPin } from "./actions";
 import { beginSessionDrag, canReorder, draggedSession, dropPlaceAt, endSessionDrag } from "./drag";
 import { SessionMenu } from "./SessionMenu";
-import { TagPicker } from "./TagPicker";
 import { cssVar, groupName, SESSION_DRAG_TYPE, TAG_COLORS } from "./tags";
 
 export interface SessionRowProps {
 	readonly session: SessionSummary;
-	/** Rows of the grouped view have no tag button (legacy `buildSessionRow(session, true)`). */
+	/** Drawn in the grouped view; each view's row owns its own menus. */
 	readonly grouped?: boolean;
 	/** Hidden by the project view's tag filter (legacy `row.style.display = "none"`). */
 	readonly filteredOut?: boolean;
@@ -72,7 +63,6 @@ export function SessionRow({
 			view: state.currentView,
 			filter: state.currentFilter,
 			menuOpen: inView && state.ui.sessionMenu?.sessionId === session.id,
-			tagPickerOpen: inView && state.ui.tagPicker?.sessionId === session.id,
 		};
 	}, shallowEqual);
 	const { status, tag } = row;
@@ -108,7 +98,7 @@ export function SessionRow({
 	const onClick = (event: MouseEvent<HTMLDivElement>) => {
 		if (
 			(event.target as Element).closest(
-				".session-menu-button,.session-tag-button,.session-tag,.session-pin,.session-pin-action",
+				".session-menu-button,.session-archive-button,.session-tag,.session-pin,.session-pin-action",
 			)
 		)
 			return;
@@ -140,9 +130,10 @@ export function SessionRow({
 		event.stopPropagation();
 		toggleSessionMenu(session.id);
 	};
-	const onTagButtonClick = (event: MouseEvent<HTMLButtonElement>) => {
+	const onArchiveClick = (event: MouseEvent<HTMLButtonElement>) => {
 		event.stopPropagation();
-		toggleTagPicker(session.id);
+		// Archiving is undone from the archive with one click, so it asks nothing first.
+		void runSessionAction("archive", session);
 	};
 	const onPinClick = (event: MouseEvent<HTMLButtonElement>) => {
 		event.stopPropagation();
@@ -248,35 +239,23 @@ export function SessionRow({
 				<i className="session-dot" aria-hidden="true" />
 				<span className="session-title-wrap">
 					<span className="session-title">{title}</span>
-					{/* Beside the title, not in the meta column: the times of tagged and untagged rows line up. */}
-					{tag ? (
-						<Tooltip content={row.tagName}>
-							<button
-								className="tag-diamond session-tag"
-								type="button"
-								style={cssVar("--tag-color", TAG_COLORS[tag])}
-								aria-label={row.tagName}
-								onClick={onTagClick}
-							/>
-						</Tooltip>
-					) : null}
 				</span>
 				<span className="session-meta">
 					{status === "running" || status === "waiting" || status === "failed" ? (
 						<span className={cx("session-badge", status)}>{t(status)}</span>
 					) : null}
-					<time className="session-time">{formatRelativeTime(session.modified)}</time>
-					{/* Escape belongs to the shell's chain. */}
+					{/* Escape belongs to the shell's chain, which closes the group submenu first.
+					    An outside click closes the menu and its submenu together. */}
 					<Popover
 						bare
 						className="sidebar-menu session-menu"
 						id="sessionMenu"
 						placement="bottom-end"
 						open={row.menuOpen}
-						onClose={closeSessionMenu}
+						onClose={closeRowMenus}
 						dismissOn="click"
 						closeOnEscape={false}
-						content={<SessionMenu session={session} />}
+						content={<SessionMenu session={session} groups />}
 					>
 						{/* No hint while its menu is open: the menu already says what the button did. */}
 						<Tooltip content={row.menuOpen ? null : t("moreActions")}>
@@ -292,37 +271,33 @@ export function SessionRow({
 							/>
 						</Tooltip>
 					</Popover>
-					{grouped ? null : (
-						// Escape belongs to the shell's chain (the group name field closes the picker itself).
-						<Popover
-							bare
-							className="sidebar-menu tag-picker"
-							id="tagPicker"
-							placement="bottom-end"
-							open={row.tagPickerOpen}
-							onClose={closeTagPicker}
-							dismissOn="click"
-							closeOnEscape={false}
-							content={<TagPicker sessionId={session.id} />}
-						>
-							{/* No hint while the picker is open: the picker already says what the button did. */}
-							<Tooltip content={row.tagPickerOpen ? null : t("setGroup")}>
-								<IconButton
-									className="session-tag-button"
-									icon={LEGACY_ICONS.tag.name}
-									iconSize={LEGACY_ICONS.tag.size}
-									aria-label={t("setGroup")}
-									aria-haspopup="menu"
-									aria-expanded={row.tagPickerOpen}
-									aria-controls="tagPicker"
-									onClick={onTagButtonClick}
-								/>
-							</Tooltip>
-						</Popover>
-					)}
+					{/* One diamond that never moves: hovering hides the time on its right and shows
+					    "…" on its left and archive (+ pin) on its right in the time's width, so
+					    "…" always leads the cluster and the diamond keeps its place (sessions.css). */}
+					{tag ? (
+						<Tooltip content={row.tagName}>
+							<button
+								className="tag-diamond session-tag"
+								type="button"
+								style={cssVar("--tag-color", TAG_COLORS[tag])}
+								aria-label={row.tagName}
+								onClick={onTagClick}
+							/>
+						</Tooltip>
+					) : null}
+					<time className="session-time">{formatRelativeTime(session.modified)}</time>
+					<Tooltip content={session.archived ? t("restore") : t("archive")}>
+						<IconButton
+							className="session-archive-button"
+							icon={session.archived ? "undo" : "archive"}
+							iconSize="xs"
+							aria-label={session.archived ? t("restore") : t("archive")}
+							onClick={onArchiveClick}
+						/>
+					</Tooltip>
 					{/* The row's last slot, after the hover actions, so every pin lines up at the
 				    same right edge. A pinned row always shows its solid pin, so hovering the row
-				    adds "…" and the tag button to its left without moving it; an unpinned row
+				    adds "…" and the archive button to its left without moving it; an unpinned row
 				    shows the outline pin only on hover. Each icon swaps for the other while the
 				    button itself is hovered, previewing the state a click leads to. */}
 					<Tooltip content={row.pinned ? t("unpinSession") : t("pinSession")}>

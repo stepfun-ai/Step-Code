@@ -720,8 +720,9 @@ paths:
                   migrationSuggested:
                     type: boolean
                     description: >-
-                      Service available, onboarding unseen, no existing sessions and no hidden registered
-                      workspaces. The client offers this first-use invitation only in Desktop; this is not
+                      Service available, onboarding unseen, and at least one local Claude Code, Codex,
+                      WorkBuddy or Qoder session (any age, archived excluded) not yet imported; existing
+                      StepCode sessions and hidden workspaces do not suppress it. The client offers this first-use invitation only in Desktop; this is not
                       evidence of external candidates and does not trigger a scan or apply.
                   desktopOnboarding:
                     $ref: "#/components/schemas/DesktopOnboardingState"
@@ -1211,18 +1212,30 @@ paths:
     get:
       parameters:
         - { $ref: "#/components/parameters/SessionId" }
+        - name: after
+          in: query
+          required: false
+          schema: { type: string }
+          description: >-
+            Id of the last entry the caller already holds. While it is still on the branch, `entries` carries only
+            the entries after it, plus earlier entries whose projection changed since (an assistant message re-timed
+            by a thinking-timing entry recorded after it), and `entriesAfter` echoes the id. Otherwise the whole
+            branch is sent and `entriesAfter` is absent.
       responses:
         "200":
           description: >-
             Session snapshot including pendingClarifications and pendingSelections (in-memory requests restored after
-            page reload). `permissionPreset` is the tier the kernel enforces now, which can differ from the Step
+            page reload). A tool result's images are placeholders (`{ type: image, mimeType, omitted: true }`) without
+            their data, which `/api/v1/sessions/{id}/entries/{entryId}/images/{index}` serves. `permissionPreset` is the tier the kernel enforces now, which can differ from the Step
             settings (a "this session" Full Access grant is not persisted).
             `goal` is the running goal the client steers from the summary board (absent when the session has none), and
             `planMode` reports whether plan mode is active; both are read from the session branch, not from UI state.
             `revision` is the newest event revision the host had published when this snapshot was serialized; a client
             that has already applied a newer stream event must ignore this answer.
-            `interruptedTurn` is true when the newest recorded turn was cut off — a prompt with no reply, or a reply the
-            kernel recorded as `aborted` — and false while a turn is still running.
+            `interruptedTurn` is true when the newest recorded turn was cut off — a prompt with no reply, a branch ending
+            in tool work, or a reply the kernel recorded as `aborted` — and false while a turn is still running. A turn
+            the kernel classified as carrying nothing actionable (`message.incomplete`) is not an interruption: it has
+            its own explanation and may already be recovered.
           content:
             application/json:
               schema:
@@ -1264,11 +1277,27 @@ paths:
                       enabled: { type: boolean }
                       planFilePath: { type: string }
                       planSource: { type: string, enum: [user, agent, unknown] }
+                  pendingPlanHash:
+                    type: string
+                    description: >-
+                      The proposal waiting for the user's answer, as recorded in the `step-plan` session entry. A
+                      session fact, not UI state: the client marks exactly this snapshot's card actionable, and the
+                      host holds its queue only while plan mode is on and this is present. Absent when nothing waits.
+                  entriesAfter:
+                    type: string
+                    description: >-
+                      Present when the read named `after` and that entry is still on the branch: `entries` then holds
+                      only what follows it, plus earlier entries whose projection changed (runtime.ts `projectEntryRange`).
                   entries:
                     type: array
                     items:
                       type: object
                       properties:
+                        message:
+                          type: object
+                          description: >-
+                            The recorded message. A tool result's images are `{ type: image, mimeType, omitted: true }`
+                            placeholders; read one from `/api/v1/sessions/{id}/entries/{entryId}/images/{index}`.
                         customType:
                           type: string
                           description: On a custom step-subagent-response entry, identifies a durable completed child answer.
@@ -1302,6 +1331,13 @@ paths:
                             On a user message only: the prompt-command line (`/<template> args`) the user typed,
                             when this message is its expansion. Paired by content from a host-recorded
                             `stepcode-web.prompt-command` custom entry; never part of the model's context.
+                        incompleteTurnRecovered:
+                          type: boolean
+                          description: >-
+                            On an assistant entry whose turn carried nothing actionable (`message.incomplete`):
+                            the kernel already sent the hidden follow-up that recovers it. Paired by the
+                            recovery message's `details.recoversEntryId`, never by adjacency, so a usage
+                            provenance record or a compaction in between does not change it.
                   policies:
                     type: array
                     items: { $ref: "#/components/schemas/PolicyPreset" }
@@ -1367,6 +1403,28 @@ paths:
                         messageCount: { type: integer }
                         modified: { type: string, format: date-time }
         "400": { description: workflowRun is missing }
+  /api/v1/sessions/{id}/entries/{entryId}/images/{index}:
+    get:
+      summary: One image of a recorded message
+      description: >-
+        Snapshots and stream events carry a tool result's images as placeholders
+        (`{ type: image, mimeType, omitted: true }`). This route serves image `index` (0-based, counting only the
+        message's images, in content order) of entry `entryId` in this session's file, decoded. Any entry of the file
+        is served, not only the current branch. The page draws no tool-result image today (the transcript shows the
+        call and its text output; the Context panel lists an image as `{ type: image }`), so nothing reads this route
+        on its own yet; it is where a viewer fetches one. Child transcripts (`/children/{childId}`) carry placeholders
+        too; their images are not served here.
+      parameters:
+        - { $ref: "#/components/parameters/SessionId" }
+        - { name: entryId, in: path, required: true, schema: { type: string } }
+        - { name: index, in: path, required: true, schema: { type: integer, minimum: 0 } }
+      responses:
+        "200":
+          description: The image bytes with their recorded media type (`no-store`, `nosniff`).
+          content:
+            image/*:
+              schema: { type: string, format: binary }
+        "404": { description: No such entry or image, or a recorded media type that is not an image }
   /api/v1/sessions/{id}/children/{childId}:
     get:
       summary: A child agent's transcript, read-only
@@ -1397,6 +1455,13 @@ paths:
     get:
       parameters:
         - { $ref: "#/components/parameters/SessionId" }
+        - name: delta
+          in: query
+          required: false
+          schema: { type: string, enum: ["1"] }
+          description: >-
+            `1` asks for appended tails in `message_update` (see below). Without it each update carries its message
+            whole, as a client that does not rebuild tails expects.
       responses:
         "200":
           description: >-
@@ -1418,6 +1483,18 @@ paths:
             A user message_start envelope may carry promptCommand: the prompt-command line its text expanded from.
             Every event (and the session snapshot) carries `revision`, monotonic per bound session; a snapshot whose
             revision is older than an event the page has already applied describes a state it has left.
+            `entries` carries the branch entries recorded since the previous `entries` event, projected like the
+            snapshot's (thinking timings and prompt commands included; an earlier message re-timed by a later timing
+            entry is sent again), so a page appends them in stream order instead of re-reading the session. With
+            `reset: true` the branch no longer extends what was published (navigation, a rewind, a rebind) and
+            `entries` is the whole branch.
+            Streaming deltas are coalesced per connection: at most one `message_update` per 40 ms (the newest, so
+            nothing drawn is skipped) and one `tool_execution_update` per running call, each flushed before any other
+            event. A `message_update` carries its message once: no `assistantMessageEvent.partial` and no tool-call
+            `partialArgs`. On a connection opened with `delta=1`, a text or thinking block that only grew since the
+            connection's previous update holds just its appended tail plus `appendedTo`, the length it extends; a tool
+            call's top-level string arguments do the same, listed by name in `appendedArguments`. The first update of
+            a connection and of each message is complete. Tool-result images in agent events are placeholders, as in the snapshot.
   /api/v1/sessions/{id}/messages:
     post:
       parameters:
@@ -1429,7 +1506,7 @@ paths:
               type: object
               required: [text]
               properties:
-                text: { type: string }
+                text: { type: string, description: May be empty when attachments carry the message }
                 files:
                   type: array
                   items: { type: string }
@@ -1441,7 +1518,7 @@ paths:
                 attachments: { type: array, description: "Paperclip files: name, mimeType, base64 data" }
       responses:
         "202": { description: Prompt accepted }
-        "400": { description: text is missing, or an attachment or upload id is invalid }
+        "400": { description: text is missing (empty text needs attachments), or an attachment or upload id is invalid }
         "409": { description: A turn revert is writing files }
   /api/v1/sessions/{id}/steer:
     post:
@@ -1454,7 +1531,7 @@ paths:
               type: object
               required: [text]
               properties:
-                text: { type: string }
+                text: { type: string, description: May be empty when attachments carry the message }
                 files:
                   type: array
                   items: { type: string }
@@ -1466,7 +1543,7 @@ paths:
                 attachments: { type: array, description: "Paperclip files: name, mimeType, base64 data" }
       responses:
         "202": { description: Steer accepted; the running turn reads it before its next model call }
-        "400": { description: text is missing, an attachment or upload id is invalid, or the kernel refused the steer (an extension command) }
+        "400": { description: text is missing (empty text needs attachments), an attachment or upload id is invalid, or the kernel refused the steer (an extension command) }
   /api/v1/sessions/{id}/queue:
     post:
       summary: Queue a message sent during a turn
@@ -1483,7 +1560,7 @@ paths:
               type: object
               required: [text]
               properties:
-                text: { type: string }
+                text: { type: string, description: May be empty when attachments carry the message }
                 files:
                   type: array
                   items: { type: string }
@@ -1495,7 +1572,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/QueueState" }
-        "400": { description: text is missing, or an attachment or upload id is invalid }
+        "400": { description: text is missing (empty text needs attachments), or an attachment or upload id is invalid }
   /api/v1/sessions/{id}/queue/steer:
     post:
       summary: Steer every queued message into the running turn
@@ -2053,6 +2130,23 @@ paths:
         "400": { description: Missing fields or the model id is not usable }
         "502": { description: "The provider rejected the request or reported an error" }
         "504": { description: No answer within the test timeout }
+  /api/v1/settings/models/open-config:
+    post:
+      description: >-
+        Open the models.json the kernel reads in the application the system associates with it (on macOS,
+        the default text editor when no application is associated). A missing file is first created with an
+        empty provider table. Edits apply to sessions started afterwards.
+      responses:
+        "200":
+          description: The editor was launched
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [path]
+                properties:
+                  path: { type: string, description: Absolute path of the opened models.json }
+        "500": { description: The file could not be created or no application could open it }
   /api/v1/settings/models/{id}:
     parameters:
       - { name: id, in: path, required: true, schema: { type: string } }

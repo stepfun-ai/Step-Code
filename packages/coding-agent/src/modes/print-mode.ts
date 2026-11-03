@@ -7,10 +7,11 @@
  */
 
 import type { AgentMessage } from "@step-harness/agent-core";
-import type { AssistantMessage, ImageContent } from "@step-harness/providers";
+import { type AssistantMessage, type ImageContent, INCOMPLETE_TURN_MESSAGES } from "@step-harness/providers";
 import type { AgentSessionEvent } from "../core/agent-session.ts";
 import type { AgentSessionRuntimeHost } from "../core/agent-session-runtime.ts";
 import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
+import { type ExternalPlanHandoff, readExternalPlanHandoff } from "../features/plan-handoff.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 import {
 	type CompletionCheckOptions,
@@ -78,27 +79,47 @@ function getTerminatingBlock(event: AgentSessionEvent): TerminatingBlock | undef
 	return { toolName: event.toolName, reason: reason || "no reason given" };
 }
 
-/** A successful plan handoff is not approval to send automatic execution prompts. */
-function requiresExternalPlanApproval(event: AgentSessionEvent): boolean {
-	if (event.type !== "tool_execution_end" || event.isError || event.toolName !== "exit_plan_mode") return false;
-	const result: unknown = event.result;
-	if (typeof result !== "object" || result === null) return false;
-	const details = (result as { details?: unknown }).details;
-	return (
-		typeof details === "object" &&
-		details !== null &&
-		(details as { outcome?: unknown }).outcome === "external_approval_required"
-	);
+/**
+ * The reviewed proposal when a run handed approval to the caller.
+ *
+ * A successful plan handoff is not approval to send automatic execution
+ * prompts. The turn also ends on the tool result, so text mode has no assistant
+ * message to print; the handoff text is what the caller needs instead.
+ */
+function getExternalPlanHandoff(event: AgentSessionEvent): ExternalPlanHandoff | undefined {
+	if (event.type !== "tool_execution_end" || event.isError || event.toolName !== "exit_plan_mode") return undefined;
+	return readExternalPlanHandoff(event.result);
 }
 
-function getAssistantFailure(message: AgentMessage | undefined): AssistantMessage | undefined {
+/**
+ * The assistant message that makes this run a failure, if any.
+ *
+ * `includeIncomplete` decides whether an empty turn is this invocation's result.
+ * A completion check owns missing output, so it passes `false`: the empty turn is
+ * that follow-up's input there, and the checker reports the exit code instead.
+ */
+function getAssistantFailure(
+	message: AgentMessage | undefined,
+	options: { includeIncomplete: boolean },
+): AssistantMessage | undefined {
 	if (message?.role !== "assistant") return undefined;
 	const assistant = message as AssistantMessage;
-	return assistant.stopReason === "error" || assistant.stopReason === "aborted" ? assistant : undefined;
+	if (assistant.stopReason === "error" || assistant.stopReason === "aborted") return assistant;
+	if (options.includeIncomplete && assistant.incomplete) return assistant;
+	return undefined;
+}
+
+/** User-facing text for a failed assistant message. */
+function assistantFailureText(assistant: AssistantMessage): string {
+	// `incomplete` is read back from a session file, so an unknown value must fall
+	// through to the provider's own message rather than print `undefined`.
+	const described = assistant.incomplete ? INCOMPLETE_TURN_MESSAGES[assistant.incomplete] : undefined;
+	if (described) return described;
+	return assistant.errorMessage || `Request ${assistant.stopReason}`;
 }
 
 function hasFinalAssistantText(message: AgentMessage | undefined): boolean {
-	if (message?.role !== "assistant" || getAssistantFailure(message)) return false;
+	if (message?.role !== "assistant" || getAssistantFailure(message, { includeIncomplete: false })) return false;
 	const assistant = message as AssistantMessage;
 	return (
 		assistant.stopReason !== "toolUse" &&
@@ -131,6 +152,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 	let externalApprovalRequired = false;
 	// Only a handoff from the latest prompt excuses missing final output.
 	let latestPromptHasExternalHandoff = false;
+	// The latest handoff's text, for a text-mode caller that has no event stream.
+	let latestExternalHandoffText = "";
 	const completionAbort = new AbortController();
 	let completionAttempts: number | undefined;
 	let reviewRequested = false;
@@ -177,14 +200,27 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
 		session = nextSession;
+		// completion-check owns the bounded follow-up for missing output. Running the
+		// generic recovery too would add a second model call and consume its budget.
+		session.setIncompleteTurnRecoveryEnabled(completionAttempts === undefined);
+		// The handoff flags describe the previous session's last prompt. A rebound
+		// session has run nothing yet, so keeping them would print a stale proposal
+		// if this run ends without a new assistant message.
+		latestPromptHasExternalHandoff = false;
+		latestExternalHandoffText = "";
 		unsubscribe = session.subscribe((event) => {
 			const block = getTerminatingBlock(event);
 			if (block) terminatingBlocks.push(block);
-			if (requiresExternalPlanApproval(event)) {
+			const handoff = getExternalPlanHandoff(event);
+			if (handoff) {
 				externalApprovalRequired = true;
 				latestPromptHasExternalHandoff = true;
+				latestExternalHandoffText = handoff.text;
 			}
-			if (event.type === "message_end") assistantFailure ??= getAssistantFailure(event.message);
+			// Only a completion check reads this, and it owns missing output: an empty
+			// turn is its follow-up's input, not this invocation's failure.
+			if (event.type === "message_end")
+				assistantFailure ??= getAssistantFailure(event.message, { includeIncomplete: false });
 			if (mode === "json") {
 				// The projection decides what a record contains; a caller that filters
 				// first would be a second, silently divergent policy.
@@ -274,7 +310,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 		if (initialMessage && !(completionAttempts !== undefined && terminalOutcome())) {
 			latestPromptHasExternalHandoff = false;
 			await session.prompt(initialMessage, { images: initialImages });
-			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1));
+			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1), { includeIncomplete: false });
 		}
 
 		// Keep all explicit user messages in order; the completion budget is for
@@ -283,11 +319,13 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 			if (completionAttempts !== undefined && terminalOutcome()) break;
 			latestPromptHasExternalHandoff = false;
 			await session.prompt(message);
-			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1));
+			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1), { includeIncomplete: false });
 		}
 
 		if (completionAttempts !== undefined) {
-			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1));
+			// A completion check owns missing output here, so an empty turn is its
+			// bounded follow-up's input rather than this invocation's failure.
+			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1), { includeIncomplete: false });
 			for (let attempt = 0; attempt <= completionAttempts && !automaticCompletionBlocked(); attempt++) {
 				// Extension commands may explicitly replace the runtime. Keep normal
 				// rebinding intact, but never carry automatic feedback to a new session.
@@ -374,7 +412,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 				} finally {
 					unsubscribeReview?.();
 				}
-				assistantFailure ??= getAssistantFailure(session.state.messages.at(-1));
+				assistantFailure ??= getAssistantFailure(session.state.messages.at(-1), { includeIncomplete: false });
 			}
 		}
 
@@ -392,8 +430,13 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 
 		if (lastMessage?.role === "assistant") {
 			const assistantMsg = lastMessage as AssistantMessage;
-			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-				console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+			// An empty turn is only a failure when no completion check owns missing
+			// output; that path reports it as an incomplete result instead.
+			const lastFailure = getAssistantFailure(lastMessage, {
+				includeIncomplete: completionAttempts === undefined,
+			});
+			if (lastFailure) {
+				console.error(assistantFailureText(lastFailure));
 				exitCode = 1;
 			} else if (mode === "text") {
 				for (const content of assistantMsg.content) {
@@ -402,11 +445,16 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 					}
 				}
 			}
+		} else if (mode === "text" && latestPromptHasExternalHandoff && latestExternalHandoffText) {
+			// The handoff ends the turn on the tool result, so the run stops before
+			// any assistant text. A text caller has no event stream to read the
+			// proposal from, and an empty stdout at exit 0 hides it entirely.
+			writeRawStdout(`${latestExternalHandoffText}\n`);
 		}
 
 		if (completionAttempts !== undefined && exitCode === 0 && !hasFinalAssistantText(lastMessage)) {
 			if (assistantFailure) {
-				console.error(assistantFailure.errorMessage || `Request ${assistantFailure.stopReason}`);
+				console.error(assistantFailureText(assistantFailure));
 				exitCode = 1;
 			} else if (!latestPromptHasExternalHandoff) {
 				console.error("Completion check incomplete: no final answer text after bounded follow-up.");

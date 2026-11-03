@@ -15,6 +15,7 @@ import "./turn-artifacts.css";
 
 export { ChildAgentView } from "./ChildAgentView";
 export { ConversationStream } from "./ConversationStream";
+export { DecisionPanel } from "./DecisionPanel";
 export { FeedbackModal } from "./FeedbackModal";
 export { openFeedback } from "./feedback";
 export { SessionHeader } from "./SessionHeader";

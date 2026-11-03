@@ -174,7 +174,9 @@ export function privateDir(path: string, restricted = false): void {
 }
 export function syncFile(path: string): void {
 	safePath(path);
-	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+	// Windows flushes only through a writable handle (a read-only one fails with EPERM) and has no
+	// O_NOFOLLOW; safePath above has already refused links on the way to this file.
+	const fd = openSync(path, process.platform === "win32" ? "r+" : constants.O_RDONLY | constants.O_NOFOLLOW);
 	try {
 		fsyncSync(fd);
 	} finally {
@@ -182,6 +184,9 @@ export function syncFile(path: string): void {
 	}
 }
 export function syncDir(path: string): void {
+	// Windows cannot fsync a directory handle (EPERM); NTFS journals the rename or create itself.
+	// Throwing here would report a write that already took place as failed.
+	if (process.platform === "win32") return;
 	const fd = openSync(path, "r");
 	try {
 		fsyncSync(fd);

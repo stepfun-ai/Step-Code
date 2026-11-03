@@ -64,7 +64,7 @@ Features connect through existing extension and session-event interfaces. Reuse 
 
 ## Boundaries and invariants
 
-- Internal dependencies are limited to agent-core, providers, config, and tui. Do not import CLI or turn app hooks into reverse dependencies.
+- Do not turn app hooks into reverse dependencies on the CLI.
 - Reuse agent-core's Loop and generic harness. Implement coding-session message conversion, skill retention, permissions, and tool-output policies in this package.
 - Provider protocols and vendor SDKs stay in providers. This package passes user configuration, credentials, model selection, and tool capabilities to providers.
 - Preserve the frozen `bin` / `exports` boundary. Do not add argv, TTY, or process entry points, or weaken `check:coding-agent-entry-freeze`.
@@ -80,6 +80,7 @@ Features connect through existing extension and session-event interfaces. Reuse 
 - Reuse agent-core for lightweight context projection; change only the request view, without persisting it or rewriting the transcript. Product summaries retain user instructions, skills, and protected tails; do not permanently delete session history.
 - Tool permissions run through Step's `tool_call` policy; UI presents approvals. Handle dangerous matches and incomplete analysis separately: Ask / Approve for Me cannot bypass either gate through automatic tool overrides or unattended allow. Only risk-acknowledged Full Access uses the `skipCommandPolicy` exception; explicit tool deny still applies. Follow `src/step/permissions.ts` and [command permissions](../../docs/command-permissions.md).
 - Use the existing mutation queue for changes to the same file. Final text results pass through the shared output-retention boundary, including MCP, extensions, hook replacements, and errors. Save full oversized output before publishing a preview; storage failure must not automatically retry calls with side effects.
+- Command exit codes, execution deadlines, and signals are execution facts in `details.execution`, not tool errors. Invocation faults and caller cancellation retain their error and cancellation behavior. Read command facts directly, never infer them from output text; `then_run` must preserve both the command outcome and any already-applied file mutation. A clean exit adds no status line; every renderer that presents a command as failed derives that from `details.execution` (or `details.thenRun.execution` for an embedded check) rather than `isError` alone, while wire flags and historical metrics keep reporting whether the call itself failed.
 - Preserve extension ordering: pre-execution `tool_call`, then return-stage `tool_result`. Publish catalogs in batches through `registerTools` to avoid repeated tool and prompt refreshes; tools added after a request starts become available to later requests.
 - Keep persistent RPC sessions for subagents. Build child environments through `buildSubagentChildEnv`, retaining the child marker and workflow / cron / goal disabling flags. Timeouts, failures, and cancellation must settle lanes and release resources. Background lanes belong to the session runtime that started them: run every rejecting check before a lane exists, send one terminal notification per lane, and stop a runtime's lanes on `session_shutdown` without touching another runtime's lanes (see [orchestration lifecycle](../../docs/orchestration-lifecycle.md#background-subagent-lanes)).
 - A child's permission prompt has no terminal of its own: `StepSubagentRunInput.requestApproval` carries the host's answer back over rpc. Forward it only from a host that can show the question; without a handler the prompt must stay cancelled (a denial), never auto-approved. `confirmed` is the only verdict; other blocking dialog methods remain auto-cancelled.
@@ -98,7 +99,7 @@ Features connect through existing extension and session-event interfaces. Reuse 
 ## Validation and documentation
 
 - Run `pnpm exec vitest --run <test-path>` from this directory. For session regressions, prefer `test/suite/harness.ts` and faux providers; see the [test harness](test/suite/README.md).
-- Run root `pnpm run check:coding-agent-entry-freeze`; run the full `pnpm run check` after code changes.
+- Run root `pnpm run check:coding-agent-entry-freeze`.
 - Lifecycle changes cover cancellation, retries, compaction, queues, session replacement, and RPC. Permission tests use harmless shell fixtures; feature tests use fake RPC children, VM executors, and clocks. VM mocks do not replace actual isolation validation.
 - Update public API documentation as applicable: [SDK](docs/sdk.md), [extensions](docs/extensions.md), [RPC](docs/rpc.md), [session format](docs/session-format.md), [output retention](docs/tool-output-retention.md), or [compaction recovery](docs/compaction-overflow-recovery.md).
 - For product policies and orchestration, update [configuration](../../docs/step-configuration.md), [command permissions](../../docs/command-permissions.md), [orchestration lifecycle](../../docs/orchestration-lifecycle.md), [goal lifecycle](../../docs/goal-lifecycle.md), or [MCP catalogs](docs/mcp-catalog.md).

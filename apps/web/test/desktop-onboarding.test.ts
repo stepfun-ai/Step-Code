@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { DesktopOnboardingError, DesktopOnboardingStore, type DesktopOnboardingPatch } from "../src/desktop-onboarding.ts";
 
+/** Windows reports no POSIX permission bits; updates themselves must still succeed there. */
+const windows = process.platform === "win32";
+
 function fixture(t: TestContext) {
 	const root = mkdtempSync(join(tmpdir(), "desktop-onboarding-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -39,7 +42,7 @@ test("CAS persists across restart, keeps last job through in_progress and leaves
 	const again = restarted.update({ expectedRevision: 2, status: "in_progress" });
 	assert.equal(again.lastJobId, running.lastJobId);
 	assert.equal(again.revision, 3);
-	assert.equal(lstatSync(path).mode & 0o777, 0o600);
+	if (!windows) assert.equal(lstatSync(path).mode & 0o777, 0o600);
 	for (const file of unrelated) assert.equal(readFileSync(join(agentDir, file), "utf8"), "fixture unchanged\n");
 	assert.deepEqual(readdirSync(agentDir).sort(), [...unrelated, "desktop-onboarding.json"].sort());
 });
@@ -47,7 +50,7 @@ test("CAS persists across restart, keeps last job through in_progress and leaves
 test("new store creates private directory; completion and skip stay sticky for this flow", (t) => {
 	const { store, agentDir, root } = fixture(t);
 	store.update({ expectedRevision: 0, status: "completed" });
-	assert.equal(lstatSync(agentDir).mode & 0o777, 0o700);
+	if (!windows) assert.equal(lstatSync(agentDir).mode & 0o777, 0o700);
 	const restarted = new DesktopOnboardingStore({ agentDir });
 	assert.throws(() => restarted.update({ expectedRevision: 1, status: "offered" }), error("onboarding-flow-finished"));
 	assert.equal(restarted.get().status, "completed");
@@ -121,7 +124,7 @@ test("nested missing agent directory stays read-only until update and rejects di
 	assert.equal(store.get().status, "unseen");
 	assert.equal(existsSync(join(root, "new")), false);
 	store.update({ expectedRevision: 0, status: "offered" });
-	assert.equal(lstatSync(join(root, "new")).mode & 0o777, 0o700);
+	if (!windows) assert.equal(lstatSync(join(root, "new")).mode & 0o777, 0o700);
 	renameSync(agentDir, join(root, "original"));
 	mkdirSync(agentDir);
 	assert.throws(() => store.get(), error("unsafe-onboarding-path"));

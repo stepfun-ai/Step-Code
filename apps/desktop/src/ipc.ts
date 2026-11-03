@@ -9,10 +9,11 @@
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, normalize } from "node:path";
 import type { DesktopBrowserInfo, DesktopUpdateState } from "@step-harness/web/desktop-bridge";
-import { app, type BrowserWindow, dialog, type IpcMainInvokeEvent, ipcMain, shell } from "electron";
+import { app, type BrowserWindow, dialog, type IpcMainInvokeEvent, ipcMain, shell, systemPreferences } from "electron";
 import type { DesktopBrowserGuests } from "./browser-guests.ts";
 import { parseDirectoryPickOptions, recordDirectoryPick } from "./directory-pick-policy.ts";
 import { DESKTOP_IPC } from "./ipc-channels.ts";
+import { microphoneSettingsUrl, requestMicrophoneAccess } from "./microphone-access.ts";
 import { type DesktopStateStore, isDesktopThemeChoice } from "./state.ts";
 import type { TagGroupCloseOwner } from "./tag-group-close.ts";
 import type { DesktopUpdater } from "./updater.ts";
@@ -220,5 +221,19 @@ export function installDesktopIpc(options: DesktopIpcOptions): void {
 	ipcMain.handle(DESKTOP_IPC.updateRestart, (event) => {
 		trustedWindow(event, options);
 		return options.updater.restart();
+	});
+	ipcMain.handle(DESKTOP_IPC.requestMicrophoneAccess, (event) => {
+		trustedWindow(event, options);
+		return requestMicrophoneAccess({
+			platform: process.platform,
+			status: () => systemPreferences.getMediaAccessStatus("microphone"),
+			ask: () => systemPreferences.askForMediaAccess("microphone"),
+		});
+	});
+	ipcMain.handle(DESKTOP_IPC.openMicrophoneSettings, async (event) => {
+		trustedWindow(event, options);
+		const url = microphoneSettingsUrl(process.platform);
+		if (url === undefined) throw new Error("This system has no microphone settings page");
+		await shell.openExternal(url);
 	});
 }

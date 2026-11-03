@@ -9,6 +9,7 @@ import {
 	Text,
 } from "@step-harness/pi-tui";
 import type { AssistantMessage } from "@step-harness/providers";
+import { INCOMPLETE_TURN_MESSAGES } from "@step-harness/providers";
 import { createLiveMarkdownTransform } from "./markdown-transform.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -219,6 +220,13 @@ export class AssistantMessageComponent extends Container {
 				const errorMsg = message.errorMessage || "Unknown error";
 				this.contentContainer.addChild(new Spacer(1));
 				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
+			} else if (message.incomplete && INCOMPLETE_TURN_MESSAGES[message.incomplete]) {
+				// A turn's classification cannot prove that recovery started or the run
+				// ended. The live host presents those actions from their own events.
+				this.contentContainer.addChild(new Spacer(1));
+				this.contentContainer.addChild(
+					new Text(theme.fg("dim", INCOMPLETE_TURN_MESSAGES[message.incomplete]), this.outputPad, 0),
+				);
 			}
 		}
 	}

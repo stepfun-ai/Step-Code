@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { afterEach, mock, test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { translate } from "../client/src/i18n/index.ts";
 import { artifactKind, localFileReference, workspaceFilePath, workspaceFileReference } from "../client/src/lib/file-references.ts";
 import { markdownFileReferences } from "../client/src/lib/markdown.ts";
 import { MarkdownContent } from "../client/src/ui/MarkdownView/markdown-content.ts";
-import { turnArtifacts, withTurnChanges } from "../client/src/features/conversation/turn-artifacts.ts";
+import { artifactDescription, turnArtifacts, withTurnChanges } from "../client/src/features/conversation/turn-artifacts.ts";
 import { collectTurnFooters } from "../client/src/features/conversation/turn-footers.ts";
 import { openFileReference, toggleDeliveryFile } from "../client/src/features/files/actions.ts";
 import { activeRightPanel, openRightPanel } from "../client/src/state/right-panel.ts";
@@ -45,11 +46,17 @@ test("rejects unsafe schemes, network shares, malformed encodings and workspace 
 test("file references are opt-in keyboard buttons, not browser file navigation", () => {
 	const text = "[Report](<file:///D:/Work/report%20one.md>) and `Output/report.md:10`";
 	const html = renderMarkdown(text, { localFiles: true });
-	assert.match(html, /<button type="button" class="md-file-reference" data-file-path="file:\/\/\/D:\/Work\/report%20one.md">Report<\/button>/);
+	assert.match(html, /<button type="button" class="md-file-reference" data-file-path="file:\/\/\/D:\/Work\/report%20one.md"><svg class="md-link-icon" aria-hidden="true"><use href="#i-file"><\/use><\/svg>Report<\/button>/);
 	assert.match(html, /<code>Output\/report.md:10<\/code>/);
 	assert.doesNotMatch(html, /data-file-path="Output/);
 	assert.doesNotMatch(html, /href="file:/);
 	assert.doesNotMatch(renderMarkdown(text), /md-file-reference/);
+	// Markdown percent-encodes the backslashes of a bare Windows path; it is still a file reference.
+	const windows = renderMarkdown("[logo.ai](D:\\Work\\logo.ai)", { localFiles: true });
+	assert.match(windows, /class="md-file-reference" data-file-path="D:%5CWork%5Clogo.ai">/);
+	assert.equal(workspaceFileReference("D:/Work", "D:%5CWork%5Cout%5Clogo.ai"), "out/logo.ai");
+	assert.equal(localFileReference("D:%2Fx.ai"), "D:/x.ai");
+	assert.equal(localFileReference("D:%41x.ai"), undefined, "only an encoded separator may follow the drive");
 });
 
 test("delivery recognition shares renderer parsing and ignores complete or unfinished code fences", () => {
@@ -79,6 +86,30 @@ test("recognizes bounded turn outputs from explicit references and successful st
 	assert.equal(artifactKind("slides.PPTX"), "presentation");
 	assert.equal(artifactKind("data.csv"), "spreadsheet");
 	assert.equal(artifactKind("song.mp3"), "audio");
+});
+
+test("a failed call still delivers the file it wrote before its check failed", () => {
+	// A failing `then_run` check leaves the row "failed" while the edit already
+	// landed; the delivery card must keep listing what the turn produced.
+	const items: TimelineItem[] = [
+		{ kind: "message", itemId: "u1", role: "user", content: "Write then check" },
+		{
+			kind: "tool",
+			itemId: "t1",
+			toolName: "edit_file",
+			state: "failed",
+			inputSummary: "",
+			outputSummary: "",
+			args: { path: "output/report.md" },
+			change: { path: "output/report.md", patch: "--- a\n+++ b\n" },
+		},
+		{ kind: "tool", itemId: "t2", toolName: "write", state: "failed", inputSummary: "", outputSummary: "", args: { path: "output/failure.md" } },
+		{ kind: "message", itemId: "a1", role: "assistant", content: "Done; see `report.md`." },
+	];
+	const [footer] = collectTurnFooters(items, "idle", false);
+	assert.deepEqual(turnArtifacts(items, footer, "D:/Work"), [
+		{ path: "output/report.md", label: "report.md", kind: "document", turnId: "u1" },
+	]);
 });
 
 test("ambiguous basenames are not guessed and outputs do not leak between turns", () => {
@@ -175,4 +206,36 @@ test("a delivery carries its own turn's change, matched across the tool's path s
 	assert.equal(withTurnChanges(artifacts, turn, "D:/Work"), attached);
 	assert.equal(withTurnChanges(artifacts, undefined, "D:/Work"), artifacts);
 	assert.equal(withTurnChanges(artifacts, { ...turn, files: [] }, "D:/Work"), artifacts);
+});
+
+test("a delivery card describes a file only with a label written in words", () => {
+	const describe = (path: string, label: string) => artifactDescription({ path, label });
+	// Words describe the file: they get the second line.
+	assert.equal(describe("site/index.html", "贪吃蛇小游戏"), "贪吃蛇小游戏");
+	assert.equal(describe("output/report.md", "Weekly report"), "Weekly report");
+	assert.equal(describe("output/report.md", "Summary"), "Summary");
+	// The file's own name, stem or path tail, in any case, adds nothing.
+	assert.equal(describe("output/report.md", "Report"), undefined);
+	assert.equal(describe("docs/architecture.zh.md", "architecture.zh.md"), undefined);
+	assert.equal(describe("packages/boot/plugin-manager/src/index.ts", "plugin-manager/src/index.ts"), undefined);
+	assert.equal(describe("docs/README.md", "readme"), undefined);
+	// Package, module and symbol names (labels from a real reply) are noise, not a description.
+	assert.equal(describe("packages/boot/app-boot/README.zh.md", "app-boot"), undefined);
+	assert.equal(describe("docs/subsystems/client-modules.zh.md", "client-modules"), undefined);
+	assert.equal(describe("packages/client/hmr/README.zh.md", "dsh-client-hmr"), undefined);
+	assert.equal(describe("packages/client/hmr/README.zh.md", "hmr"), undefined);
+	assert.equal(describe("packages/boot/plugin-market/README.zh.md", "pluginMarket"), undefined);
+	assert.equal(describe("packages/x/README.md", "@deepseek-ai/dsh"), undefined);
+	assert.equal(describe("notes.md", "  "), undefined);
+});
+
+test("a delivery card without a description names the file's kind in both languages", () => {
+	const kind = (path: string, locale: "zh-CN" | "en-US") => translate(locale, `deliveryKind.${artifactKind(path)}`);
+	assert.equal(kind("out/test.jpg", "zh-CN"), "图片");
+	assert.equal(kind("site/a.html", "zh-CN"), "网页");
+	assert.equal(kind("deck/test.ppt", "zh-CN"), "演示文稿");
+	assert.equal(kind("docs/README.zh.md", "zh-CN"), "文档");
+	assert.equal(kind("data/sheet.xlsx", "zh-CN"), "表格");
+	assert.equal(kind("out/test.jpg", "en-US"), "Image");
+	assert.equal(kind("deck/test.ppt", "en-US"), "Presentation");
 });

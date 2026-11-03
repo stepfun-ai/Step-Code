@@ -4,12 +4,17 @@
 // Model discovery lives in the providers layer (protocol knowledge, and the same
 // `api` key the adapters dispatch on). Re-exported so a host can ask an endpoint
 // for its catalog without depending on that package directly.
+// The user-facing wording for an empty turn, and its reason type. A host that
+// renders a run needs both; re-exporting keeps it from depending on the provider
+// package directly.
 export {
 	clampThinkingLevel,
 	DEFAULT_DISCOVERY_API,
 	type DiscoveredModel,
 	discoverModels,
 	getSupportedThinkingLevels,
+	INCOMPLETE_TURN_MESSAGES,
+	type IncompleteTurnReason,
 	ModelDiscoveryError,
 	modelListingUrl,
 	normalizeProviderBaseUrl,
@@ -45,6 +50,7 @@ export {
 	VERSION,
 } from "./config.ts";
 export {
+	type AgentRunFailure,
 	AgentSession,
 	type AgentSessionConfig,
 	type AgentSessionEvent,
@@ -248,6 +254,11 @@ export { FooterDataProvider } from "./core/footer-data-provider.ts";
 // rather than reimplement them, or it would act on empty/detached local state.
 // -----------------------------------------------------------------------------
 export { configureHttpDispatcher, formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "./core/http-dispatcher.ts";
+export {
+	createIncompleteTurnRecoveryMessage,
+	INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
+	INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
+} from "./core/incomplete-turn-recovery.ts";
 export { KeybindingsManager } from "./core/keybindings.ts";
 export {
 	type BranchSummaryMessage,
@@ -447,12 +458,17 @@ export {
 } from "./core/tools/edit-diff.ts";
 // Tools
 export {
+	type BashExecutionOutcome,
+	type BashExecutionResult,
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
 	type BashToolDetails,
 	type BashToolInput,
 	type BashToolOptions,
+	type CommandExecutionOutcome,
+	type CommandOutputFooter,
+	commandOutcomeNotice,
 	createAllToolDefinitions,
 	createBashToolDefinition,
 	createEditToolDefinition,
@@ -479,6 +495,7 @@ export {
 	type GrepToolDetails,
 	type GrepToolInput,
 	type GrepToolOptions,
+	isToolCommandFailure,
 	type LsOperations,
 	type LsToolDetails,
 	type LsToolInput,
@@ -493,6 +510,9 @@ export {
 	type ReadToolDetails,
 	type ReadToolInput,
 	type ReadToolOptions,
+	readCommandExecutionOutcome,
+	readCommandOutputFooter,
+	readToolCommandNotice,
 	type ToolName,
 	type ToolsOptions,
 	type TruncationOptions,

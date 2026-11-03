@@ -248,6 +248,64 @@ test("stopping waits for the audio still on the wire before transcribing", async
 	assert.ok(audioIndex !== -1 && stopIndex > audioIndex, host.calls.join(", "));
 });
 
+/** A Desktop bridge exposing only the microphone permission; the recorder touches nothing else. */
+function desktopMicrophone(access: () => Promise<string>): () => void {
+	const original = Object.getOwnPropertyDescriptor(globalThis, "window");
+	Object.defineProperty(globalThis, "window", {
+		configurable: true,
+		value: { stepcodeDesktop: { platform: "darwin", requestMicrophoneAccess: access } },
+	});
+	return () => {
+		if (original) Object.defineProperty(globalThis, "window", original);
+		else delete (globalThis as { window?: unknown }).window;
+	};
+}
+
+test("a Desktop microphone the OS refuses stops before recording silence", async () => {
+	for (const [access, code] of [
+		["denied", "mic-denied"],
+		["restricted", "mic-restricted"],
+	] as const) {
+		const host = fakeHost();
+		const mic = fakeMicrophone();
+		// getUserMedia would succeed: macOS hands a refused app silent audio instead of rejecting.
+		mic.allow();
+		cleanup.push(
+			() => host.restore(),
+			() => mic.restore(),
+			desktopMicrophone(async () => access),
+		);
+		const { errors, recorder: voice } = recorder();
+		await voice.start();
+		assert.deepEqual(errors, [code]);
+		assert.equal(voice.active, false);
+		assert.equal(mic.contexts, 0, "the microphone was opened anyway");
+		assert.equal(host.calls.includes(`POST ${ROOT}/start`), false);
+		for (const fn of cleanup) fn();
+		cleanup = [];
+	}
+});
+
+test("a granted or unanswerable Desktop permission records normally", async () => {
+	for (const access of [async () => "granted", () => Promise.reject(new Error("no handler"))]) {
+		const host = fakeHost();
+		const mic = fakeMicrophone();
+		mic.allow();
+		cleanup.push(
+			() => host.restore(),
+			() => mic.restore(),
+			desktopMicrophone(access),
+		);
+		const { errors, recorder: voice } = recorder();
+		await voice.start();
+		assert.deepEqual(errors, []);
+		assert.equal(voice.active, true);
+		await voice.cancel();
+		for (const fn of cleanup) fn();
+		cleanup = [];
+	}
+});
+
 test("cancelling while the transcript is in flight drops the text", async () => {
 	const host = fakeHost();
 	const mic = fakeMicrophone();

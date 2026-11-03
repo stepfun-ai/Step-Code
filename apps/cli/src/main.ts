@@ -892,7 +892,10 @@ function readCredentialUid(credential: unknown): string | undefined {
 async function dispatchStepAppMode(prep: Extract<MainPreparation, { kind: "dispatch" }>): Promise<void> {
 	switch (prep.appMode) {
 		case "rpc": {
-			await runRpcMode(prep.runtimeHost, { includeLiveEvents: prep.parsed.includeLiveEvents });
+			await runRpcMode(prep.runtimeHost, {
+				includeLiveEvents: prep.parsed.includeLiveEvents,
+				planReviewSurface: prep.parsed.planReviewSurface,
+			});
 			break;
 		}
 		case "interactive": {

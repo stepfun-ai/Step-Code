@@ -24,8 +24,16 @@ export interface PopoverTriggerProps {
 /**
  * Side of the trigger, then which edges line up: `start` = left edges, `end` =
  * right edges, none = centred on the trigger (shifted only at a viewport edge).
+ * `right-start` opens a submenu beside its row, top edges aligned.
  */
-export type PopoverPlacement = "bottom" | "bottom-start" | "bottom-end" | "top" | "top-start" | "top-end";
+export type PopoverPlacement =
+	| "bottom"
+	| "bottom-start"
+	| "bottom-end"
+	| "top"
+	| "top-start"
+	| "top-end"
+	| "right-start";
 
 const PLACEMENT_CLASS: Record<PopoverPlacement, string | undefined> = {
 	bottom: styles.bottom,
@@ -34,6 +42,7 @@ const PLACEMENT_CLASS: Record<PopoverPlacement, string | undefined> = {
 	"bottom-end": styles.bottomEnd,
 	"top-start": styles.topStart,
 	"top-end": styles.topEnd,
+	"right-start": styles.rightStart,
 };
 
 export interface PopoverProps extends Omit<ComponentPropsWithRef<"div">, "children" | "content"> {

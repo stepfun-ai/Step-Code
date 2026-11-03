@@ -1,5 +1,6 @@
 import type {
 	Api,
+	CacheRetention,
 	Context,
 	Model,
 	SimpleStreamOptions,
@@ -21,6 +22,14 @@ export function clampMaxTokensToContext(model: Model<Api>, context: Context, max
 	if (model.contextWindow <= 0) return Math.max(MIN_MAX_TOKENS, maxTokens);
 	const available = model.contextWindow - estimateContextTokens(context).tokens - CONTEXT_SAFETY_TOKENS;
 	return Math.min(maxTokens, Math.max(MIN_MAX_TOKENS, available));
+}
+
+/** Request retention wins over the model default; adapters fall back to short-lived caching. */
+export function resolveCacheRetention(
+	model: Pick<Model<Api>, "cacheRetention">,
+	options?: Pick<StreamOptions, "cacheRetention">,
+): CacheRetention {
+	return options?.cacheRetention ?? model.cacheRetention ?? "short";
 }
 
 export function buildBaseOptions(

@@ -113,6 +113,7 @@ function harness(options: { flag?: boolean | string; mode?: ExtensionContext["mo
 		...forbidden,
 		mode,
 		hasUI: mode === "tui" || mode === "rpc",
+		planReviewSurface: false,
 		ui: {
 			notify(text: string) {
 				notifications.push(text);
@@ -132,6 +133,8 @@ function harness(options: { flag?: boolean | string; mode?: ExtensionContext["mo
 		isProjectTrusted: () => true,
 		signal: undefined,
 		hasPendingMessages: () => false,
+		hasPendingUserDecision: () => false,
+		registerAutomaticTurnGuard: () => () => {},
 		waitForIdle: async () => {},
 		getContextUsage,
 	};

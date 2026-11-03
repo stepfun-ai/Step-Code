@@ -146,6 +146,8 @@ export interface SessionEntry {
 	readonly promptCommand?: string;
 	/** Lifecycle-only metadata on custom_message / agent-notification entries. */
 	readonly details?: unknown;
+	/** Set by the host on an assistant entry whose empty turn the session recovered. */
+	readonly incompleteTurnRecovered?: boolean;
 	readonly [key: string]: unknown;
 }
 
@@ -236,6 +238,12 @@ export interface SessionSnapshot extends SessionSummary {
 	readonly status: SessionStatus;
 	readonly sessionFile?: string;
 	readonly entries?: readonly SessionEntry[];
+	/**
+	 * Present on a read made with `?after=<entryId>` when that entry is still on
+	 * the branch: `entries` then holds only what follows it, plus earlier entries
+	 * whose projection changed (runtime.ts `projectEntryRange`).
+	 */
+	readonly entriesAfter?: string;
 	/** Live-only lane snapshots, replaced through SSE and never model messages. */
 	readonly subagentLanes?: readonly unknown[];
 	readonly model?: ModelRef;
@@ -284,6 +292,14 @@ export interface SessionSnapshot extends SessionSummary {
 	readonly goal?: GoalState;
 	/** Plan mode state (runtime.ts `projectPlanMode`). */
 	readonly planMode?: PlanModeState;
+	/**
+	 * Hash of the proposal waiting for the user's answer, when one is.
+	 *
+	 * A session fact from the kernel: exactly this snapshot's card is actionable.
+	 * An answered proposal cannot look pending, and a message typed past the
+	 * proposal cannot look like consent.
+	 */
+	readonly pendingPlanHash?: string;
 }
 
 /** The summary board's goal section data (runtime.ts `projectGoal`). */
@@ -445,8 +461,13 @@ export interface MessageTimelineItem {
 	readonly images?: readonly string[];
 	readonly usage?: Usage;
 	readonly timestamp?: string;
-	/** The model request failed (assistant `stopReason: "error"`); the provider's message. */
+	/** Explanation for a failed provider request or an incomplete response. */
 	readonly error?: string;
+	/**
+	 * A failed provider request and an incomplete response need different labels.
+	 * The latter does not establish the run outcome.
+	 */
+	readonly errorKind?: "request" | "incomplete";
 	/**
 	 * A user message the kernel expanded from a prompt command: `content` is the
 	 * line the user typed (`/<name> args`), not the template it became.
@@ -471,6 +492,21 @@ export interface ThinkingTimelineItem {
 	/** True only while this structured thinking block is being streamed. */
 	readonly running: boolean;
 	readonly timing?: ThinkingTiming;
+}
+
+/**
+ * A command's execution facts, as the tool result declares them in
+ * `details.execution` (and `details.thenRun.execution` for an embedded check).
+ * Mirrors `CommandExecutionOutcome` in
+ * `packages/agent-core/src/harness/command-outcome.ts`; keep the two in sync.
+ */
+export interface CommandExecutionOutcome {
+	readonly status: "exited" | "timed_out" | "signaled" | "canceled" | "unknown";
+	readonly exitCode: number | null;
+	readonly signal: string | null;
+	readonly timedOut: boolean;
+	readonly aborted: boolean;
+	readonly timeoutSeconds?: number;
 }
 
 export interface ToolTimelineItem {

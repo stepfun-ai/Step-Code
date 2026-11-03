@@ -249,6 +249,11 @@ export function createTestResourceLoader(options: CreateTestResourceLoaderOption
 		getAppendSystemPrompt: () => [],
 		getAppendSystemPromptSources: () => [],
 		extendResources: () => {},
+		// A no-op that keeps returning the same result: `session.reload()` here
+		// invalidates the shared runtime and hands the next runner the same, now
+		// stale copy. A real loader builds a new result and runtime. Tests that need
+		// to observe behavior *after* a reload must build the session from services
+		// (`createAgentSessionServices`), not from this loader.
 		reload: async () => {},
 	};
 }

@@ -280,10 +280,13 @@ export class ExtensionRunner {
 	private getScopedModels: () => readonly ScopedModel[] = () => [];
 	private isIdleFn: () => boolean = () => true;
 	private isProjectTrustedFn: () => boolean = () => true;
+	private hasPlanReviewSurfaceFn: () => boolean = () => false;
 	private getSignalFn: () => AbortSignal | undefined = () => undefined;
 	private waitForIdleFn: () => Promise<void> = async () => {};
 	private abortFn: () => void = () => {};
 	private hasPendingMessagesFn: () => boolean = () => false;
+	private hasPendingUserDecisionFn: () => boolean = () => false;
+	private registerAutomaticTurnGuardFn: (guard: () => boolean) => () => void = () => () => {};
 	private getContextUsageFn: () => ContextUsage | undefined = () => undefined;
 	private compactFn: (options?: CompactOptions) => void = () => {};
 	private getSystemPromptFn: () => string = () => "";
@@ -348,9 +351,12 @@ export class ExtensionRunner {
 		this.getScopedModels = contextActions.getScopedModels;
 		this.isIdleFn = contextActions.isIdle;
 		this.isProjectTrustedFn = contextActions.isProjectTrusted;
+		this.hasPlanReviewSurfaceFn = contextActions.hasPlanReviewSurface ?? (() => false);
 		this.getSignalFn = contextActions.getSignal;
 		this.abortFn = contextActions.abort;
 		this.hasPendingMessagesFn = contextActions.hasPendingMessages;
+		this.hasPendingUserDecisionFn = contextActions.hasPendingUserDecision ?? (() => false);
+		this.registerAutomaticTurnGuardFn = contextActions.registerAutomaticTurnGuard ?? (() => () => {});
 		this.shutdownHandler = contextActions.shutdown;
 		this.getContextUsageFn = contextActions.getContextUsage;
 		this.compactFn = contextActions.compact;
@@ -811,6 +817,10 @@ export class ExtensionRunner {
 				runner.assertActive();
 				return runner.isProjectTrustedFn();
 			},
+			get planReviewSurface() {
+				runner.assertActive();
+				return runner.hasPlanReviewSurfaceFn();
+			},
 			get signal() {
 				runner.assertActive();
 				return runner.getSignalFn();
@@ -822,6 +832,14 @@ export class ExtensionRunner {
 			hasPendingMessages: () => {
 				runner.assertActive();
 				return runner.hasPendingMessagesFn();
+			},
+			hasPendingUserDecision: () => {
+				runner.assertActive();
+				return runner.hasPendingUserDecisionFn();
+			},
+			registerAutomaticTurnGuard: (guard) => {
+				runner.assertActive();
+				return runner.registerAutomaticTurnGuardFn(guard);
 			},
 			shutdown: () => {
 				runner.assertActive();

@@ -18,6 +18,8 @@ export const DESKTOP_IPC = {
 	updateRestart: "stepcode-desktop:update-restart",
 	/** Main -> page push: the new `DesktopUpdateState`. The only channel the page listens on. */
 	updateState: "stepcode-desktop:update-state",
+	requestMicrophoneAccess: "stepcode-desktop:request-microphone-access",
+	openMicrophoneSettings: "stepcode-desktop:open-microphone-settings",
 	defaultBrowser: "stepcode-desktop:default-browser",
 	getTheme: "stepcode-desktop:get-theme",
 	setTheme: "stepcode-desktop:set-theme",

@@ -46,6 +46,9 @@ export type ToolExecutionMode = "sequential" | "parallel";
  *
  * - "all": drain and inject every queued message at that point.
  * - "one-at-a-time": drain and inject only the oldest queued message, leaving the rest queued for later drain points.
+ *
+ * A delivery filter can withhold messages: "oldest" then means the oldest one it
+ * allows, and withheld messages stay queued in their original order.
  */
 export type QueueMode = "all" | "one-at-a-time";
 
@@ -77,6 +80,7 @@ export interface BeforeToolCallResult {
  * - `isError`: if provided, replaces the tool result error flag
  * - `usage`: if provided, replaces the tool result usage
  * - `terminate`: if provided, replaces the early-termination hint
+ * - `stopTurn`: if provided, replaces the single-result turn barrier
  *
  * Omitted fields keep the original executed tool result values.
  * There is no deep merge for `content`, `details`, or `usage`.
@@ -89,9 +93,17 @@ export interface AfterToolCallResult {
 	usage?: Usage;
 	/**
 	 * Hint that the agent should stop after the current tool batch.
-	 * Early termination only happens when every finalized tool result in the batch sets this to true.
+	 * `stopTurn` on any finalized result also stops the batch; every result setting
+	 * `terminate` is the older, all-or-nothing form.
 	 */
 	terminate?: boolean;
+	/**
+	 * End the turn when this result settles, regardless of sibling results.
+	 * This ends the loop invocation only; a host may start another turn for
+	 * queued input or automatic maintenance. Decision barriers should also run
+	 * sequentially.
+	 */
+	stopTurn?: boolean;
 }
 
 /** Context passed to `beforeToolCall`. */
@@ -161,18 +173,6 @@ export interface BeforeModelRequestContext {
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
-
-	/**
-	 * Bounded resampling for turns whose tool call leaked into plain text.
-	 *
-	 * Serving-side tool parsers can fail on the model's raw output, leaving
-	 * `<tool_call>`/`<function=` markup in the text content with no
-	 * structured tool call: the model meant to act, but the turn would end
-	 * the loop. Each retry drops the leaked attempt from the request context
-	 * (its message events remain in the event stream) and streams the
-	 * identical context again. Default 2; set 0 to disable.
-	 */
-	toolCallLeakRetries?: number;
 
 	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
@@ -258,10 +258,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 
 	/**
 	 * Called immediately before every provider request, including the first request of a prompt or
-	 * continuation, after pending steering messages have been appended to the context. Tool-call
-	 * markup resampling of the same request does not call it again. On follow-up requests that have
-	 * not received steering yet, the loop polls steering once more after this hook returns, so input
-	 * queued during a long-running hook (for example, compaction) reaches the same request.
+	 * continuation, after pending steering messages have been appended to the context. On follow-up
+	 * requests that have not received steering yet, the loop polls steering once more after this hook
+	 * returns, so input queued during a long-running hook (for example, compaction) reaches the same request.
 	 * Return replacement context/model/thinking state to affect that request, or undefined to keep it.
 	 *
 	 * Contract: must not throw or reject. Throwing interrupts the low-level agent loop without producing a normal event sequence.
@@ -410,7 +409,7 @@ export interface AgentState {
 
 /** Final or partial result produced by a tool. */
 export interface AgentToolResult<T> {
-	/** A failed tool result may retain successful partial output and structured details. */
+	/** Tool or invocation failure, not a business outcome such as a command's exit code. Failed results may retain observed output and details. */
 	isError?: boolean;
 	/** Text or image content returned to the model. */
 	content: (TextContent | ImageContent)[];
@@ -421,8 +420,20 @@ export interface AgentToolResult<T> {
 	/** Names of tools introduced by this result and available from this transcript point onward. */
 	addedToolNames?: string[];
 	/**
+	 * End this turn regardless of sibling results. In a sequential batch, later
+	 * calls receive skipped results instead of executing; parallel calls already
+	 * in flight still settle. Use sequential execution for decision barriers.
+	 *
+	 * The barrier ends the loop invocation. Hosts may still start another turn,
+	 * for example for input queued after `agent_end` or for automatic context
+	 * maintenance, so a product that must wait for the user has to keep that
+	 * policy on its own side.
+	 */
+	stopTurn?: boolean;
+	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
+	 * A single `stopTurn` result ends the turn without this batch-wide agreement.
 	 */
 	terminate?: boolean;
 }

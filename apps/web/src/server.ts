@@ -57,6 +57,7 @@ import {
 	hasUsableCustomModel,
 	importLocalStepgoModels,
 	listModelProviders,
+	openModelsJson,
 	saveModelProvider,
 	testProviderModel,
 } from "./model-providers.ts";
@@ -93,6 +94,7 @@ import {
 	updateMarketplace,
 } from "./settings.ts";
 import { SitePreviewServer } from "./site-preview.ts";
+import { SseSessionWriter } from "./sse-writer.ts";
 import { WebTerminals } from "./terminal.ts";
 import { terminalRoute } from "./terminal-routes.ts";
 import { TurnRevertError } from "./turn-changes.ts";
@@ -197,6 +199,18 @@ function readAttachments(raw: unknown): WebAttachment[] | Error | undefined {
 		attachments.push({ name, mimeType, data, kind: classifyAttachment(mimeType) });
 	}
 	return attachments;
+}
+
+/**
+ * The `text` and `attachments` of a posted message. Text may be empty only
+ * when attachments carry the content (a pasted screenshot sent on its own).
+ */
+function readMessageContent(input: Record<string, unknown>): { text: string; attachments: WebAttachment[] } | Error {
+	const attachments = readAttachments(input.attachments);
+	if (attachments instanceof Error) return attachments;
+	if (typeof input.text !== "string") return new Error("text is required");
+	if (!input.text.trim() && !attachments?.length) return new Error("text or attachments is required");
+	return { text: input.text, attachments: attachments ?? [] };
 }
 
 /**
@@ -380,6 +394,19 @@ const firstUseWorkspace: Promise<void> = (async () => {
  */
 const defaultWorkspaceInfo = (): Promise<DefaultWorkspace> =>
 	resolveDefaultWorkspace(workspaces, defaultWorkspace(), homedir());
+
+/**
+ * Whether the first-use invitation has anything to offer: a local Claude Code / Codex / WorkBuddy /
+ * Qoder session, at any age, that StepCode has not imported. A failed probe only withholds the
+ * optional invitation; the Settings migration entry and its explicit scan still report the error.
+ */
+async function hasSessionsToMigrate(service: MigrationService): Promise<boolean> {
+	try {
+		return await service.hasSessionsToMigrate();
+	} catch {
+		return false;
+	}
+}
 
 /**
  * Resolve the `cwd` of a workspace-scoped request, or undefined when the folder
@@ -676,6 +703,14 @@ async function settingsRoute(
 			if (name === "discover" && !action && method === "POST") {
 				return json(response, 200, { models: await discoverProviderModels(await body(request)) });
 			}
+			// Open models.json in the system editor, for fields the form does not show.
+			if (name === "open-config" && !action && method === "POST") {
+				try {
+					return json(response, 200, { path: await openModelsJson() });
+				} catch (caught) {
+					return error(response, 500, caught instanceof Error ? caught.message : String(caught));
+				}
+			}
 			// A connection test answers for the same draft in the form.
 			if (name === "test" && !action && method === "POST") {
 				await testProviderModel(await body(request));
@@ -878,13 +913,11 @@ const server = createServer(async (request, response) => {
 			} catch {
 				/* The explicit onboarding API reports recovery errors. */
 			}
-			const [existingSessions, existingWorkspaces] =
-				desktopOnboarding?.status === "unseen" ? await Promise.all([store.list(), workspaces.list()]) : [[], []];
+			// Existing sessions or hidden workspaces do not suppress the invitation: users with
+			// StepCode history may still want to bring Claude Code / Codex resources over once.
+			// It does need something to bring: at least one local session not imported yet.
 			const migrationSuggested =
-				!!migrations &&
-				desktopOnboarding?.status === "unseen" &&
-				!existingSessions.length &&
-				!existingWorkspaces.some((workspace) => workspace.hidden);
+				!!migrations && desktopOnboarding?.status === "unseen" && (await hasSessionsToMigrate(migrations));
 			// The identity of the running build, so a page (and the person looking at
 			// it) can tell which build it is talking to. `buildTime` is staged beside
 			// the server entry by the installer; a source checkout reports none.
@@ -1129,7 +1162,25 @@ const server = createServer(async (request, response) => {
 				return json(response, 200, { ok: true });
 			}
 			const session = await store.getOrOpen(parts[3]);
-			if (parts.length === 4 && method === "GET") return json(response, 200, session.snapshot());
+			if (parts.length === 4 && method === "GET") {
+				// `after`: the last entry the page holds, so a refresh carries only what follows it.
+				return json(response, 200, session.snapshot(url.searchParams.get("after") || undefined));
+			}
+			if (parts[4] === "entries" && parts[6] === "images" && parts.length === 8 && method === "GET") {
+				// Snapshots and events carry tool-result images as placeholders; the page reads one here when it shows it.
+				const index = Number(parts[7]);
+				const image = /^\d+$/u.test(parts[7]) ? session.entryImage(decodeURIComponent(parts[5]), index) : undefined;
+				if (!image || !/^image\/[\w.+-]+$/u.test(image.mimeType)) return error(response, 404, "Image not found");
+				const bytes = Buffer.from(image.data, "base64");
+				response.writeHead(200, {
+					"content-type": image.mimeType,
+					"content-length": String(bytes.length),
+					"cache-control": "no-store",
+					"x-content-type-options": "nosniff",
+				});
+				response.end(bytes);
+				return;
+			}
 			if (parts.length === 5 && parts[4] === "inspector" && method === "GET")
 				return json(response, 200, session.inspector());
 			if (parts[4] === "children" && method === "GET") {
@@ -1159,16 +1210,24 @@ const server = createServer(async (request, response) => {
 					connection: "keep-alive",
 				});
 				response.write(`event: snapshot\ndata: ${JSON.stringify(session.snapshot())}\n\n`);
-				const unsubscribe = session.subscribe((event) => {
-					const eventName = event.type === "error" ? "web_error" : event.type;
-					response.write(`event: ${eventName}\ndata: ${JSON.stringify(event)}\n\n`);
-				});
+				// `delta=1`: the page rebuilds streamed text from appended tails (`client/src/state/live-message.ts`).
+				const writer = new SseSessionWriter(
+					(eventName, data) => {
+						response.write(`event: ${eventName}\ndata: ${data}\n\n`);
+					},
+					{ tails: url.searchParams.get("delta") === "1" },
+				);
+				const unsubscribe = session.subscribe((event) => writer.publish(event));
 				// Following the stream is looking at the session: its outcome is seen.
 				const unwatch = session.watch();
 				// A closed session (e.g. rebuilt after sign-in) sends nothing more; end
 				// the stream so the page's EventSource reconnects to its replacement.
-				const stopOnClose = session.onClose(() => response.end());
+				const stopOnClose = session.onClose(() => {
+					writer.flush();
+					response.end();
+				});
 				response.on("close", () => {
+					writer.close();
 					unsubscribe();
 					unwatch();
 					stopOnClose();
@@ -1177,27 +1236,25 @@ const server = createServer(async (request, response) => {
 			}
 			if (parts[4] === "messages" && method === "POST") {
 				const input = await body(request);
-				if (typeof input.text !== "string" || !input.text.trim()) return error(response, 400, "text is required");
-				const attachments = readAttachments(input.attachments);
-				if (attachments instanceof Error) return error(response, 400, attachments.message);
-				const text = await withFiles(input.text, input.files);
+				const content = readMessageContent(input);
+				if (content instanceof Error) return error(response, 400, content.message);
+				const text = await withFiles(content.text, input.files);
 				if (text instanceof Error) return error(response, 400, text.message);
 				if (session.isReverting()) return error(response, 409, "Wait for the revert to finish");
-				void session.send(text, attachments ?? []).catch((caught) => {
+				void session.send(text, content.attachments).catch((caught) => {
 					session.publishError(caught instanceof Error ? caught.message : String(caught));
 				});
 				return json(response, 202, { ok: true });
 			}
 			if (parts[4] === "steer" && method === "POST") {
 				const input = await body(request);
-				if (typeof input.text !== "string" || !input.text.trim()) return error(response, 400, "text is required");
-				const attachments = readAttachments(input.attachments);
-				if (attachments instanceof Error) return error(response, 400, attachments.message);
-				const text = await withFiles(input.text, input.files);
+				const content = readMessageContent(input);
+				if (content instanceof Error) return error(response, 400, content.message);
+				const text = await withFiles(content.text, input.files);
 				if (text instanceof Error) return error(response, 400, text.message);
 				// Queuing a steer is immediate; a refusal (an extension command) is this request's error.
 				try {
-					await session.steer(text, attachments ?? []);
+					await session.steer(text, content.attachments);
 				} catch (caught) {
 					return error(response, 400, caught instanceof Error ? caught.message : String(caught));
 				}
@@ -1207,13 +1264,11 @@ const server = createServer(async (request, response) => {
 				const itemId = parts[5] ? decodeURIComponent(parts[5]) : undefined;
 				if (parts.length === 5 && method === "POST") {
 					const input = await body(request);
-					if (typeof input.text !== "string" || !input.text.trim())
-						return error(response, 400, "text is required");
-					const attachments = readAttachments(input.attachments);
-					if (attachments instanceof Error) return error(response, 400, attachments.message);
+					const content = readMessageContent(input);
+					if (content instanceof Error) return error(response, 400, content.message);
 					const files = await readQueuedFiles(input.files);
 					if (files instanceof Error) return error(response, 400, files.message);
-					session.enqueue({ text: input.text.trim(), attachments: attachments ?? [], files });
+					session.enqueue({ text: content.text.trim(), attachments: content.attachments, files });
 					return json(response, 202, session.queueState());
 				}
 				// `queue/steer` steers every queued message; `queue/<id>/steer` one of them.

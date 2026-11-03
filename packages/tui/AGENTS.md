@@ -22,7 +22,7 @@ Inherits the [root rules](../../AGENTS.md). This package is `@step-harness/pi-tu
 
 ## Validation and documentation
 
-- Run root `pnpm run check:tui-no-ai`; run the full `pnpm run check` after code changes.
+- Run root `pnpm run check:tui-no-ai`.
 - Use Node tests here, for example `node --test test/tui-render.test.ts test/tui-alt-screen.test.ts test/truncate-to-width.test.ts`, plus relevant input / overlay / cache regressions.
 - Rendering changes cover narrow terminals, resize, CJK, ANSI, images, and both screen modes. Prefer the virtual terminal over real logins or model services.
 - Update the [package overview](README.md), [editor styling](docs/editor-styling.md), or [product rendering pipeline](../../docs/tui-rendering-pipeline.md), as applicable.

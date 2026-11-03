@@ -159,7 +159,9 @@ const stream = agentLoop(
 
 `shouldStopAfterTurn` runs after `turn_end` is emitted and after the assistant response and any tool executions have completed normally. If it returns `true`, the loop emits `agent_end` and exits before polling steering or follow-up queues, and before starting another LLM call. It does not abort the provider stream, does not cancel running tools, and does not alter the assistant message stop reason. The `AgentOptions` callback also receives the active run's `AbortSignal` as its second argument.
 
-To change the context right before a provider request instead of stopping, set `beforeModelRequest` (on `AgentLoopConfig`, `AgentOptions`, or the `Agent` instance). It runs before every provider request: `phase: "initial"` for the first request of a prompt or `continue()`, and `phase: "follow-up"` for each later request. The context it receives already contains the prompts, completed tool results, and steering injected for that request. Return `{ context, model, thinkingLevel }` replacements, or `undefined` to send the context unchanged. Tool-call markup resampling of the same request does not call it again. On follow-up requests that have not received steering yet, the loop polls steering once more after the hook, so input queued during a long hook such as compaction reaches the same request. `prepareNextTurn` keeps its existing timing: after `turn_end`, before steering is polled.
+To change the context right before a provider request instead of stopping, set `beforeModelRequest` (on `AgentLoopConfig`, `AgentOptions`, or the `Agent` instance). It runs before every provider request: `phase: "initial"` for the first request of a prompt or `continue()`, and `phase: "follow-up"` for each later request. The context it receives already contains the prompts, completed tool results, and steering injected for that request. Return `{ context, model, thinkingLevel }` replacements, or `undefined` to send the context unchanged. On follow-up requests that have not received steering yet, the loop polls steering once more after the hook, so input queued during a long hook such as compaction reaches the same request. `prepareNextTurn` keeps its existing timing: after `turn_end`, before steering is polled.
+
+An assistant turn is incomplete when it ends normally without visible text or an executable tool call, or when it reports `toolUse` without a tool call. The loop records that on the finished message as `AssistantMessage.incomplete`, using `classifyIncompleteAssistantTurn()` from `@step-harness/providers`; it reads text only to decide whether any is visible, never to interpret it, and it does not retry the turn or change the stop reason. Product sessions decide whether to recover them, and report a terminal one as their own run outcome. The former `toolCallLeakRetries` loop option was removed because text matching cannot prove that a turn meant to call a tool.
 
 When you use the `Agent` class, assistant `message_end` processing is treated as a barrier before tool preflight begins. That means `beforeToolCall` sees agent state that already includes the assistant message that requested the tool call.
 
@@ -173,6 +175,17 @@ await agent.continue();
 ```
 
 The last message in context must be `user` or `toolResult` (not `assistant`).
+
+Pass `deliverQueued` when the next turn should start from queued input rather than
+from the transcript. The drained message becomes that request's prompt, which is
+what a caller returning after a decision needs: a follow-up queued behind the
+finishing turn would otherwise wait for a request the model takes without seeing
+it. A retry or a context repair must leave it off — those resume the same work,
+and the message the person queued is meant to arrive after it finishes.
+
+```typescript
+await agent.continue({ deliverQueued: true });
+```
 
 ### Event Types
 
@@ -388,6 +401,17 @@ agent.clearAllQueues();
 ```
 
 Use clearSteeringQueue, clearFollowUpQueue, or clearAllQueues to drop queued messages.
+
+A delivery filter withholds individual messages. `setQueueDeliveryFilter` is asked
+per message whenever the loop takes queued input; a refused message stays queued in
+its original position, so a caller can hold part of the queue without dropping or
+reordering what it releases. In `one-at-a-time` mode the delivered message is the
+oldest one the filter allows.
+
+```typescript
+agent.setQueueDeliveryFilter((message) => isFromPerson(message));
+agent.hasDeliverableQueuedMessage((message) => isFromPerson(message));
+```
 
 When steering messages are detected after a turn completes:
 1. All tool calls from the current assistant message have already finished

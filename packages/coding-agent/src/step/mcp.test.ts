@@ -158,24 +158,27 @@ test("adds the StepPage management link only to successful page deployments", ()
 	expect(appendStepPageManagementHint("other__server", "page_deploy", "result")).toBe("result");
 });
 
-test("a missing executable is reported with the installer command instead of a raw ENOENT", () => {
-	const message = describeMcpStartFailure({
-		name: "steppage__steppage",
-		command: "steppage-mcp",
-		provision: { command: "steppage-mcp", installer: "steppageInstaller" },
-		error: Object.assign(new Error("spawn steppage-mcp ENOENT"), {
-			code: "ENOENT",
-		}),
-		env: {},
-	});
+test.skipIf(process.platform === "win32")(
+	"a missing executable is reported with the installer command instead of a raw ENOENT",
+	() => {
+		const message = describeMcpStartFailure({
+			name: "steppage__steppage",
+			command: "steppage-mcp",
+			provision: { command: "steppage-mcp", installer: "steppageInstaller" },
+			error: Object.assign(new Error("spawn steppage-mcp ENOENT"), {
+				code: "ENOENT",
+			}),
+			env: {},
+		});
 
-	expect(message).toContain("'steppage-mcp' is not installed or not on PATH");
-	expect(message).toContain("curl -fsSL 'https://dl.stepfun.com/steppage-mcp/p/install.sh' | sh");
-	expect(message).toContain("restart Step");
-	expect(message).not.toContain("ENOENT");
-});
+		expect(message).toContain("'steppage-mcp' is not installed or not on PATH");
+		expect(message).toContain("curl -fsSL 'https://dl.stepfun.com/steppage-mcp/p/install.sh' | sh");
+		expect(message).toContain("restart Step");
+		expect(message).not.toContain("ENOENT");
+	},
+);
 
-test("the installer override is honoured in the guidance", () => {
+test.skipIf(process.platform === "win32")("the installer override is honoured in the guidance", () => {
 	const message = describeMcpStartFailure({
 		name: "steppage__steppage",
 		command: "steppage-mcp",

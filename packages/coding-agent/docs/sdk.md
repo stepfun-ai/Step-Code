@@ -13,6 +13,35 @@ The SDK provides programmatic access to step's agent capabilities. Use it to emb
 
 See [examples/sdk/](../examples/sdk/) for working examples from minimal to full control.
 
+## Tool invocation errors and command results
+
+Command tools return exit codes, signals, and execution deadlines as execution
+results, independently from `isError`. Inspect `details.execution` as described
+in [the session format](session-format.md#command-tool-outcomes); do not parse
+status text or assume an error means that no effects occurred. Existing custom
+`BashOperations` returning only `{ exitCode }` remain supported. New adapters
+should return the optional `signal`, `timedOut`, `aborted`, and `timeoutSeconds`
+observations instead of throwing textual command-status markers. Existing
+adapters using those markers must migrate too: a thrown status string is treated
+as an executor fault, not parsed as an execution outcome.
+
+For an invocation failure with observations to retain, custom tools may throw
+`ToolExecutionError` from `@step-harness/agent-core` with an `AgentToolResult`.
+The agent loop keeps its content and details while marking the invocation as an
+error. This does not grant permission to retry or bypass cancellation.
+
+Wire surfaces and statistics that predate this distinction stay compatible: the
+framed stdio host reports a non-success command result as `is_error` on both its
+live event path and `session.messages`, so existing clients do not silently
+treat a failed command as success. Read `details.execution` when you need the
+precise outcome; treat `is_error` as the "was this a successful result"
+question.
+
+The `--mode rpc` and `--mode json` event streams publish the new semantics:
+`tool_execution_end.isError` is `false` for a command that returned a nonzero
+exit, deadline, or signal. Consumers of those streams must read
+`details.execution`; they do not get the compatibility projection.
+
 ## Quick Start
 
 ```typescript
@@ -83,6 +112,9 @@ interface AgentSession {
   sessionFile: string | undefined;
   sessionId: string;
 
+  // Suppress the generic incomplete-turn recovery when the host owns completion.
+  setIncompleteTurnRecoveryEnabled(enabled: boolean): void;
+
   // Model control
   setModel(model: Model): Promise<void>;
   setThinkingLevel(level: ThinkingLevel): void;
@@ -110,6 +142,20 @@ interface AgentSession {
   dispose(): void;
 }
 ```
+
+`setIncompleteTurnRecoveryEnabled()` defaults to `true`. Setting it to `false` suppresses the generic recovery and the run-level `failure` it would report; the `incomplete` classification is still recorded on every assistant message, so the host that owns completion decides the outcome itself. Print mode sets it to `false` when either completion feature (`--completion-check` or `--completion-review`) owns the bounded follow-up for missing output, so the two paths do not each make a model call. For the whole invocation, not just its end: a mid-run empty turn also waits for the checker. Reapply the setting after a runtime replaces the active session.
+
+A run that ends without a usable answer reports it on `agent_settled`, not by rewriting the assistant message:
+
+```typescript
+session.subscribe((event) => {
+  if (event.type !== "agent_settled") return;
+  // { kind: "incomplete_turn", reason: "no_visible_output", message: "…" }
+  if (event.failure) reportRunFailure(event.failure);
+});
+```
+
+Provider errors and cancellations are still visible on the assistant message's `stopReason`. For an incomplete turn the stop reason stays the provider's own value, so a host must not infer success from it: read `event.failure`, or `assistantTerminalFailure(message)` from `@step-harness/providers` for a message that has not settled yet.
 
 Session replacement APIs such as new-session, resume, fork, and import live on `AgentSessionRuntime`, not on `AgentSession`.
 
@@ -303,6 +349,11 @@ session.subscribe((event) => {
       break;
     case "agent_end":
       // Agent finished (event.messages contains new messages)
+      break;
+    case "agent_settled":
+      // Fully settled: no retry, compaction retry, or queued continuation left.
+      // `failure` is set when the run produced no usable answer.
+      if (event.failure) reportRunFailure(event.failure);
       break;
     
     // Turn lifecycle (one LLM response + tool calls)

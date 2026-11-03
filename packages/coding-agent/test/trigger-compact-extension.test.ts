@@ -6,6 +6,7 @@ function createContext(tokens: number | null, compact = vi.fn()): ExtensionConte
 	return {
 		mode: "print",
 		hasUI: false,
+		planReviewSurface: false,
 		ui: {} as ExtensionContext["ui"],
 		cwd: process.cwd(),
 		sessionManager: {} as ExtensionContext["sessionManager"],
@@ -17,6 +18,8 @@ function createContext(tokens: number | null, compact = vi.fn()): ExtensionConte
 		signal: undefined,
 		abort: vi.fn(),
 		hasPendingMessages: () => false,
+		hasPendingUserDecision: () => false,
+		registerAutomaticTurnGuard: () => () => {},
 		shutdown: vi.fn(),
 		getContextUsage: () => ({ tokens, contextWindow: 200_000, percent: tokens === null ? null : tokens / 2000 }),
 		compact,

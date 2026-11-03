@@ -2,46 +2,60 @@
  * `.plan-review`: the proposal an `exit_plan_mode` call submitted, shown when
  * the host has no review dialog of its own.
  *
- * Planning is investigation plus a written proposal, and exiting reports that
- * the investigation finished — it never authorizes the work. So the card asks
- * the user, in two ways the kernel already understands:
+ * The proposal is a submission, not an approval: plan mode stays on until the
+ * user answers, so the model cannot authorize itself and an ordinary question
+ * does not count as consent. The card asks with the two verbs the kernel owns:
  *
- * - "request changes" sends the notes through `/plan`, so the revision round is
- *   planned again and produces a new proposal to review (plan mode itself is
- *   already off when this card is shown);
- * - "approve and run" sends a normal message that authorizes implementation.
+ * - "request changes" sends the notes through `/plan`, which keeps planning and
+ *   produces a new proposal to review;
+ * - "approve and run" sends `/plan approve <hash>`, naming the snapshot this card
+ *   shows, which leaves plan mode and starts the implementation turn as one
+ *   decision.
  *
- * Both are ordinary user messages: the decision lands in the transcript, starts
- * one turn, and needs no special execution channel. The state projection marks
- * only the newest undecided proposal actionable; older cards stay inert (see
- * `settlePlanReviews`).
+ * Both are the kernel's own commands, so they run even while a turn is active: a
+ * decision cannot wait behind the turn it is meant to answer. The card remains
+ * actionable until the session stops reporting its proposal as waiting, so a
+ * decision the kernel refused is never hidden.
+ *
+ * The state projection marks only the newest undecided proposal actionable; older
+ * cards stay inert (see `settlePlanReviews`).
  */
 
 import { useState } from "react";
 import { useT } from "../../i18n";
+import { useAppStore } from "../../state/store";
 import type { PlanReview } from "../../state/types";
 import { Icon } from "../../ui";
-import { sendMessage } from "../composer/actions";
+import { leavePlanMode, sendPlanDecision } from "../composer/actions";
+import { openFile } from "../files/actions";
 
 export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 	const t = useT();
-	const [expanded, setExpanded] = useState(false);
 	const [notes, setNotes] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
-	const [settled, setSettled] = useState(false);
 
 	const send = async (text: string): Promise<void> => {
 		if (busy || !text.trim()) return;
 		setBusy(true);
 		try {
-			// One decision per card: the proposal it answered is no longer current.
-			if (await sendMessage(text)) setSettled(true);
+			// The card stays actionable until the session says it is not: a decision
+			// the kernel refused (the plan file changed under the proposal) must leave
+			// the answer on screen, not hide it behind a card that thinks it is done.
+			await sendPlanDecision(text);
 		} finally {
 			setBusy(false);
 		}
 	};
 
-	const actionable = review.pending && !settled;
+	// `review.pending` is already decided against the session's one waiting
+	// snapshot (see `settlePlanReviews`), and it names a single card: a resubmitted
+	// proposal can carry byte-identical text, so comparing hashes here would make
+	// every earlier round with the same text actionable too. Both places that draw
+	// the card agree because they read the same projection.
+	const actionable = review.pending;
+	// The plan file lives inside the session's workspace, so the preview can read
+	// it by its workspace-relative path.
+	const previewCwd = useAppStore((state) => state.current?.cwd ?? "");
 	// A transcript keeps the cards of earlier rounds as their record. The ids stay
 	// on the one card that can be answered, so they name a single element.
 	const id = (name: string, show: boolean): string | undefined => (show ? name : undefined);
@@ -53,25 +67,23 @@ export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 				<span className="plan-review-heading-title">
 					{t(actionable ? "planReviewPending" : "planReviewSettled")}
 				</span>
+				{/* The proposal is a Markdown file that outlives the round, so reading it
+				 * in full belongs in the file preview rather than in a card that has to
+				 * scroll inside the conversation. */}
 				<button
 					type="button"
 					className="plan-review-more"
-					onClick={() => setExpanded((value) => !value)}
-					aria-expanded={expanded}
+					id={id("planReviewOpen", actionable)}
+					onClick={() => void openFile(previewCwd, review.planFilePath, true)}
 				>
-					{t(expanded ? "planReviewCollapse" : "planReviewExpand")}
+					{t("planReviewOpen")}
 					<Icon name="chevron" size="2xs" />
 				</button>
 			</header>
 			<div className="plan-review-body">
-				<pre className="plan-review-contents" id={id("planReviewContents", actionable)} hidden={!expanded}>
-					{review.planContents}
-				</pre>
-				{expanded ? null : (
-					<p className="plan-review-summary" id={id("planReviewSummary", actionable)}>
-						{firstParagraph(review.planContents)}
-					</p>
-				)}
+				<p className="plan-review-summary" id={id("planReviewSummary", actionable)}>
+					{firstParagraph(review.planContents)}
+				</p>
 			</div>
 			{actionable ? (
 				<footer className="plan-review-actions">
@@ -87,12 +99,25 @@ export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 								<Icon name="pencil" size="xs" />
 								{t("planRequestChanges")}
 							</button>
+							{/* Leaving without running is the third answer, applied now: a
+							 * queued one would arrive after the turn it meant to interrupt. */}
+							<button
+								type="button"
+								className="plan-review-button"
+								id={id("planExit", actionable)}
+								disabled={busy}
+								onClick={() => void leavePlanMode()}
+							>
+								{t("planExit")}
+							</button>
 							<button
 								type="button"
 								className="plan-review-button approve"
 								id={id("planApprove", actionable)}
 								disabled={busy}
-								onClick={() => void send(t("planApproveMessage"))}
+								// Name the snapshot this card shows: a decision that arrives after a
+								// newer submission must not approve that one.
+								onClick={() => void send(`/plan approve ${review.planHash}`)}
 							>
 								{t("planApprove")}
 							</button>
@@ -126,6 +151,22 @@ export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 					)}
 				</footer>
 			) : null}
+		</section>
+	);
+}
+
+/**
+ * The proposal the page is waiting on, as the stream's last element.
+ *
+ * Same card as the transcript record, in the place the questionnaire uses: the
+ * decision is the one thing the page is blocked on, so it sits where the user is
+ * looking rather than scrolling back to the tool row that produced it.
+ */
+export function PlanReviewPanel() {
+	const review = useAppStore((state) => state.pendingPlanReview);
+	return (
+		<section className="plan-review-panel" hidden={!review}>
+			{review ? <PlanReviewCard review={review} /> : null}
 		</section>
 	);
 }

@@ -25,7 +25,14 @@ import type {
 	PrepareNextTurnContext,
 	ThinkingLevel,
 } from "@step-harness/agent-core";
-import { contentText } from "@step-harness/providers";
+import {
+	classifyIncompleteAssistantTurn,
+	contentBlocks,
+	contentText,
+	INCOMPLETE_TURN_MESSAGES,
+	type IncompleteTurnReason,
+	isIncompleteAssistantTurn,
+} from "@step-harness/providers";
 import type {
 	AssistantMessage,
 	AuthResult,
@@ -114,6 +121,12 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
+import {
+	createIncompleteTurnRecoveryMessage,
+	INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
+	incompleteTurnFailureMessage,
+	recordIncompleteTurn,
+} from "./incomplete-turn-recovery.ts";
 import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
@@ -121,6 +134,7 @@ import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts
 import { isRateLimitError, rateLimitDelay } from "./rate-limit.ts";
 import { readRequestUsage } from "./request-provenance.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
+import type { AgentRunFailure } from "./run-failure.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
 import { getLatestCompactionEntry } from "./session-manager.ts";
@@ -135,6 +149,7 @@ import { boundToolResultContent } from "./tools/tool-output.ts";
 import { addUsageToTotals, createUsageTotals, entryUsage } from "./usage-totals.ts";
 
 export { type ParsedSkillBlock, parseSkillBlock } from "../utils/skill-block.ts";
+export type { AgentRunFailure } from "./run-failure.ts";
 
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
@@ -144,7 +159,7 @@ export type AgentSessionEvent =
 			messages: AgentMessage[];
 			willRetry: boolean;
 	  }
-	| { type: "agent_settled" }
+	| { type: "agent_settled"; failure?: AgentRunFailure }
 	| { type: "live_context"; outcome: LiveContextOutcome }
 	| { type: "auto_clm_start"; reason: "native-threshold" | "soft-threshold" }
 	| { type: "auto_clm_end"; result: AutoClmResult }
@@ -208,6 +223,45 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 // Types
 // ============================================================================
 
+/** Whether an assistant message carries a tool call the loop can execute. */
+function hasToolCall(message: AssistantMessage): boolean {
+	return contentBlocks(message).some((block) => block.type === "toolCall");
+}
+
+/**
+ * Whether a finished turn actually produced something.
+ *
+ * Visible text or a structured tool call is progress: the model answered, or it
+ * asked for work it can have executed. Everything else — an empty turn, a
+ * provider error, an abort, a truncated reply — left the task where it was, so it
+ * must not refill a recovery budget.
+ */
+function turnMadeProgress(message: AssistantMessage): boolean {
+	if (hasToolCall(message)) return true;
+	return contentBlocks(message).some(
+		(block) => block.type === "text" && typeof block.text === "string" && block.text.trim().length > 0,
+	);
+}
+
+/**
+ * A view of the message that silent-overflow detection can read.
+ *
+ * Silent overflow is defined for a completed `stop`, because that is the response
+ * a provider accepted while the request no longer fit. A tool-use turn that carries
+ * no call never delivered the work it promised, so it belongs in the same bucket:
+ * without this, an oversized empty tool-use turn would spend the incomplete-turn
+ * recovery on a request that cannot fit.
+ *
+ * A tool-use turn that does carry calls is deliberately excluded. Overflow recovery
+ * removes the assistant message and replays the turn, which would separate those
+ * calls from the results already appended after them.
+ */
+function silentOverflowCandidate(message: AssistantMessage): AssistantMessage {
+	if (message.stopReason !== "toolUse") return message;
+	if (hasToolCall(message)) return message;
+	return { ...message, stopReason: "stop" };
+}
+
 function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<string, string> | undefined {
 	return headers
 		? Object.fromEntries(Object.entries(headers).filter((entry): entry is [string, string] => entry[1] !== null))
@@ -253,6 +307,15 @@ export interface AgentSessionConfig {
 export interface ExtensionBindings {
 	uiContext?: ExtensionUIContext;
 	mode?: ExtensionMode;
+	/**
+	 * The host can show a plan proposal and collect a decision for it.
+	 *
+	 * `mode` and `hasUI` cannot answer this: every rpc host passes a dialog
+	 * bridge, including clients with no plan-review surface. A host that has one
+	 * sets this, and the plan tool hands the proposal over instead of leaving the
+	 * mode by itself.
+	 */
+	planReviewSurface?: boolean;
 	commandContextActions?: ExtensionCommandContextActions;
 	/** Host UI cleanup after the session cancels its run (for example, restore queued input). */
 	abortHandler?: () => void;
@@ -357,6 +420,15 @@ export class AgentSession {
 	private _steeringMessages: string[] = [];
 	/** Tracks pending follow-up messages for UI display. Removed when delivered. */
 	private _followUpMessages: string[] = [];
+	/**
+	 * Queued messages a person wrote, by identity, so the decision gate below can
+	 * tell the user's own words from work a feature queued on their behalf.
+	 *
+	 * Identity, not text: the same words can be queued by both, and queued
+	 * messages are delivered as objects the agent holds. A weak set keeps this
+	 * from outliving the queue.
+	 */
+	private _queuedFromUser = new WeakSet<AgentMessage>();
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
 	/** Context-only custom messages queued during a run, flushed once the current turn's tool results are in. */
@@ -419,8 +491,14 @@ export class AgentSession {
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
 	private _extensionMode: ExtensionMode = "print";
+	/** Whether the bound host can show a plan proposal and collect a decision. */
+	private _extensionPlanReviewSurface = false;
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionAbortHandler?: () => void;
+	/** Predicates that block automatic turn starts until the user answers. */
+	private _automaticTurnGuards = new Set<() => boolean>();
+	/** Guards already reported as failing, so a timer read does not repeat the report. */
+	private _failingTurnGuards = new Set<() => boolean>();
 	private _extensionShutdownHandler?: ShutdownHandler;
 	private _extensionErrorListener?: ExtensionErrorListener;
 	private _extensionErrorUnsubscriber?: () => void;
@@ -440,6 +518,15 @@ export class AgentSession {
 	 * by an unrelated command but never lost — losing it is the bug being fixed.
 	 */
 	private _openCommandTurns: Promise<unknown>[][] = [];
+	/**
+	 * Source of the prompt that is currently running an extension command.
+	 *
+	 * A command handler forwards work with `sendUserMessage`, and whether that
+	 * text may answer a pending decision depends on who typed the command, not on
+	 * the API it used. Tracking the source here keeps every command — built-in or
+	 * third-party — from having to repeat it at each call site.
+	 */
+	private _commandSources: Array<{ source: InputSource }> = [];
 
 	private _modelRuntime: ModelRuntime;
 	private _agentDir?: string;
@@ -458,6 +545,9 @@ export class AgentSession {
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
+		// Installed once: the loop drains the queues long after a run-start check,
+		// so the decision has to be consulted at delivery time.
+		this.agent.setQueueDeliveryFilter(this._queueDeliveryAllowed);
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
 		this._scopedModels = config.scopedModels ?? [];
@@ -708,8 +798,8 @@ export class AgentSession {
 			// request that does not fit. _runAutoCompaction reports its own failures.
 			if (!signal?.aborted) this._recordMaintenanceFault(error);
 		}
-		// Only native compaction rebuilds canonical state. Otherwise keep the loop context, which may
-		// exclude parser-resampled responses, while CLM overlays its existing prefix.
+		// Only native compaction rebuilds canonical state. Otherwise keep the loop context
+		// while CLM overlays its existing prefix.
 		if (getLatestCompactionEntry(this.sessionManager.getBranch())?.id === previousCompaction) return context;
 		return { ...context, messages: this.agent.state.messages.slice() };
 	}
@@ -789,8 +879,8 @@ export class AgentSession {
 				if (!automatic?.attempted) {
 					context = await this._compactBeforeNextAssistantResponse(turn.context);
 				} else if (getLatestCompactionEntry(this.sessionManager.getBranch())?.id !== previousCompaction) {
-					// Only native compaction rebuilds canonical state. Keep parser-resampling
-					// exclusions in the loop context while CLM overlays its existing prefix.
+					// Only native compaction rebuilds canonical state. Keep the loop context
+					// while CLM overlays its existing prefix.
 					context = { ...turn.context, messages: this.agent.state.messages.slice() };
 				}
 			}
@@ -929,7 +1019,6 @@ export class AgentSession {
 		const interrupted = () =>
 			this.agent.hasQueuedMessages() ||
 			this.pendingMessageCount > 0 ||
-			this._pendingCustomMessages.length > 0 ||
 			!this.settingsManager.getCompactionEnabled() ||
 			!this.settingsManager.getAutoClmSettings().enabled ||
 			this.settingsManager.getContextProjectionMode() !== "clm-v1" ||
@@ -1292,9 +1381,13 @@ export class AgentSession {
 
 	private async _emitAgentSettled(): Promise<void> {
 		this._isAgentRunActive = false;
+		// Capture and clear before notifying: a listener may start the next run, and
+		// that run must not inherit this one's failure.
+		const failure = this._runFailure;
+		this._runFailure = undefined;
 		try {
-			await this._extensionRunner.emit({ type: "agent_settled" });
-			this._emit({ type: "agent_settled" });
+			await this._extensionRunner.emit(failure ? { type: "agent_settled", failure } : { type: "agent_settled" });
+			this._emit(failure ? { type: "agent_settled", failure } : { type: "agent_settled" });
 		} finally {
 			this._resolveIdleWaitIfIdle();
 		}
@@ -1302,6 +1395,22 @@ export class AgentSession {
 
 	// Track last assistant message for auto-compaction check
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
+	/** Whether a thinking-only or missing-response turn may start one recovery continuation. */
+	private _incompleteTurnRecoveryEnabled = true;
+	/**
+	 * Consecutive incomplete turns. Any actionable turn, or any user input, resets
+	 * it, so one transient empty response in a long autonomous run recovers while a
+	 * model that keeps producing nothing cannot loop.
+	 */
+	private _incompleteTurnStreak = 0;
+	/** Run-level failure the transcript cannot express; reported on `agent_settled`. */
+	private _runFailure: AgentRunFailure | undefined = undefined;
+	/** Last automatic-compaction failure detail, used to explain a failed incomplete-turn recovery. */
+	private _lastAutoCompactionFailure: string | undefined = undefined;
+	/** Session entry the last assistant message was persisted as, for pairing a recovery. */
+	private _lastAssistantEntryId: string | undefined = undefined;
+	/** Recovery prompt selected at the end of a turn and waiting for its continuation to start. */
+	private _pendingIncompleteTurnRecovery: CustomMessage | undefined = undefined;
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
@@ -1309,26 +1418,35 @@ export class AgentSession {
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
 			this._overflowRecoveryAttempted = false;
+			// User input is a new attempt and the run's outcome is theirs to decide: a
+			// run that recovered once must not turn the next empty response into a
+			// terminal failure, and an earlier empty turn is no longer the outcome.
+			this._incompleteTurnStreak = 0;
+			this._runFailure = undefined;
+			// Blank text is a real queue key: an image-only message is queued under "".
 			const messageText = contentText(event.message.content, "");
-			if (messageText) {
-				// Check steering queue first
-				const steeringIndex = this._steeringMessages.indexOf(messageText);
-				if (steeringIndex !== -1) {
-					this._steeringMessages.splice(steeringIndex, 1);
+			// Check steering queue first
+			const steeringIndex = this._steeringMessages.indexOf(messageText);
+			if (steeringIndex !== -1) {
+				this._steeringMessages.splice(steeringIndex, 1);
+				this._emitQueueUpdate();
+			} else {
+				// Check follow-up queue
+				const followUpIndex = this._followUpMessages.indexOf(messageText);
+				if (followUpIndex !== -1) {
+					this._followUpMessages.splice(followUpIndex, 1);
 					this._emitQueueUpdate();
-				} else {
-					// Check follow-up queue
-					const followUpIndex = this._followUpMessages.indexOf(messageText);
-					if (followUpIndex !== -1) {
-						this._followUpMessages.splice(followUpIndex, 1);
-						this._emitQueueUpdate();
-					}
 				}
 			}
 		}
 
-		// Emit to extensions first
+		// Let message_end handlers replace content first. Classification and every
+		// later consumer must describe the message that is actually persisted.
 		await this._emitExtensionEvent(event, signal);
+
+		if (event.type === "message_end" && event.message.role === "assistant") {
+			this._classifyAssistantTurn(event.message as AssistantMessage);
+		}
 
 		// Notify all listeners
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
@@ -1351,6 +1469,8 @@ export class AgentSession {
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
 				const entryId = this.sessionManager.appendMessage(event.message);
+				// The entry id lets a later recovery message name the turn it answers.
+				if (event.message.role === "assistant") this._lastAssistantEntryId = entryId;
 				if (event.message.role === "assistant" && this._extensionRunner?.hasHandlers("usage_recorded")) {
 					const provenance = readRequestUsage(event.message);
 					if (provenance) await this._extensionRunner.emit({ type: "usage_recorded", entryId, provenance });
@@ -1397,6 +1517,79 @@ export class AgentSession {
 			if (outcome) this._emit({ type: "live_context", outcome });
 		}
 	};
+
+	/**
+	 * Record the turn's structural classification on the message.
+	 *
+	 * The classification is re-derived after extension `message_end` replacement,
+	 * so it always describes the message that is persisted. The provider's stop
+	 * reason is left untouched: only the diagnostic and `incomplete` describe the
+	 * outcome, and consumers that map a run to success read
+	 * `assistantTerminalFailure()`.
+	 */
+	private _classifyAssistantTurn(message: AssistantMessage): void {
+		const reason = classifyIncompleteAssistantTurn(message);
+		// Always describe the message that is persisted, even when this host owns
+		// completion: `incomplete` is a property of the turn, not of our policy.
+		message.incomplete = reason;
+		if (!reason) {
+			// Only real progress refills the budget and resolves the run. An error, an
+			// abort, or a truncated turn also fails to classify as incomplete, but
+			// counting it as progress is what would let "empty, error, empty, error"
+			// recover forever.
+			if (turnMadeProgress(message)) {
+				this._incompleteTurnStreak = 0;
+				this._runFailure = undefined;
+			}
+			return;
+		}
+		const overflowKind = this._getOverflowKind(message);
+		// Record the classification on the message here, before it is persisted, so
+		// the diagnostic survives a reload. A later decision must not edit a message
+		// the transcript already holds.
+		recordIncompleteTurn(message, reason, {
+			streak: this._incompleteTurnStreak + 1,
+			maxAttempts: INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
+			details: { ...(overflowKind ? { overflowKind } : {}) },
+		});
+		if (!this._incompleteTurnRecoveryEnabled) {
+			// The host owns completion: it decides the run's outcome from `incomplete`.
+			// The streak still counts, because the diagnostic records what happened
+			// rather than what this host chose to do about it.
+			this._incompleteTurnStreak += 1;
+			this._runFailure = undefined;
+			return;
+		}
+		this._incompleteTurnStreak += 1;
+		if (this._incompleteTurnStreak > INCOMPLETE_TURN_RECOVERY_ATTEMPTS) {
+			this._recordIncompleteRunFailure(
+				reason,
+				incompleteTurnFailureMessage(reason, {
+					maxAttempts: INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
+				}),
+			);
+			return;
+		}
+		if (overflowKind && !this.settingsManager.getCompactionSettings().enabled) {
+			this._recordIncompleteRunFailure(
+				reason,
+				`${INCOMPLETE_TURN_MESSAGES[reason]} The response also exceeded the model context window, and automatic compaction is disabled.`,
+			);
+			return;
+		}
+		// The recovery continuation may still resolve the run, so this attempt is not
+		// the run's outcome yet.
+		this._runFailure = undefined;
+	}
+
+	private _recordIncompleteRunFailure(reason: IncompleteTurnReason, message_: string): void {
+		this._runFailure ??= { kind: "incomplete_turn", reason, message: message_ };
+	}
+
+	/** Let a host that already owns turn completion suppress the generic recovery. */
+	setIncompleteTurnRecoveryEnabled(enabled: boolean): void {
+		this._incompleteTurnRecoveryEnabled = enabled;
+	}
 
 	private _willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
 		const settings = this.settingsManager.getRetrySettings();
@@ -1474,6 +1667,7 @@ export class AgentSession {
 			const extensionEvent: MessageStartEvent = {
 				type: "message_start",
 				message: event.message,
+				...(event.message.role === "user" ? { fromUser: this._queuedFromUser.has(event.message) } : {}),
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		} else if (event.type === "message_update") {
@@ -1583,6 +1777,9 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		// The filter is this session's, not the agent's: a caller that keeps the
+		// agent must not inherit a rule about a decision nobody owns any more.
+		this.agent.setQueueDeliveryFilter(undefined);
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -1599,6 +1796,8 @@ export class AgentSession {
 		this._liveContext?.dispose();
 		this._disconnectFromAgent();
 		this._eventListeners = [];
+		this._automaticTurnGuards.clear();
+		this._failingTurnGuards.clear();
 		cleanupSessionResources(this.sessionId);
 	}
 
@@ -1634,6 +1833,60 @@ export class AgentSession {
 	/** Current effective system prompt (includes any per-turn extension modifications) */
 	get systemPrompt(): string {
 		return this.agent.state.systemPrompt;
+	}
+
+	/**
+	 * Register a predicate that blocks automatic turn starts.
+	 *
+	 * A turn the user sends always runs: that message is how a pending decision
+	 * gets answered. Everything that would start a turn on the user's behalf —
+	 * an extension's `triggerTurn` message, cron, goal continuation, a background
+	 * lane waking its parent, post-run recovery — asks these predicates first, so
+	 * a feature does not have to know every other starter to keep its own gate.
+	 *
+	 * The predicate reads current session state, so it needs no clearing: once the
+	 * conversation no longer holds the pending decision, it returns false again.
+	 * A throwing guard counts as pending, because a guard that fails must not
+	 * authorize a turn the user has not approved; the error is reported so the
+	 * failure is not silent.
+	 *
+	 * Guards belong to the extension generation that registered them. A reload
+	 * drops them with the runner that owned their context, and the new generation
+	 * registers its own.
+	 *
+	 * @returns unregister function
+	 */
+	registerAutomaticTurnGuard(guard: () => boolean): () => void {
+		this._automaticTurnGuards.add(guard);
+		return () => {
+			this._automaticTurnGuards.delete(guard);
+			this._failingTurnGuards.delete(guard);
+		};
+	}
+
+	/** Whether any guard currently blocks an automatic turn start. */
+	get hasPendingUserDecision(): boolean {
+		for (const guard of this._automaticTurnGuards) {
+			try {
+				if (guard()) return true;
+			} catch (error) {
+				// Fail closed, but say so: a guard that always throws would otherwise
+				// stop every automatic turn with no visible cause. Report once per
+				// guard — the check runs on a timer path — and only while the runner
+				// that registered it is still the live one.
+				if (!this._failingTurnGuards.has(guard)) {
+					this._failingTurnGuards.add(guard);
+					this._extensionErrorListener?.({
+						extensionPath: "automatic-turn-guard",
+						event: "automatic_turn_guard",
+						error: error instanceof Error ? error.message : String(error),
+						stack: error instanceof Error ? error.stack : undefined,
+					});
+				}
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** Current retry attempt (0 if not retrying) */
@@ -1854,6 +2107,11 @@ export class AgentSession {
 		const runAbortController = new AbortController();
 		this._agentRunAbortController = runAbortController;
 		this._isAgentRunActive = true;
+		// A run starts with a clean recovery budget. The streak itself survives only
+		// as the count of consecutive empty turns, which user input resets.
+		this._incompleteTurnStreak = 0;
+		this._runFailure = undefined;
+		this._lastAutoCompactionFailure = undefined;
 		try {
 			const incoming = Array.isArray(messages) ? messages : [messages];
 			const context = {
@@ -1915,14 +2173,31 @@ export class AgentSession {
 						}
 					: undefined;
 			await this.agent.prompt(messages);
-			while (
-				!runAbortController.signal.aborted &&
-				(await this._handlePostAgentRun()) &&
-				!runAbortController.signal.aborted
-			) {
-				await this.agent.continue();
+			while (!runAbortController.signal.aborted) {
+				const next = await this._handlePostAgentRun();
+				if (next === "stop" || runAbortController.signal.aborted) break;
+				// The recovery is a prompt of its own: the empty turn is the last message, so
+				// `continue()` would have nothing to continue from, and the follow-up has to
+				// reach the model as new input rather than as a queued steering line.
+				const recovery = this._pendingIncompleteTurnRecovery;
+				this._pendingIncompleteTurnRecovery = undefined;
+				if (recovery) {
+					await this.agent.prompt(recovery);
+					continue;
+				}
+				// Only the queued-work decision turns a waiting message into this turn's
+				// input. A retry or a context repair resumes the same work, and a message
+				// the person queued behind it is meant to arrive after it finishes.
+				await this.agent.continue({ deliverQueued: next === "deliver" });
 			}
 		} finally {
+			// The user's cancellation outranks our diagnosis: a terminal empty turn can
+			// be classified before they stop the run, and reporting that as the outcome
+			// of a run they ended themselves would turn their pause into a failure.
+			if (runAbortController.signal.aborted) this._runFailure = undefined;
+			this._pendingIncompleteTurnRecovery = undefined;
+			this._lastAssistantEntryId = undefined;
+			this._incompleteTurnStreak = 0;
 			this._checkedInitialRequest = undefined;
 			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
@@ -1939,18 +2214,18 @@ export class AgentSession {
 		}
 	}
 
-	private async _handlePostAgentRun(): Promise<boolean> {
+	private async _handlePostAgentRun(): Promise<"stop" | "retry" | "recover" | "deliver" | "recover-incomplete"> {
 		const msg = this._lastAssistantMessage;
 		this._lastAssistantMessage = undefined;
 		if (!msg) {
-			return false;
+			return "stop";
 		}
 
 		if (this._isRetryableError(msg) && (await this._prepareRetry(msg))) {
-			return true;
+			return "retry";
 		}
 
-		if (this._agentRunAbortController?.signal.aborted) return false;
+		if (this._agentRunAbortController?.signal.aborted) return "stop";
 
 		if (msg.stopReason === "error" && this._retryAttempt > 0) {
 			this._emit({
@@ -1963,29 +2238,108 @@ export class AgentSession {
 			this._rateLimitRetryAttempt = 0;
 		}
 
+		// The turn ended on a decision the user has not answered yet. Continuing here
+		// would run a queued input, or a compaction recovery request, on the user's
+		// behalf; the recovered work starts from the user's next prompt instead.
+		//
+		// The user's own words are not that. A prompt they typed before the decision
+		// existed is how they answer it, whether it arrived mid-turn or after, so it
+		// still runs — otherwise their request waits behind a gate only they can
+		// open, with nothing left on screen to open it.
+		if (this.hasPendingUserDecision && !this.agent.hasDeliverableQueuedMessage(this._queueDeliveryAllowed)) {
+			// Overflow and truncation recovery repair the transcript so the next
+			// request fits. They are maintenance, not work on the user's behalf, so a
+			// decision still holds them off from *starting* anything but lets them run:
+			// threshold compaction stays deferred to the next request either way. An
+			// empty turn's recovery is the opposite — it is work on the user's behalf —
+			// so it waits for the decision to be answered.
+			return (await this._checkCompaction(msg, true, true)) ? "recover" : "stop";
+		}
+
+		const incompleteReason = this._incompleteTurnRecoveryEnabled ? msg.incomplete : undefined;
+		const incomplete = incompleteReason !== undefined;
+		const overflowKind = incomplete ? this._getOverflowKind(msg) : undefined;
+		const compactionBefore = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
+
 		// CLM maintains context for a future request. A successful settled answer
 		// needs no extra model call; the next prompt/continuation performs the
 		// same threshold check with its new instructions. Explicit maintenance
 		// commands, recovery and extension-queued continuations retain their path.
 		if (
+			!incomplete &&
 			this.settingsManager.getContextProjectionMode() === "clm-v1" &&
 			!this._manualClm &&
 			msg.stopReason === "stop" &&
 			!this.agent.hasQueuedMessages() &&
 			this.pendingMessageCount === 0
 		) {
-			return false;
+			return "stop";
 		}
 
 		// Under the v2 trigger policy, threshold compaction waits for the next request's
 		// before-request check; only overflow and truncation recovery run here.
 		if (await this._checkCompaction(msg, true, this._usesTriggerPolicyV2())) {
-			return true;
+			return "recover";
 		}
 
-		// The agent loop drains both queues before emitting agent_end. Any messages
-		// here were queued by agent_end extension handlers and need a continuation.
-		return this.agent.hasQueuedMessages();
+		if (incomplete) {
+			// A cancellation during compaction must settle quietly: the user already
+			// ended the run, and their cancellation outranks our diagnosis.
+			if (this._agentRunAbortController?.signal.aborted) {
+				this._runFailure = undefined;
+				return "stop";
+			}
+			// Silent overflow must compact before another request. If compaction did
+			// not commit, do not spend the recovery on a context that cannot fit.
+			// An incomplete turn can only carry a context overflow here: the classifier
+			// excludes length stops, which are the only other overflow kind. This is the
+			// one place where even the person's own queued words do not run first: the
+			// request they would join cannot fit, so it would fail as well.
+			if (
+				overflowKind &&
+				// Compaction being disabled was already terminal at classification time.
+				this.settingsManager.getCompactionSettings().enabled &&
+				getLatestCompactionEntry(this.sessionManager.getBranch())?.id === compactionBefore
+			) {
+				// The assistant message already reached listeners and the transcript at
+				// message_end, and its stop reason is the provider's own value. Report the
+				// run-level failure instead of rewriting the message: a message the
+				// transcript already holds must not change under it.
+				const detail = this._lastAutoCompactionFailure;
+				const message = detail
+					? `Cannot recover an incomplete assistant turn because automatic compaction did not complete: ${detail}`
+					: "Cannot recover an incomplete assistant turn because automatic compaction did not complete.";
+				this._recordIncompleteRunFailure(incompleteReason, message);
+				return "stop";
+			}
+			// Let the user's own queued input run first. If it resolves the turn, the old
+			// incomplete response stays in context without forcing a stale retry. This runs
+			// after the overflow guard because queued input cannot make a request that still
+			// exceeds the context window succeed, and before the decision gate because the
+			// person's own words are how they answer it.
+			if (this.agent.hasDeliverableQueuedMessage(this._queueDeliveryAllowed)) return "deliver";
+			// Compaction awaits provider auth and extension hooks, so a decision may have
+			// become pending while it ran; re-check it here, after that window. The recovery
+			// itself is work on the user's behalf and waits for their answer — the queue
+			// above already released the words they wrote.
+			if (this.hasPendingUserDecision) return "stop";
+			// The turn is already terminal — a repeated empty turn, or an overflow that
+			// could not be compacted because compaction is disabled. Nothing left to try
+			// here; a compaction may still have run above, which only helps the next
+			// prompt fit.
+			if (this._runFailure) return "stop";
+			this._pendingIncompleteTurnRecovery = createIncompleteTurnRecoveryMessage(incompleteReason, {
+				recoversEntryId: this._lastAssistantEntryId,
+				attempt: this._incompleteTurnStreak,
+				maxAttempts: INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
+			});
+			return "recover-incomplete";
+		}
+
+		// The agent loop drains both queues before emitting agent_end, except when a
+		// tool result ended the turn first. Messages here were queued by `agent_end`
+		// handlers, or were still pending when a control barrier ended the run.
+		return this.agent.hasDeliverableQueuedMessage(this._queueDeliveryAllowed) ? "deliver" : "stop";
 	}
 
 	/**
@@ -2008,7 +2362,11 @@ export class AgentSession {
 			if (expandPromptTemplates && text.startsWith("/")) {
 				// A command is accepted as soon as its handler returns for prompt
 				// purposes, even though the turn it started may still be running.
-				const handled = await this._tryExecuteExtensionCommand(text, () => preflightResult?.(true));
+				const handled = await this._tryExecuteExtensionCommand(
+					text,
+					() => preflightResult?.(true),
+					options?.source ?? "interactive",
+				);
 				if (handled) {
 					// Extension command executed, no prompt to send
 					return;
@@ -2056,10 +2414,19 @@ export class AgentSession {
 					);
 				}
 				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
+					await this._queueFollowUp(expandedText, currentImages, options?.source);
 				} else {
-					await this._queueSteer(expandedText, currentImages);
+					await this._queueSteer(expandedText, currentImages, options?.source);
 				}
+				preflightResult?.(true);
+				return;
+			}
+
+			// An extension-started turn must not run past a decision the user has not
+			// answered; the message waits for the turn that answers it. A user's own
+			// message always runs, because that is how the decision gets answered.
+			if (options?.source === "extension" && this.hasPendingUserDecision) {
+				await this._queueFollowUp(expandedText, currentImages, options.source);
 				preflightResult?.(true);
 				return;
 			}
@@ -2110,11 +2477,16 @@ export class AgentSession {
 			if (currentImages) {
 				userContent.push(...currentImages);
 			}
-			messages.push({
+			const userMessage: AgentMessage = {
 				role: "user",
 				content: userContent,
 				timestamp: Date.now(),
-			});
+			};
+			// A prompt a person typed is theirs, whatever delivered it. Recorded by
+			// identity so the delivery rule and the delivery event can tell it from
+			// work an extension queued on their behalf.
+			if ((options?.source ?? "interactive") !== "extension") this._queuedFromUser.add(userMessage);
+			messages.push(userMessage);
 
 			// Inject any pending "nextTurn" messages as context alongside the user message
 			for (const msg of this._pendingNextTurnMessages) {
@@ -2168,7 +2540,11 @@ export class AgentSession {
 	/**
 	 * Try to execute an extension command. Returns true if command was found and executed.
 	 */
-	private async _tryExecuteExtensionCommand(text: string, onAccepted?: () => void): Promise<boolean> {
+	private async _tryExecuteExtensionCommand(
+		text: string,
+		onAccepted?: () => void,
+		source: InputSource = "interactive",
+	): Promise<boolean> {
 		// Parse command name and args
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
@@ -2186,7 +2562,12 @@ export class AgentSession {
 		const ctx = this._extensionRunner.createCommandContext();
 
 		const turns: Promise<unknown>[] = [];
+		// The source entry travels with its own handler: two commands can overlap and
+		// finish out of order, and removing by position keeps each one's source with
+		// the work it forwarded.
+		const sourceEntry = { source };
 		this._openCommandTurns.push(turns);
+		this._commandSources.push(sourceEntry);
 		try {
 			await command.handler(args, ctx);
 		} catch (err) {
@@ -2197,8 +2578,10 @@ export class AgentSession {
 				error: err instanceof Error ? err.message : String(err),
 			});
 		} finally {
-			const index = this._openCommandTurns.indexOf(turns);
-			if (index !== -1) this._openCommandTurns.splice(index, 1);
+			const turnIndex = this._openCommandTurns.indexOf(turns);
+			if (turnIndex !== -1) this._openCommandTurns.splice(turnIndex, 1);
+			const sourceIndex = this._commandSources.indexOf(sourceEntry);
+			if (sourceIndex !== -1) this._commandSources.splice(sourceIndex, 1);
 		}
 
 		// The handler may have handed work to the agent and returned. Acceptance is
@@ -2291,35 +2674,44 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
-	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+	/**
+	 * Whether this queued message may be delivered now.
+	 *
+	 * A pending decision holds work that would run on the user's behalf — a goal
+	 * continuation, a cron delivery, a lane waking its parent. It does not hold
+	 * what the user wrote: their message is how they answer, and it may be waiting
+	 * in the queue from before the decision existed. Asked per message, because
+	 * the loop delivers a batch at a time and would otherwise carry the refused
+	 * work along with the allowed one.
+	 */
+	private _queueDeliveryAllowed = (message: AgentMessage): boolean =>
+		!this.hasPendingUserDecision || this._queuedFromUser.has(message);
+
+	private async _queueSteer(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
 		this._steeringMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.steer({
-			role: "user",
-			content,
-			timestamp: Date.now(),
-		});
+		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		if (source !== "extension") this._queuedFromUser.add(message);
+		this.agent.steer(message);
 	}
 
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
-	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueFollowUp(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
 		this._followUpMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.followUp({
-			role: "user",
-			content,
-			timestamp: Date.now(),
-		});
+		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		if (source !== "extension") this._queuedFromUser.add(message);
+		this.agent.followUp(message);
 	}
 
 	/**
@@ -2372,7 +2764,15 @@ export class AgentSession {
 				this.agent.steer(appMessage);
 			}
 		} else if (options?.triggerTurn) {
-			await this._runAgentPrompt(appMessage);
+			if (this.hasPendingUserDecision) {
+				// A decision the user has not answered blocks automatic starts. Hold the
+				// message in the pending set the session already owns, so it lands as
+				// context in the turn that answers the decision: queuing it on the agent
+				// would bypass the queue ledger and vanish on abort.
+				this._pendingCustomMessages.push(appMessage);
+			} else {
+				await this._runAgentPrompt(appMessage);
+			}
 		} else if (this.isStreaming) {
 			// Appending now would put the message between an assistant tool call and its
 			// result, which providers that validate message order reject on replay. Defer
@@ -2399,10 +2799,17 @@ export class AgentSession {
 	/**
 	 * Append custom messages queued while the agent was running.
 	 * Called once the current turn's tool results are in agent state and session history.
+	 *
+	 * A pending decision holds them, like every other message no person wrote: these
+	 * are context an extension queued on the user's behalf, and the rule that keeps
+	 * automatic work out of a turn applies to them too. They flush once the decision
+	 * is answered — at that turn's end, or at the next one.
 	 */
 	private _flushPendingCustomMessages(): void {
 		if (this._pendingCustomMessages.length === 0) return;
-
+		// Held like any other message no person wrote: it flushes once the decision is
+		// answered, not into a question typed while it waits.
+		if (this.hasPendingUserDecision) return;
 		const pending = this._pendingCustomMessages;
 		this._pendingCustomMessages = [];
 		for (const appMessage of pending) {
@@ -2451,7 +2858,11 @@ export class AgentSession {
 			expandPromptTemplates: options?.expandPromptTemplates ?? false,
 			streamingBehavior: options?.deliverAs,
 			images,
-			source: options?.source ?? "extension",
+			// A command handler forwarding the user's own request passes that origin
+			// through: the user typed the command, so the text may answer a pending
+			// decision. Outside a command, the default keeps extension-generated
+			// text behind the gate.
+			source: options?.source ?? this._commandSources.at(-1)?.source ?? "extension",
 		});
 	}
 
@@ -2465,6 +2876,9 @@ export class AgentSession {
 		const followUp = [...this._followUpMessages];
 		this._steeringMessages = [];
 		this._followUpMessages = [];
+		// Custom messages held behind a pending decision are queue entries too:
+		// leaving them would deliver content the caller believes it cleared.
+		this._pendingCustomMessages = [];
 		this.agent.clearAllQueues();
 		this._emitQueueUpdate();
 		return { steering, followUp };
@@ -2472,7 +2886,7 @@ export class AgentSession {
 
 	/** Number of pending messages (includes both steering and follow-up) */
 	get pendingMessageCount(): number {
-		return this._steeringMessages.length + this._followUpMessages.length;
+		return this._steeringMessages.length + this._followUpMessages.length + this._pendingCustomMessages.length;
 	}
 
 	/** Get pending steering messages (read-only) */
@@ -3002,6 +3416,26 @@ export class AgentSession {
 	}
 
 	/**
+	 * Classify a response as a context overflow or a recoverable truncated response.
+	 */
+	private _getOverflowKind(assistantMessage: AssistantMessage): "context" | "length" | undefined {
+		const contextWindow = this.model?.contextWindow ?? 0;
+
+		// Do not apply overflow recovery from a different model's response after a
+		// model switch, or from a response older than the latest compaction.
+		const sameModel =
+			this.model && assistantMessage.provider === this.model.provider && assistantMessage.model === this.model.id;
+		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
+		if (compactionEntry !== null && assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime()) {
+			return undefined;
+		}
+		if (!sameModel) return undefined;
+		if (isContextOverflow(silentOverflowCandidate(assistantMessage), contextWindow)) return "context";
+		if (isRecoverableLength(assistantMessage, this.model?.maxTokens ?? 0)) return "length";
+		return undefined;
+	}
+
+	/**
 	 * Dispatch automatic compaction after `agent_end` or before prompt submission.
 	 * Manual compaction does not call this method; it enters through `compact()`.
 	 *
@@ -3035,31 +3469,26 @@ export class AgentSession {
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return false;
 
 		const contextWindow = this.model?.contextWindow ?? 0;
-
-		// Skip overflow check if the message came from a different model.
-		// This handles the case where user switched from a smaller-context model (e.g. opus)
-		// to a larger-context model (e.g. codex) - the overflow error from the old model
-		// shouldn't trigger compaction for the new model.
-		const sameModel =
-			this.model && assistantMessage.provider === this.model.provider && assistantMessage.model === this.model.id;
-
-		// Skip compaction checks if this assistant message is older than the latest
-		// compaction boundary. This prevents a stale pre-compaction usage/error
-		// from retriggering compaction on the first prompt after compaction.
 		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
-		const assistantIsFromBeforeCompaction =
-			compactionEntry !== null && assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
-		if (assistantIsFromBeforeCompaction) {
+		// Skip compaction checks if this assistant message is older than the latest
+		// compaction boundary. This prevents stale pre-compaction usage from
+		// retriggering threshold or overflow compaction on the first prompt after one.
+		if (compactionEntry !== null && assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime()) {
 			return false;
 		}
 
 		// Automatic cases 1 and 2: context overflow.
 		// A length stop is recoverable when output ended below the model's original desired limit,
 		// independent of the configured context size or any context-clamped provider request limit.
-		const contextOverflow = sameModel && isContextOverflow(assistantMessage, contextWindow);
-		const recoverableLength = sameModel && isRecoverableLength(assistantMessage, this.model?.maxTokens ?? 0);
-		if (contextOverflow || recoverableLength) {
-			const willRetry = assistantMessage.stopReason !== "stop";
+		const overflowKind = this._getOverflowKind(assistantMessage);
+		if (overflowKind) {
+			const contextOverflow = overflowKind === "context";
+			// An empty turn is never replayed. Case 1 removes the assistant message and
+			// calls `agent.continue()`, and a compaction that restores that message
+			// leaves an assistant at the tail, which `continue()` rejects. The
+			// incomplete-turn recovery sends its own prompt instead, so this path only
+			// has to make room.
+			const willRetry = assistantMessage.stopReason !== "stop" && !isIncompleteAssistantTurn(assistantMessage);
 
 			// Case 2: the response completed successfully. Compact, but do not retry because
 			// agent.continue() cannot continue from a completed assistant response.
@@ -3068,6 +3497,9 @@ export class AgentSession {
 			}
 
 			if (this._overflowRecoveryAttempted) {
+				// The attempt that just failed is the one worth reporting; a detail left
+				// from an earlier compaction would describe a different failure.
+				this._lastAutoCompactionFailure = undefined;
 				const errorMessage = contextOverflow
 					? "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model."
 					: "Truncated response recovery failed after one compact-and-retry attempt.";
@@ -3140,7 +3572,9 @@ export class AgentSession {
 				{ systemPrompt: this.systemPrompt, messages: this.agent.state.messages, tools: this.agent.state.tools },
 				this._agentRunAbortController?.signal,
 			);
-			if (automatic?.attempted) return this.agent.hasQueuedMessages();
+			// Held work does not justify a maintenance turn: the decision is still
+			// waiting, and a turn taken for it would deliver nothing.
+			if (automatic?.attempted) return this.agent.hasDeliverableQueuedMessage(this._queueDeliveryAllowed);
 			return await this._runAutoCompaction("threshold", false);
 		}
 		return false;
@@ -3157,6 +3591,7 @@ export class AgentSession {
 	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+		this._lastAutoCompactionFailure = undefined;
 		const runSignal = this._agentRunAbortController?.signal;
 		if (runSignal?.aborted) return false;
 		if (reason === "threshold" && this._blocksNativeThreshold()) return false;
@@ -3168,6 +3603,7 @@ export class AgentSession {
 
 		try {
 			if (!this.model) {
+				this._lastAutoCompactionFailure = "No model is selected.";
 				return false;
 			}
 
@@ -3185,6 +3621,9 @@ export class AgentSession {
 				preparation && this._getLiveContext()?.prepareCompaction(preparation, this.agent.state.messages);
 			if (liveCompaction) preparation = liveCompaction.preparation;
 			if (!preparation) {
+				// Nothing old enough to summarize. The caller reports this as the reason
+				// it could not make room, instead of a bare "did not complete".
+				this._lastAutoCompactionFailure = "No older history could be summarized.";
 				return false;
 			}
 
@@ -3206,6 +3645,8 @@ export class AgentSession {
 				})) as SessionBeforeCompactResult | undefined;
 
 				if (extensionResult?.cancel) {
+					// Not an exception, but still the reason a caller could not make room.
+					this._lastAutoCompactionFailure = "An extension cancelled compaction.";
 					this._emit({
 						type: "compaction_end",
 						reason,
@@ -3331,17 +3772,20 @@ export class AgentSession {
 			}
 
 			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-			// Continue once so queued messages are delivered.
-			return this.agent.hasQueuedMessages();
+			// Continue once so queued messages are delivered — the ones the decision
+			// allows; work it holds stays queued for the turn that answers it.
+			return this.agent.hasDeliverableQueuedMessage(this._queueDeliveryAllowed);
 		} catch (error) {
 			if (started) {
 				const aborted = this._autoCompactionAbortController?.signal.aborted ?? false;
 				const failureDetails = aborted ? undefined : this._recordCompactionFailure(error, reason);
+				if (aborted) this._lastAutoCompactionFailure = "Automatic compaction was cancelled.";
 				let formattedErrorMessage = aborted
 					? undefined
 					: reason === "overflow"
 						? `Context overflow recovery failed: ${failureDetails}`
 						: `Auto-compaction failed: ${failureDetails}`;
+				if (formattedErrorMessage) this._lastAutoCompactionFailure = formattedErrorMessage;
 				// A throw after the compaction was persisted (for example from a session_compact
 				// handler) is not a failed compaction, so it does not count toward the pause.
 				if (!aborted && !committed && reason === "threshold") {
@@ -3392,6 +3836,9 @@ export class AgentSession {
 		}
 		if (bindings.mode !== undefined) {
 			this._extensionMode = bindings.mode;
+		}
+		if (bindings.planReviewSurface !== undefined) {
+			this._extensionPlanReviewSurface = bindings.planReviewSurface;
 		}
 		if (bindings.commandContextActions !== undefined) {
 			this._extensionCommandContextActions = bindings.commandContextActions;
@@ -3574,6 +4021,7 @@ export class AgentSession {
 				getScopedModels: () => this._scopedModels,
 				isIdle: () => this.isIdle,
 				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
+				hasPlanReviewSurface: () => this._extensionPlanReviewSurface,
 				getSignal: () => this.agent.signal,
 				abort: () => {
 					this._abortCurrentRun();
@@ -3581,6 +4029,8 @@ export class AgentSession {
 					this._extensionAbortHandler?.();
 				},
 				hasPendingMessages: () => this.pendingMessageCount > 0,
+				hasPendingUserDecision: () => this.hasPendingUserDecision,
+				registerAutomaticTurnGuard: (guard) => this.registerAutomaticTurnGuard(guard),
 				shutdown: () => {
 					this._extensionShutdownHandler?.();
 				},
@@ -3773,6 +4223,12 @@ export class AgentSession {
 		const previousFlagValues = oldRunner.getFlagValues();
 		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
 		oldRunner.invalidate();
+		// Guards close over the runner's context, which is now stale: reading it
+		// throws, and a failing guard blocks every automatic turn. Drop them with
+		// the generation that registered them; the new one registers its own when
+		// `session_start` fires below.
+		this._automaticTurnGuards.clear();
+		this._failingTurnGuards.clear();
 		await this.settingsManager.reload();
 		this.syncQueueModesFromSettings();
 		resetApiProviders();
@@ -3986,6 +4442,7 @@ export class AgentSession {
 			cancelled: result.cancelled,
 			truncated: result.truncated,
 			fullOutputPath: result.fullOutputPath,
+			execution: result.execution,
 			timestamp: Date.now(),
 			excludeFromContext: options?.excludeFromContext,
 		};

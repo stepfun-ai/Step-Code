@@ -15,7 +15,6 @@ Inherits the [root rules](../AGENTS.md). This directory owns repository checks, 
 - Extend existing scripts and root commands rather than create parallel check systems. Resolve paths from script / repository locations and support documented invocation directories.
 - Fix implementations when guards fail. Do not broaden exemptions, remove fixtures, or refresh baselines to conceal boundary violations. Justify legitimate rule changes and cover both valid and invalid cases.
 - Distinguish real source scans, tracked-tree / staged checks, and synthetic self-tests. New files must not escape validation because they are not yet tracked.
-- Register new workspaces in all three sources. Keep exact dependency versions and lockfiles consistent with dependency changes; respect existing commit checks and do not skip hooks.
 - Put temporary experiments in temporary directories and persistent outputs in established locations such as `dist/` / `.artifacts/`. Clean up only directories you created and can verify ownership of.
 - Use structured subprocess arguments and check exit statuses. Separate protocol stdout from diagnostics; never log real credentials or complete sensitive environments.
 - Public release tooling provides only existing local build capabilities. Do not add private uploads, endpoints, or protected-tag operations here.
@@ -23,6 +22,6 @@ Inherits the [root rules](../AGENTS.md). This directory owns repository checks, 
 
 ## Validation and documentation
 
-- Run root `pnpm run test:scripts`. Guard changes also run the corresponding real scan and `--self-test`; code changes run the full `pnpm run check`.
+- Run root `pnpm run test:scripts`. Guard changes also run the corresponding real scan and `--self-test`.
 - For shell changes, run `bash -n <script-path>`, then offline fixtures / dry-runs to verify actual arguments and failure paths.
 - Keep root commands, CI, and [contribution requirements](../CONTRIBUTING.md) consistent. Update the relevant rules when changing layers or public boundaries.

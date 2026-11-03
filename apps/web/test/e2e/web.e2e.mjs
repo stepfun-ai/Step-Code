@@ -926,21 +926,23 @@ test(
 			return until(() => $("[data-model-row='e2e-model-large'] [data-model-field='maxTokens']"), "the max-output field");
 		};
 		const first = await openEditor();
-		// A stored row starts folded; its chevron opens the parameter panel.
+		// A stored row starts open so its parameters are visible; the chevron folds and reopens it.
 		const panel = first.closest(".settings-model-details");
-		const startedClosed = panel.hidden;
+		const startedOpen = !panel.hidden;
 		const chevron = $("[data-model-row='e2e-model-large'] .settings-model-expand");
 		chevron.click();
-		await until(() => !panel.hidden && chevron.getAttribute("aria-expanded") === "true", "the opened parameter panel");
+		await until(() => panel.hidden && chevron.getAttribute("aria-expanded") === "false", "the folded parameter panel");
+		chevron.click();
+		await until(() => !panel.hidden && chevron.getAttribute("aria-expanded") === "true", "the reopened parameter panel");
 		const before = {
 			value: first.value,
 			placeholder: first.placeholder,
 			title: first.closest("label").querySelector("span").textContent,
 		};
 		// React's onChange listens for a bubbling input event; a plain value assignment would be missed.
-		Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(first, "64000");
+		Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(first, "32000");
 		first.dispatchEvent(new Event("input", { bubbles: true }));
-		await until(() => first.value === "64000", "the typed max-output value");
+		await until(() => first.value === "32000", "the typed max-output value");
 		const threshold = $("[data-model-row='e2e-model-large'] [data-model-field='compactionThreshold']");
 		const setValue = (input, value) => {
 			Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, value);
@@ -965,14 +967,14 @@ test(
 		const reopenedThreshold = $("[data-model-row='e2e-model-large'] [data-model-field='compactionThreshold']").value;
 		$("#settingsModelEditor .settings-form-footer button[type='button']").click();
 		await until(() => !$("#settingsModelEditor"), "the editor to close after cancelling");
-		return { before, saved, reopened, heldOpen, savedThreshold, reopenedThreshold, startedClosed };
+		return { before, saved, reopened, heldOpen, savedThreshold, reopenedThreshold, startedOpen };
 	`)
     assert.equal(maxOutput.before.value, "", "a model saved without a cap keeps the field empty")
     assert.equal(maxOutput.before.title, "最大输出")
-    assert.match(maxOutput.before.placeholder, /16384/u, "the placeholder names the kernel default")
-    assert.equal(maxOutput.saved, 64000, "the typed cap reaches models.json")
-    assert.equal(maxOutput.reopened, "64000", "the stored cap comes back into the form")
-    assert.equal(maxOutput.startedClosed, true, "a stored model's parameters start folded")
+    assert.match(maxOutput.before.placeholder, /64000/u, "the placeholder names the value a blank field saves")
+    assert.equal(maxOutput.saved, 32000, "the typed cap reaches models.json")
+    assert.equal(maxOutput.reopened, "32000", "the stored cap comes back into the form")
+    assert.equal(maxOutput.startedOpen, true, "a stored model's parameters start open")
     assert.equal(maxOutput.heldOpen, true, "an out-of-range threshold keeps the editor open on that row")
     assert.equal(maxOutput.savedThreshold, 0.7, "the threshold is saved as the model's trigger ratio")
     assert.equal(maxOutput.reopenedThreshold, "0.7", "the stored threshold comes back into the form")
@@ -1593,7 +1595,7 @@ test("clarification pages restore after reload, preserve drafts and auto-submit 
   await browser.goto(`${origin}/`);
   await browser.run(`
     const row = await until(() => $("[data-session-id='${id}']"), "session row"); row.click();
-    await until(() => !$(".clarification-panel").hidden, "restored questions");
+    await until(() => $(".clarification-panel")?.hidden === false, "restored questions");
   `);
   const answered = await browser.run(`
     const page = () => $(".clarification-page").textContent.trim();
@@ -1619,7 +1621,7 @@ test("clarification pages restore after reload, preserve drafts and auto-submit 
     const original = window.fetch;
     window.fetch = (...args) => { if (String(args[0]).includes("/clarifications/response")) replies++; return original(...args); };
     const choice = $(".clarification-option"); choice.click(); choice.click();
-    await until(() => $(".clarification-panel").hidden, "automatic submission");
+    await until(() => $(".clarification-panel")?.hidden !== false, "automatic submission");
     window.fetch = original;
     await until(async () => (await (await fetch("/api/v1/sessions/${id}")).json()).status === "completed", "agent resume and write");
     return { first, draft, imePage, replies };
@@ -1638,17 +1640,17 @@ test("clarification close cancels the pending tool and a single freeform answer 
   await browser.run(`
     const active = $(".session-row.active").dataset.sessionId;
     await fetch("/api/v1/sessions/" + active + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "clarification fixture again" }) });
-    await until(() => !$(".clarification-panel").hidden, "new questions");
+    await until(() => $(".clarification-panel")?.hidden === false, "new questions");
     // The close control is targeted by its stable id, not its icon label.
     $("#clarificationClose").click();
-    await until(() => $(".clarification-panel").hidden, "cancelled card");
+    await until(() => $(".clarification-panel")?.hidden !== false, "cancelled card");
     await until(async () => (await (await fetch("/api/v1/sessions/" + active)).json()).status === "completed", "cancelled turn settles");
     await fetch("/api/v1/sessions/" + active + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "freeform-only" }) });
-    await until(() => !$(".clarification-panel").hidden && $(".clarification-custom textarea"), "freeform-only question");
+    await until(() => $(".clarification-panel")?.hidden === false && $(".clarification-custom textarea"), "freeform-only question");
     const editor = $(".clarification-custom textarea"); editor.value = "single answer"; editor.dispatchEvent(new Event("input"));
     await until(() => !$(".clarification-confirm").disabled, "custom input update");
     editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await until(() => $(".clarification-panel").hidden, "single automatic send");
+    await until(() => $(".clarification-panel")?.hidden !== false, "single automatic send");
     await until(async () => (await (await fetch("/api/v1/sessions/" + active)).json()).status === "completed", "single turn settles");
   `);
 });
@@ -1657,7 +1659,7 @@ test("paging ahead never submits unanswered questions, and failed auto-send can 
   const result = await browser.run(`
     const active = $(".session-row.active").dataset.sessionId;
     await fetch("/api/v1/sessions/" + active + "/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "clarification fixture retry" }) });
-    await until(() => !$(".clarification-panel").hidden, "questions");
+    await until(() => $(".clarification-panel")?.hidden === false, "questions");
     const page = () => $(".clarification-page").textContent.trim();
     $("[aria-label='下一题']").click(); await until(() => page() === "2 of 3", "second");
     $("[aria-label='下一题']").click(); await until(() => page() === "3 of 3", "third");
@@ -1671,8 +1673,8 @@ test("paging ahead never submits unanswered questions, and failed auto-send can 
     };
     $(".clarification-option").click();
     await until(() => !$(".clarification-confirm").disabled && $("#errorToast").textContent.includes("fixture retry"), "retryable failure");
-    const kept = !$(".clarification-panel").hidden;
-    $(".clarification-confirm").click(); await until(() => $(".clarification-panel").hidden, "retry succeeds");
+    const kept = $(".clarification-panel")?.hidden === false;
+    $(".clarification-confirm").click(); await until(() => $(".clarification-panel")?.hidden !== false, "retry succeeds");
     window.fetch = original;
     await until(async () => (await (await fetch("/api/v1/sessions/" + active)).json()).status === "completed", "turn settles");
     return { pending, kept, attempts };
@@ -2056,32 +2058,53 @@ test(
 	`)
     assert.deepEqual(anchored, { open: true, rightOffset: 0, gap: 4 })
 
-    // The session row's more and tag buttons open their menus under themselves the same way.
+    // The session row's more button opens its menu under itself the same way; "Move to group"
+    // opens the tag picker as a submenu beside its row, and "…" closes both.
     const rowMenus = await browser.run(`
 		const row = await until(() => $(".session-row"), "a session row");
-		const place = async (selector, menuId) => {
-			const button = row.querySelector(selector);
-			button.click();
-			const menu = await until(() => $("#" + menuId), menuId + " to open");
-			await new Promise((resolve) => requestAnimationFrame(resolve));
-			const a = button.getBoundingClientRect();
-			const b = menu.getBoundingClientRect();
-			const placed = {
-				// The grouped view renders the same session in a hidden row; only the visible row's menu exists.
-				count: $$("#" + menuId).length,
-				expanded: button.getAttribute("aria-expanded"),
-				shown: a.width > 0,
-				rightOffset: Math.round(b.right - a.right),
-				gap: Math.round(b.top - a.bottom),
-			};
-			button.click();
-			await until(() => !$("#" + menuId), menuId + " to close on a second click");
-			return placed;
+		const button = row.querySelector(".session-menu-button");
+		button.click();
+		const menu = await until(() => $("#sessionMenu"), "sessionMenu to open");
+		await new Promise((resolve) => requestAnimationFrame(resolve));
+		const a = button.getBoundingClientRect();
+		const b = menu.getBoundingClientRect();
+		const session = {
+			// The grouped view renders the same session in a hidden row; only the visible row's menu exists.
+			count: $$("#sessionMenu").length,
+			expanded: button.getAttribute("aria-expanded"),
+			shown: a.width > 0,
+			rightOffset: Math.round(b.right - a.right),
+			gap: Math.round(b.top - a.bottom),
 		};
-		return { session: await place(".session-menu-button", "sessionMenu"), tag: await place(".session-tag-button", "tagPicker") };
+		const first = $("#sessionMenu button")?.dataset.action;
+		const group = $("#sessionMenu [data-action='group']");
+		group.click();
+		const picker = await until(() => $("#tagPicker"), "tagPicker to open");
+		await new Promise((resolve) => requestAnimationFrame(resolve));
+		const g = group.getBoundingClientRect();
+		const p = picker.getBoundingClientRect();
+		const submenu = {
+			count: $$("#tagPicker").length,
+			menuKept: Boolean($("#sessionMenu")),
+			expanded: group.getAttribute("aria-expanded"),
+			besideMenu: Math.round(p.left - menu.getBoundingClientRect().right),
+			// Its first row (inside 6px padding and a 1px border) is level with "Move to group".
+			topAligned: Math.round(p.top + 7 - g.top),
+		};
+		$("#sessionMenu [data-action='rename']").dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+		$("#sessionMenu [data-action='rename']").dispatchEvent(new PointerEvent("pointerenter"));
+		await until(() => !$("#tagPicker"), "tagPicker to close when another row is pointed at");
+		group.click();
+		await until(() => $("#tagPicker"), "tagPicker to reopen");
+		button.click();
+		await until(() => !$("#tagPicker") && !$("#sessionMenu"), "both to close on a click on …");
+		return { session, submenu, first };
 	`)
-    const placed = { count: 1, expanded: "true", shown: true, rightOffset: 0, gap: 4 }
-    assert.deepEqual(rowMenus, { session: placed, tag: placed })
+    assert.deepEqual(rowMenus, {
+      session: { count: 1, expanded: "true", shown: true, rightOffset: 0, gap: 4 },
+      submenu: { count: 1, menuKept: true, expanded: "true", besideMenu: 4, topAligned: 0 },
+      first: "group",
+    })
 
     await browser.run(`
 		$("#projectGroups .workspace-menu-button").click();
@@ -2642,7 +2665,7 @@ test("a group stops being offered once its last session drops it", { skip }, asy
   await browser.goto(`${origin}/`)
   const seen = await browser.run(`
     const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "tag group session row");
-    row.querySelector(".session-tag-button").click();
+    row.querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
     const picker = await until(() => $("#tagPicker"), "tag picker");
     const before = [...picker.querySelectorAll("[data-tag]")].map((item) => item.textContent);
     picker.querySelector("[data-new-tag='red']").click();
@@ -2652,7 +2675,7 @@ test("a group stops being offered once its last session drops it", { skip }, asy
     $("#tagNameConfirm").click();
     await until(() => !$("#tagPicker"), "picker closed after create");
 
-    row.querySelector(".session-tag-button").click();
+    row.querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
     const created = await until(() => $("#tagPicker"), "picker after create");
     const withGroup = [...created.querySelectorAll("[data-tag]")].map((item) => item.textContent);
     const colourTaken = !created.querySelector("[data-new-tag='red']");
@@ -2660,7 +2683,7 @@ test("a group stops being offered once its last session drops it", { skip }, asy
     created.querySelector("[data-tag='red']").click();
     await until(() => !$("#tagPicker"), "picker closed after untag");
 
-    row.querySelector(".session-tag-button").click();
+    row.querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
     const after = await until(() => $("#tagPicker"), "picker after untag");
     const withoutGroup = [...after.querySelectorAll("[data-tag]")].map((item) => item.textContent);
     const colourFree = Boolean(after.querySelector("[data-new-tag='red']"));
@@ -2690,7 +2713,7 @@ test("tag group metadata survives browser reload and its last-member removal sur
   await browser.goto(`${origin}/`)
   await browser.run(`
     const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "persisted group row");
-    row.querySelector(".session-tag-button").click();
+    row.querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
     const picker = await until(() => $("#tagPicker"), "persisted group picker");
     picker.querySelector("[data-new-tag='teal']").click();
     const input = await until(() => $("#tagNameInput"), "persisted group name");
@@ -2701,7 +2724,7 @@ test("tag group metadata survives browser reload and its last-member removal sur
   await browser.goto(`${origin}/`)
   const restored = await browser.run(`
     const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "restored group row");
-    row.querySelector(".session-tag-button").click();
+    row.querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
     const picker = await until(() => $("#tagPicker"), "restored group picker");
     const name = picker.querySelector("[data-tag='teal']")?.textContent;
     const stored = JSON.parse(localStorage.getItem("stepcode.tagGroups"));
@@ -2713,7 +2736,7 @@ test("tag group metadata survives browser reload and its last-member removal sur
   await browser.goto(`${origin}/`)
   const removed = await browser.run(`
     const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "untagged group row");
-    row.querySelector(".session-tag-button").click();
+    row.querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
     const picker = await until(() => $("#tagPicker"), "untagged group picker");
     const removed = !picker.querySelector("[data-tag='teal']") && Boolean(picker.querySelector("[data-new-tag='teal']"));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -3267,25 +3290,37 @@ test("plan mode's proposal keeps its review card after a reload and its approval
   const shown = await browser.run(`
     (await until(() => $("[data-session-id='${id}']"), "plan session")).click();
     const card = await until(() => $("#planReviewCard"), "review card");
-    const contents = card.textContent.includes("Read the fixture files");
+    // The card names the proposal and offers its full text; the body itself is
+    // read in the preview rail, so the card is not a wall of Markdown above the
+    // input area.
+    const contents = card.textContent.includes("Plan fixture") && Boolean(card.querySelector("#planReviewOpen"));
     const approve = Boolean($("#planApprove"));
-    // The proposal is submitted, not approved: plan mode is already off.
-    const stripHidden = $("#planStrip").hidden;
+    // The decision replaces the composer rather than stacking above it, so "the
+    // session accepts no other input" is a rendered fact, not a flag.
+    const composerBlocked = !$(".composer-zone") && !$("#prompt");
     $("#planApprove").click();
     await until(() => !$("#planApprove"), "card settles after the decision");
     await until(async () => {
       const value = await (await fetch("/api/v1/sessions/${id}")).json();
-      return value.status === "completed" && $$(".message.user").some(node => node.textContent.includes("同意执行"));
-    }, "this approval turn settles and its decision is rendered");
+      return value.status === "completed" && value.pendingPlanHash === undefined;
+    }, "this approval turn settles and the decision is recorded");
     return {
       contents,
       approve,
-      stripHidden,
+      composerBlocked,
       settled: !$("#planApprove"),
-      decided: $$(".message.user").some((node) => node.textContent.includes("同意执行")),
+      // The decision landed: the input area is back, and the plan strip with it
+      // is gone because the mode is off.
+      decided: Boolean($(".composer-zone")) && $("#planStrip")?.hidden !== false,
     };
   `);
-  assert.deepEqual(shown, { contents: true, approve: true, stripHidden: true, settled: true, decided: true });
+  assert.deepEqual(shown, {
+    contents: true,
+    approve: true,
+    composerBlocked: true,
+    settled: true,
+    decided: true,
+  });
   assert.match(
     await readFile(join(workspace, ".stepcode", "plans", `session-${id}.md`), "utf8"),
     /Read the fixture files/,
@@ -3588,7 +3623,8 @@ test("stopping a long streaming turn settles it and a late snapshot cannot resta
     const realFetch = window.fetch;
     window.fetch = (input, init) => {
       const url = String(typeof input === "string" ? input : input.url);
-      const read = /\\/api\\/v1\\/sessions\\/[^/?]+$/.test(url);
+      // A refresh names the last entry it holds (\`?after=<id>\`); it is the same snapshot read.
+      const read = /\\/api\\/v1\\/sessions\\/[^/?]+(?:\\?.*)?$/.test(url);
       if (!read || (init && init.method && init.method !== "GET") || !gate.holding) return realFetch(input, init);
       const issuedAt = Math.round(performance.now());
       return realFetch(input, init).then(async (response) => {
@@ -4095,7 +4131,7 @@ test("a row dropped on another group section still retags it, it is not a reorde
 		await until(() => group() && group().querySelectorAll(".session-row").length === 2, "the group drag fixtures");
 
 		const tag = async (id, colour, name) => {
-			rowFor(id).querySelector(".session-tag-button").click();
+			rowFor(id).querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
 			const picker = await until(() => $("#tagPicker"), "the tag picker");
 			picker.querySelector("[data-new-tag='" + colour + "']").click();
 			const input = await until(() => $("#tagNameInput"), "the group name input");

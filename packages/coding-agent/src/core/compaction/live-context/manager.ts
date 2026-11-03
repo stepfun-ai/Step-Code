@@ -32,7 +32,7 @@ interface Checkpoint {
 	sourceDigest: string;
 	sourceHashes?: string[];
 	retrySourceIndexes?: number[];
-	/** Messages omitted by the native loop (for example tool-parser resampling). */
+	/** Messages omitted from a host's request projection. */
 	hostExcludedIndexes?: number[];
 	messages: AgentMessage[];
 	sourceIndexes: (number | null)[];
@@ -366,8 +366,8 @@ export class LiveContextManager {
 		mkdirSync(this.mirrorDirectory, { recursive: true, mode: 0o700 });
 		atomicWrite(this.path, document.text);
 		atomicWrite(this.indexPath, renderLiveContextIndex(document, this.path));
-		// The loop can omit resampled attempts while state/transcript retain them. Anchor
-		// to state explicitly rather than guessing from text what the loop discarded.
+		// A host projection can omit messages while state and the transcript retain them.
+		// Anchor to state explicitly rather than guessing from text what the host discarded.
 		const positions: number[] = [];
 		let cursor = 0;
 		for (const message of raw) {

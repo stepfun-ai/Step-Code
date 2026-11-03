@@ -11,12 +11,12 @@ Inherits the [root rules](../../AGENTS.md). This package is `@step-harness/agent
 
 ## Boundaries and invariants
 
-- Internal dependencies are limited to providers and telemetry. Do not depend on coding-agent, config, contracts, CLI, or TUI.
 - Do not introduce vendor SDKs, Step defaults, CLI argument parsing, or UI objects. Products compose capabilities through stream, tool, environment, and resource interfaces.
 - All product modes share this loop. New entry points must not copy the tool-call loop or message state machine.
 - Preserve tool-call/result pairing, event ordering, cancellation propagation, steer / follow-up timing, and the distinction between errors and normal completion.
 - Tool updates are replacement snapshots and may coalesce. Observe background delivery failures and report them through the awaited tool-result path, without leaving a run unsettled.
 - Generic session context and persistence contracts belong in the harness. Product session adapters may compose them; client caches must not become authoritative state.
+- `isError` describes an invocation failure, not a tool-specific business outcome. Preserve observed content, details, usage, and termination hints carried by `ToolExecutionError` or an already-completed result when result delivery or hooks fail.
 - Pass telemetry contexts explicitly. Disabling telemetry must not change business return values, errors, or execution order.
 
 ## Validation and documentation

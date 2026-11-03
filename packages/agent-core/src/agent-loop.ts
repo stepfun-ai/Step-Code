@@ -7,12 +7,14 @@ import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	type Context,
+	classifyIncompleteAssistantTurn,
 	classifyProviderError,
 	EventStream,
 	type ToolResultMessage,
 	validateToolArguments,
 } from "@step-harness/providers";
 import { getDefaultStreamFn } from "./stream-fn.ts";
+import { ToolExecutionError } from "./tool-error.ts";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -260,20 +262,7 @@ async function runLoop(
 			}
 
 			// Stream assistant response
-			let message = await streamAssistantResponse(currentContext, config, signal, emit, streamFunction);
-
-			// Serving-side tool parsers can fail and leak the model's tool-call
-			// markup into plain text: the turn then carries no executable call
-			// and the loop would end even though the model meant to act.
-			// Resample the identical context a bounded number of times; the
-			// leaked attempt is dropped from the request context while its
-			// message events above remain for observability.
-			const leakRetryLimit = config.toolCallLeakRetries ?? DEFAULT_TOOL_CALL_LEAK_RETRIES;
-			for (let attempt = 0; attempt < leakRetryLimit && isToolCallMarkupLeak(message); attempt++) {
-				if (currentContext.messages[currentContext.messages.length - 1] !== message) break;
-				currentContext.messages.pop();
-				message = await streamAssistantResponse(currentContext, config, signal, emit, streamFunction);
-			}
+			const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFunction);
 			newMessages.push(message);
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
@@ -286,6 +275,7 @@ async function runLoop(
 			const toolCalls = message.content.filter((c) => c.type === "toolCall");
 
 			const toolResults: ToolResultMessage[] = [];
+			let stopTurn = false;
 			hasMoreToolCalls = false;
 			if (toolCalls.length > 0) {
 				// A "length" stop means the output was cut off by the token limit, so
@@ -297,6 +287,7 @@ async function runLoop(
 						: await executeToolCalls(currentContext, message, config, signal, emit);
 				toolResults.push(...executedToolBatch.messages);
 				hasMoreToolCalls = !executedToolBatch.terminate;
+				stopTurn = executedToolBatch.stopTurn === true;
 
 				for (const result of toolResults) {
 					currentContext.messages.push(result);
@@ -313,7 +304,12 @@ async function runLoop(
 				newMessages,
 			};
 
-			if (await config.shouldStopAfterTurn?.(lastCompletedTurn)) {
+			// `shouldStopAfterTurn` still runs when the batch requested a barrier: it
+			// is the product's hook, and skipping it on exactly the control turns a
+			// product cares about would be a silent trap. A cancelled run behaves as
+			// it always has: the hook still runs, and `stopTurn` still ends the turn.
+			const stopAfterTurn = await config.shouldStopAfterTurn?.(lastCompletedTurn);
+			if (stopTurn || stopAfterTurn) {
 				await emit({ type: "agent_end", messages: newMessages });
 				return;
 			}
@@ -340,32 +336,6 @@ async function runLoop(
  * Stream an assistant response from the LLM.
  * This is where AgentMessage[] gets transformed to Message[] for the LLM.
  */
-/** Bounded default for resampling turns whose tool call leaked into text. */
-const DEFAULT_TOOL_CALL_LEAK_RETRIES = 2;
-
-const TOOL_CALL_MARKUP_RE = /<tool_call>|<function=/u;
-
-/**
- * True when an assistant turn carries no executable tool call but its text
- * contains raw tool-call markup — the signature of a serving-side tool-parser
- * failure. Error and aborted turns keep their own retry/exit semantics.
- */
-function isToolCallMarkupLeak(message: AssistantMessage): boolean {
-	if (message.stopReason === "error" || message.stopReason === "aborted") {
-		return false;
-	}
-	let sawMarkup = false;
-	for (const block of message.content) {
-		if (block.type === "toolCall") {
-			return false;
-		}
-		if (block.type === "text" && TOOL_CALL_MARKUP_RE.test(block.text)) {
-			sawMarkup = true;
-		}
-	}
-	return sawMarkup;
-}
-
 async function streamAssistantResponse(
 	context: AgentContext,
 	config: AgentLoopConfig,
@@ -439,6 +409,12 @@ async function streamAssistantResponse(
 				// result() here: a provider that closes or rejects immediately after
 				// emitting the terminal event may leave that promise unresolved.
 				const finalMessage = event.type === "done" ? event.message : event.error;
+				// Publish the structural fact on the message every consumer already
+				// reads, instead of letting each host re-derive it or, worse, letting a
+				// host rewrite the provider's stop reason to signal it. The loop itself
+				// ignores the field: an incomplete turn still ends normally here, and a
+				// product session decides whether to recover it.
+				finalMessage.incomplete = classifyIncompleteAssistantTurn(finalMessage);
 				if (addedPartial) {
 					context.messages[context.messages.length - 1] = finalMessage;
 				} else {
@@ -570,6 +546,7 @@ async function executeToolCalls(
 type ExecutedToolCallBatch = {
 	messages: ToolResultMessage[];
 	terminate: boolean;
+	stopTurn?: boolean;
 };
 
 async function executeToolCallsSequential(
@@ -582,6 +559,7 @@ async function executeToolCallsSequential(
 ): Promise<ExecutedToolCallBatch> {
 	const finalizedCalls: FinalizedToolCallOutcome[] = [];
 	const messages: ToolResultMessage[] = [];
+	let stopTurn = false;
 
 	for (const toolCall of toolCalls) {
 		await emit({
@@ -591,7 +569,18 @@ async function executeToolCallsSequential(
 			args: toolCall.arguments,
 		});
 
-		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
+		const preparation: PreparedToolCall | ImmediateToolCallOutcome = stopTurn
+			? {
+					kind: "immediate",
+					// The call never ran, so it is reported as an error, but not as a
+					// policy denial: no `terminate`, so callers that map terminating
+					// blocks to exit codes do not count the barrier as a failure.
+					result: createErrorToolResult(
+						"This tool call was skipped because an earlier control tool ended the turn.",
+					),
+					isError: true,
+				}
+			: await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		let finalized: FinalizedToolCallOutcome;
 		if (preparation.kind === "immediate") {
 			finalized = {
@@ -616,6 +605,7 @@ async function executeToolCallsSequential(
 		await emitToolResultMessage(toolResultMessage, emit);
 		finalizedCalls.push(finalized);
 		messages.push(toolResultMessage);
+		stopTurn ||= finalized.result.stopTurn === true;
 
 		if (signal?.aborted) {
 			break;
@@ -625,6 +615,7 @@ async function executeToolCallsSequential(
 	return {
 		messages,
 		terminate: shouldTerminateToolBatch(finalizedCalls),
+		stopTurn,
 	};
 }
 
@@ -692,6 +683,7 @@ async function executeToolCallsParallel(
 	return {
 		messages,
 		terminate: shouldTerminateToolBatch(orderedFinalizedCalls),
+		stopTurn: orderedFinalizedCalls.some((call) => call.result.stopTurn === true),
 	};
 }
 
@@ -722,7 +714,10 @@ type FinalizedToolCallOutcome = {
 type FinalizedToolCallEntry = FinalizedToolCallOutcome | (() => Promise<FinalizedToolCallOutcome>);
 
 function shouldTerminateToolBatch(finalizedCalls: FinalizedToolCallOutcome[]): boolean {
-	return finalizedCalls.length > 0 && finalizedCalls.every((finalized) => finalized.result.terminate === true);
+	return (
+		finalizedCalls.some((finalized) => finalized.result.stopTurn === true) ||
+		(finalizedCalls.length > 0 && finalizedCalls.every((finalized) => finalized.result.terminate === true))
+	);
 }
 
 function prepareToolCallArguments(tool: AgentTool<any>, toolCall: AgentToolCall): AgentToolCall {
@@ -835,6 +830,7 @@ async function executePreparedToolCall(
 	let idle: Promise<void> | undefined;
 	// Wrapped so a listener that throws `undefined` is still recorded as a failure.
 	let deliveryFailure: { error: unknown } | undefined;
+	let completedResult: AgentToolResult<any> | undefined;
 
 	const deliver = async (): Promise<void> => {
 		delivering = true;
@@ -878,6 +874,7 @@ async function executePreparedToolCall(
 
 	try {
 		const result = await prepared.tool.execute(prepared.toolCall.id, prepared.args as never, signal, forward);
+		completedResult = result;
 		// Stop accepting frames, then let the last one land before returning the
 		// result, so a consumer sees progress and then completion, not the reverse.
 		acceptingUpdates = false;
@@ -887,12 +884,26 @@ async function executePreparedToolCall(
 	} catch (error) {
 		acceptingUpdates = false;
 		await idle;
+		// A typed execution failure already carries its own diagnostic as
+		// `result.content[0]`, so only a second cause (event delivery) may be
+		// prepended; repeating the tool's message would duplicate the output.
+		if (error instanceof ToolExecutionError) {
+			const deliveryCause = deliveryFailure && deliveryFailure.error !== error ? deliveryFailure.error : undefined;
+			const result = deliveryCause
+				? createErrorToolResult(
+						deliveryCause instanceof Error ? deliveryCause.message : String(deliveryCause),
+						error.result,
+					)
+				: error.result;
+			return { result, isError: true };
+		}
 		// The tool's own failure is what stopped the call; a listener failure is a
 		// second cause and must not be hidden by it (or repeat it).
 		const causes = deliveryFailure && deliveryFailure.error !== error ? [error, deliveryFailure.error] : [error];
 		return {
 			result: createErrorToolResult(
 				causes.map((cause) => (cause instanceof Error ? cause.message : String(cause))).join("\n"),
+				completedResult,
 			),
 			isError: true,
 		};
@@ -930,11 +941,14 @@ async function finalizeExecutedToolCall(
 					details: afterResult.details ?? result.details,
 					usage: afterResult.usage ?? result.usage,
 					terminate: afterResult.terminate ?? result.terminate,
+					stopTurn: afterResult.stopTurn ?? result.stopTurn,
 				};
 				isError = afterResult.isError ?? isError;
 			}
 		} catch (error) {
-			result = createErrorToolResult(error instanceof Error ? error.message : String(error));
+			// `observed` carries the tool's own result, so a `stopTurn` the tool
+			// already requested survives the hook failure.
+			result = createErrorToolResult(error instanceof Error ? error.message : String(error), result);
 			isError = true;
 		}
 	}
@@ -946,10 +960,20 @@ async function finalizeExecutedToolCall(
 	};
 }
 
-function createErrorToolResult(message: string): AgentToolResult<any> {
+function createErrorToolResult(message: string, observed?: AgentToolResult<any>): AgentToolResult<any> {
 	return {
-		content: [{ type: "text", text: message }],
-		details: {},
+		...observed,
+		isError: true,
+		content: [
+			{
+				type: "text",
+				text: observed
+					? `${message}\nThe tool may already have run; check its effects before repeating a state-changing call.`
+					: message,
+			},
+			...(observed?.content ?? []),
+		],
+		details: observed?.details ?? {},
 	};
 }
 
@@ -980,6 +1004,7 @@ async function emitToolExecutionEnd(
 			finalized.isError = true;
 		}
 	}
+	finalized.result = { ...finalized.result, isError: finalized.isError };
 	await emit({
 		type: "tool_execution_end",
 		toolCallId: finalized.toolCall.id,

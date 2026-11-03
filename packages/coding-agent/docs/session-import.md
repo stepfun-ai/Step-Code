@@ -30,6 +30,9 @@ An automatic scan replaces prior candidate capabilities. A `customRoot` scan app
 new candidates, deduplicating the same source and file path while preserving existing
 candidate IDs and reviewed snapshots. It returns newly discovered candidates only, with `existingCount` reporting matched
 sessions already in the list so a duplicate-only scan is not mistaken for no matches.
+`probe(roots, accept?)` runs the same automatic discovery but stops at the first candidate
+`accept` admits and never replaces candidate capabilities, so it can answer "is there
+anything to import?" beside an open import view. Unreadable records count as absent.
 Submitted jobs retain their own
 reviewed snapshots and selection copies. Import uses exactly the reviewed
 snapshot, even if the source continues writing or its attachments change.

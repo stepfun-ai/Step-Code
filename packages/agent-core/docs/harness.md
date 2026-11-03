@@ -1305,6 +1305,10 @@ Overflow is checked before retryable error, so an oversized request compacts rat
 
 An overflow classification never produces a tool plan. A *genuine* `length` that carries tool calls does produce the full plan, executes nothing, and appends one `isError: true` result per call explaining that truncation may have corrupted the arguments — those results then require another assistant turn.
 
+**Incomplete responses are a product decision.** A response that stops normally while carrying neither visible text nor a structured tool call, or that reports `toolUse` without one, is structurally incomplete. The loop classifies it with `classifyIncompleteAssistantTurn()` from `stopReason` and content-block types only and records the result on the finished message as `AssistantMessage.incomplete`. It still ends the turn normally: it reads thinking not at all and text only to decide whether any is visible, and it does not discard the response, retry it, or rewrite the provider's stop reason.
+
+A product session owns any bounded recovery, such as appending a hidden recovery prompt and continuing once, and must bound how often a repeated incomplete response can happen. Because the stop reason stays truthful, a session must report a terminal incomplete turn as its own outcome rather than encoding it as a provider error: a product can carry it on its settled event, and consumers that must decide "did the run succeed" read `assistantTerminalFailure()` from `@step-harness/providers`, never `stopReason` alone.
+
 ## 3.8 Tools
 
 | From | Trigger | Transaction | To |
@@ -2614,6 +2618,50 @@ Replay across retry and resume:
 `before_run_end` may fire again after a crash at the same boundary. Handlers that must not double-fire keep their own durable marker. This is the exactly-once non-goal (§0.6) surfacing in the hook layer.
 
 ## 5.7 Agent-loop building blocks
+
+The current low-level loop uses `AgentToolResult.isError` for invocation failure,
+not for a product tool's business result. A tool can throw `ToolExecutionError`
+with observed content and details; these survive into its error event and
+transcript message. If result delivery or a return-stage hook fails after a
+result exists, the loop retains its observations, usage, and termination hint.
+Output-preparation failures may replace text with recovery diagnostics while
+retaining metadata and termination policy. The loop does not automatically
+execute the tool again.
+
+`CommandExecutionResult` describes adapter observations (`exitCode` and optional
+`signal`, `timedOut`, `aborted`, and `timeoutSeconds`). `CommandExecutionOutcome`
+normalizes those facts with an explicit `status`: `exited`, `timed_out`,
+`signaled`, `canceled`, or `unknown`. A deadline can coexist with exit code zero;
+an unknown exit is not success. These DTOs, the normalizer, and their formatters
+live in [`src/harness/command-outcome.ts`](../src/harness/command-outcome.ts).
+The generic `bash` tool in [`src/harness/tools/bash.ts`](../src/harness/tools/bash.ts)
+returns a nonzero exit or deadline as an ordinary result with `details.execution`;
+only a cancellation or executor fault is an invocation failure, and it retains
+the same observations.
+
+The canonical [`BashExecutionMessage`](../src/harness/messages.ts) stores the
+optional `execution` outcome and projects it through
+`commandExecutionNotice`, which stays silent for a clean exit and states every
+other observation. Older messages without the field retain their existing
+projection.
+
+The current Agent Loop supports `AgentToolResult.stopTurn` for control-tool
+barriers. Unlike the existing all-results `terminate` hint, one `stopTurn: true`
+ends the turn regardless of sibling results. A sequential tool makes its entire
+batch sequential; after a stop result, later calls receive synthetic skipped
+results without lookup, permission prompts, or execution. Every requested call
+still receives its paired result and terminal event, except when the run itself
+is cancelled. Already-running parallel calls settle normally, but no automatic
+tool-driven model continuation starts in that Agent Loop invocation. Queued
+inputs remain available for the host, which may start another turn — for example
+for input queued after `agent_end` or for automatic context maintenance.
+Result-processing failures preserve a `stopTurn` the tool already requested;
+`terminate` from the same result is not restored. Only a
+tool's `execute()` or `afterToolCall` can start the barrier; a `beforeToolCall`
+hook has no `stopTurn` channel. Products must mark approval barriers sequential;
+this control result is not a rollback of earlier calls and does not change the
+persistent harness state specification below.
+
 
 The existing `agent-loop.ts` remains behavior-compatible and is refactored into these exported phases. Existing fields on `AgentTool`, `AgentToolResult`, and provider messages are retained. Add recovery declaration `replay?: "never" | "safe"` to `AgentTool`; omission means `"never"`. `AgentHarnessTool` inherits it. The `AgentEventSink` below is the existing agent-loop sink, not the harness event listener; the harness adapts agent events into §5.5 events.
 

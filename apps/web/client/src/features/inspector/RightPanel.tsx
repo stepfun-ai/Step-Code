@@ -10,12 +10,18 @@ import {
 	toggleRightPanelExpanded,
 } from "../../state/right-panel";
 import { getState, type RightPanelId, setUi, useAppStore } from "../../state/store";
-import type { SessionInspector } from "../../state/types";
+import type { SessionInspector, TimelineItem } from "../../state/types";
 import { Icon, IconButton, type IconName, Menu, MenuItem, Popover, ResizeHandle, Tooltip } from "../../ui";
 import { BrowserPanel } from "../browser";
 import { ChildAgentView } from "../conversation";
 import { PreviewPanel } from "../files";
-import { applyPreviewWidth, PREVIEW_DEFAULT, restorePreviewWidth } from "../files/actions";
+import {
+	applyPreviewWidth,
+	choosePreviewWidth,
+	defaultPreviewWidth,
+	PREVIEW_DEFAULT,
+	restorePreviewWidth,
+} from "../files/actions";
 import { useActiveTab } from "../files/PreviewBody";
 import { toggleTerminalDock } from "../terminal/actions";
 import { ContextPanel } from "./ContextPanel";
@@ -96,6 +102,8 @@ export function RightToolRail() {
 	);
 }
 
+const NO_ITEMS: readonly TimelineItem[] = [];
+
 export function RightPanel() {
 	const t = useT();
 	const panel = useAppStore(activeRightPanel);
@@ -111,7 +119,9 @@ export function RightPanel() {
 	const activitySeen = useRef<{ sessionId?: string; turn?: string }>({});
 	const childParentId = useAppStore((state) => state.ui.childView?.parentId);
 	const status = useAppStore((state) => state.current?.status);
-	const items = useAppStore((state) => state.timelineItems);
+	// Only the subagent panel reads the transcript. Subscribing to it otherwise
+	// re-rendered every panel (the hidden ones included) for each streamed frame.
+	const items = useAppStore((state) => (activeRightPanel(state) === "subagent" ? state.timelineItems : NO_ITEMS));
 	const [result, setResult] = useState<{ id: string; data?: SessionInspector; error?: string }>();
 	const [revision, setRevision] = useState(0);
 	const widthOpen = useAppStore((state) => state.ui.rightPanelMenu);
@@ -176,8 +186,9 @@ export function RightPanel() {
 				direction={-1}
 				getSize={() => ref.current?.getBoundingClientRect().width ?? PREVIEW_DEFAULT}
 				onResize={(width) => applyPreviewWidth(width, false)}
-				onCommit={(width) => applyPreviewWidth(width)}
-				onReset={() => applyPreviewWidth(PREVIEW_DEFAULT)}
+				onCommit={(width) => choosePreviewWidth(width)}
+				// Reset means the friendly default, the same even split a first open uses.
+				onReset={() => choosePreviewWidth(defaultPreviewWidth())}
 				onDraggingChange={(resizing) => setUi({ resizing })}
 				hidden={summary}
 			/>
@@ -253,7 +264,9 @@ export function RightPanel() {
 				<SummaryBoard key={`summary-${currentId ?? ""}`} data={data} />
 			</div>
 			<div className="right-panel-scroll" hidden={panel !== "context"}>
-				<ContextPanel key={`context-${currentId ?? ""}`} data={data} />
+				{/* The panel stays mounted and toggles `hidden` like every panel here; its message list is
+				 * built only while it shows. Hidden, it re-rendered every row with each inspector poll. */}
+				{panel === "context" ? <ContextPanel key={`context-${currentId ?? ""}`} data={data} /> : null}
 			</div>
 			<PreviewPanel embedded />
 			<ChildAgentView embedded />

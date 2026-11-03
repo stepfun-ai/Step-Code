@@ -10,6 +10,8 @@ export const STORAGE_KEYS = {
 	locale: "stepcode.locale",
 	previewWrap: "stepcode.previewWrap",
 	previewWidth: "stepcode.previewWidth",
+	/** Set only when the user drags or resets the divider, never by a default. */
+	previewWidthChosen: "stepcode.previewWidthChosen",
 	sidebarWidth: "stepcode.sidebarWidth",
 	terminalHeight: "stepcode.terminalHeight",
 	/** The model picked last under each provider, so switching back restores it. */

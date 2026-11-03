@@ -1,32 +1,73 @@
 /*
  * The app's transient message (legacy styles.css 1278-1296, `.error-toast`).
- * Fixed at the top centre of the window, so it shows above every view and
- * dialog and stays clear of the composer in the bottom-right corner; on the
- * macOS desktop host it also clears the title strip (`--titlebar-inset`).
+ * Fixed at the top centre of the window by default, above every view and
+ * dialog; on the macOS desktop host it also clears the title strip
+ * (`--titlebar-inset`). A caller may anchor it elsewhere with inline
+ * `left` / `top` (the shell centres it under the conversation header).
+ *
+ * Every tone is the same inverse dark pill (`--toast-*` tokens, dark in every
+ * theme, lifted by a hairline on the dark one); the tone only picks the icon.
  */
 .root {
 	position: fixed;
 	top: calc(var(--titlebar-inset, 0px) + 16px);
 	left: 50%;
 	z-index: 120;
+	display: flex;
+	align-items: center;
+	gap: 8px;
 	width: max-content;
-	max-width: min(390px, calc(100vw - 32px));
-	padding: 8px 14px;
+	max-width: min(420px, calc(100% - 32px));
+	min-height: 40px;
+	padding: 9px 16px;
 	transform: translateX(-50%);
-	border: 1px solid color-mix(in srgb, var(--danger) 38%, var(--line));
+	border: 1px solid var(--toast-line);
 	border-radius: var(--radius-surface);
-	background: var(--danger-surface);
-	color: var(--danger);
-	box-shadow: var(--elev-2);
-	font-size: 12px;
-	text-align: center;
+	background: var(--toast-surface);
+	color: var(--toast-ink);
+	box-shadow: var(--toast-shadow);
+	font-size: 13px;
+	line-height: 20px;
 	animation: enter 160ms ease-out;
 }
 
-.root[data-tone="neutral"] {
-	border-color: var(--line);
-	background: var(--surface);
-	color: var(--ink-2);
+.icon {
+	flex: none;
+}
+
+.root[data-tone="success"] .icon {
+	color: var(--toast-success);
+}
+
+.root[data-tone="danger"] .icon {
+	color: var(--toast-danger);
+}
+
+.message {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.action {
+	flex: none;
+	margin: 0 0 0 -4px;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: var(--toast-link);
+	font: inherit;
+	cursor: pointer;
+}
+
+.action:hover {
+	color: var(--toast-link-hover);
+	text-decoration: underline;
+}
+
+.action:focus-visible {
+	border-radius: var(--radius-tiny);
+	outline: 2px solid var(--toast-link);
+	outline-offset: 2px;
 }
 
 @keyframes enter {

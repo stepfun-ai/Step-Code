@@ -5,6 +5,7 @@ import type { AgentMessage, StreamFn, ThinkingLevel } from "@step-harness/agent-
 import {
 	createAssistantMessageEventStream,
 	fauxAssistantMessage,
+	fauxThinking,
 	fauxToolCall,
 	type Model,
 } from "@step-harness/providers";
@@ -521,13 +522,23 @@ describe("bounded automatic CLM requests", () => {
 		expect(result).toMatchObject({ attempted: false, reason: "no-reducible-context" });
 		expect(requests).toBe(0);
 	});
-	it("reconstructs cooldown from completed task turns while ignoring failed responses", async () => {
+	it("reconstructs cooldown from completed task turns while ignoring failed and incomplete responses", async () => {
 		const state = setup();
 		state.session.appendCustomEntry("step-auto-clm", { version: 1, attempted: true, accepted: false });
 		for (const stopReason of ["error", "aborted", "length"] as const)
 			state.session.appendMessage(fauxAssistantMessage("Failed response", { stopReason }));
+		state.session.appendMessage(fauxAssistantMessage([fauxThinking("reasoning only")], { stopReason: "stop" }));
 		const result = await new AutoClmController(state.session, state.live).run(input(state, () => completed()));
 		expect(result).toMatchObject({ attempted: false, reason: "cooldown" });
+	});
+	it("counts a stop turn with tool-call markup as completed", async () => {
+		const state = setup();
+		state.session.appendCustomEntry("step-auto-clm", { version: 1, attempted: true, accepted: false });
+		for (let index = 0; index < 3; index++) {
+			state.session.appendMessage(fauxAssistantMessage("<tool_call>example only</tool_call>"));
+		}
+		const result = await new AutoClmController(state.session, state.live).run(input(state, () => completed()));
+		expect(result.reason).not.toBe("cooldown");
 	});
 	it("caps actual provider output including legacy Anthropic thinking", async () => {
 		const state = setup();

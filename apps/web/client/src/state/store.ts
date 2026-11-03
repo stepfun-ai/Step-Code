@@ -14,6 +14,7 @@ import type {
 	DraftModels,
 	LoginReport,
 	NoticeItem,
+	PlanReview,
 	PolicyPreset,
 	SelectionRequest,
 	SessionSnapshot,
@@ -209,7 +210,7 @@ export interface UiState {
 	readonly sessionMenu: { readonly sessionId: string } | null;
 	/** `#streamMenu`, open below the more button of the conversation header strip. */
 	readonly streamMenu: boolean;
-	/** `#tagPicker`, open below the tag button of a session row. `sessionId` is the legacy `state.tagTarget`. */
+	/** `#tagPicker`, the "Move to group" submenu beside the first row of a session row's open "…" menu. */
 	readonly tagPicker: { readonly sessionId: string } | null;
 	/** `#authBanner` visible (a request returned 401). */
 	readonly authExpired: boolean;
@@ -278,11 +279,19 @@ export interface ChildView {
 	readonly taskIndex?: number;
 }
 
+export interface ToastAction {
+	readonly label: string;
+	/** Runs in the page; the toast closes after it. */
+	readonly run: () => void;
+}
+
 export interface ToastState {
 	readonly message: string;
-	readonly tone: "danger" | "neutral";
+	readonly tone: "danger" | "neutral" | "success";
 	/** Distinguishes two identical consecutive messages. */
 	readonly seq: number;
+	/** Optional link-styled follow-up after the message (e.g. "View"). */
+	readonly action?: ToastAction;
 }
 
 export interface PendingTurn {
@@ -306,7 +315,23 @@ export interface AppState {
 	 * Keyed by session so a switch never shows the previous session's fill.
 	 */
 	readonly contextFill: { readonly sessionId: string; readonly percent: number } | null;
+	/** The recorded transcript plus rows driven by discrete events; stable while a reply streams. */
 	readonly timelineItems: readonly TimelineItem[];
+	/**
+	 * Rows of the assistant message streaming right now (`liveMessageRows`), kept
+	 * apart so a frame of streamed text re-renders the live rows only, not every
+	 * reader of the transcript. They join `timelineItems` at the message's end.
+	 */
+	readonly liveItems: readonly TimelineItem[];
+	/**
+	 * The proposal waiting for the user's answer, or undefined.
+	 *
+	 * Plan mode stays on until the user decides, so this is the one decision the
+	 * page is blocking on: the stream draws it as its last element and the
+	 * composer refuses new text until it is answered. A question typed into the
+	 * composer is not an approval, and must not look like one.
+	 */
+	readonly pendingPlanReview: PlanReview | undefined;
 	/** `ui.notify` output for this page load, shown after the timeline and never persisted. */
 	readonly notices: readonly NoticeItem[];
 	/** The kernel is compacting the context right now (host event, mirrored by the snapshot). */
@@ -448,6 +473,8 @@ export function createInitialState(): AppState {
 		performanceRun: null,
 		contextFill: null,
 		timelineItems: [],
+		liveItems: [],
+		pendingPlanReview: undefined,
 		notices: [],
 		compacting: false,
 		pendingTurn: null,

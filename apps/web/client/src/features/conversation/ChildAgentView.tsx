@@ -271,7 +271,7 @@ export function ChildAgentView({ embedded = false }: { readonly embedded?: boole
 	);
 	const liveTool = task?.status === "running" ? task.activeTool : undefined;
 	// Reasoning streams separately from the reply; it renders as the same
-	// thinking disclosure the main conversation uses, folded to its preview line.
+	// thinking disclosure the main conversation uses, folded to its header.
 	const liveThinkingText = task?.status === "running" ? task.activeThinking?.trim() : undefined;
 	const liveThinking = useMemo(
 		(): ThinkingTimelineItem | undefined =>

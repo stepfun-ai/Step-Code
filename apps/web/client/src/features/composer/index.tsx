@@ -50,6 +50,7 @@ import {
 	syncStagedModeLead,
 	turnActive,
 	updateQueued,
+	withLeadCommand,
 } from "./actions";
 import { type ComposerDraft, composerDraft } from "./drafts";
 import { FileMenu, type FileMenuHandle } from "./FileMenu";
@@ -77,6 +78,7 @@ import {
 	removeSlashToken,
 	replaceFileQuery,
 	restoreFailedPrompt,
+	setPromptMessage,
 	setPromptText,
 	snapshotPrompt,
 	waitForUploads,
@@ -137,7 +139,24 @@ function ComposerInput({
 	const cwd = useAppStore(activeCwd);
 	const selection = useAppStore((state) => `${state.current?.id ?? "draft"}\0${activeCwd(state)}`);
 	const status = useAppStore((state) => state.current?.status);
-	const waiting = status === "waiting";
+	/*
+	 * A proposal waiting for an answer blocks composing a different message:
+	 * without this, text typed past the card would read as an answer to it — the
+	 * exact ambiguity the card exists to remove. The card takes the input it
+	 * needs (approve, notes, or exit).
+	 */
+	// A plan review, a questionnaire, and a tool approval all block the session
+	// until the user answers, so they block the composer the same way. Otherwise
+	// text typed past the card reads as an answer to it.
+	const awaitingDecision = useAppStore(
+		(state) =>
+			state.pendingPlanReview !== undefined ||
+			state.current?.pendingClarifications?.[0] !== undefined ||
+			state.current?.pendingApprovals?.[0] !== undefined,
+	);
+	// Only the bottom composer is blocked: the in-place editor rewrites a message
+	// that already exists, and the card has nothing to say about it.
+	const waiting = status === "waiting" || (awaitingDecision && variant !== "edit");
 	/** During a turn Enter queues the message and Cmd/Ctrl+Enter steers it (see `sendMessage`). */
 	const active = useAppStore(turnActive);
 	const queuedCount = useAppStore((state) => state.current?.queuedMessages?.length ?? 0);
@@ -295,8 +314,11 @@ function ComposerInput({
 		[syncHasText],
 	);
 	const edit = variant === "edit";
+	/** Staged images are content on their own: a message may be just a pasted screenshot. */
+	const hasMainAttachments = useAppStore((state) => state.attachments.length > 0);
+	const hasAttachments = edit ? rewriteImages.length > 0 : hasMainAttachments;
 	// The in-place editor rewrites one message; it is never the run's stop button.
-	const stopMode = !edit && status === "running" && !hasText;
+	const stopMode = !edit && status === "running" && !hasText && !hasAttachments;
 	/* Rewriting: the edit instance starts from the message's text and submits a fork. */
 	const editingPrompt = useAppStore((state) => state.ui.editingPrompt);
 	const editLoaded = useRef(false);
@@ -305,11 +327,11 @@ function ComposerInput({
 		editLoaded.current = true;
 		const editor = prompt.current;
 		if (!editor) return;
-		// Focus before filling: setPromptText parks the caret at the end only when
+		// Focus before filling: setPromptMessage parks the caret at the end only when
 		// the editor already holds focus, so a fill-then-focus leaves it at the start.
 		editor.focus();
-		setPromptText(editor, editingPrompt.text);
-		setHasText(Boolean(editingPrompt.text.trim()));
+		setPromptMessage(editor, editingPrompt.text);
+		setHasText(Boolean(promptText(editor).trim()));
 	}, [edit, editingPrompt]);
 
 	const menu = (name: ComposerMenu) => ({
@@ -469,7 +491,8 @@ function ComposerInput({
 			// A command chip placed mid-text is sent first, where the kernel runs it.
 			const text = promptMessageText(editor).trim();
 			const files = promptFiles(editor);
-			if (!text) return;
+			const attachments = edit ? rewriteAttachments.current : getState().attachments;
+			if (!text && !attachments.length) return;
 			// A send starts from the draft, not from its render: the preview goes either way.
 			dismissPreview();
 			// `/btw` is a side question, not a message: it opens its own rail tab and
@@ -516,9 +539,9 @@ function ComposerInput({
 				...inputPicks.contextPackages.map((item) => item.block),
 			].join("\n\n");
 			// Lead chips serialize their own commands into `text` in staged order,
-			// so a stacked input (plan + skill + prompt) keeps its built order.
-			const command = lead ? `${lead.prefix} ` : "";
-			const outgoing = `${command}${text}${tail ? `\n\n${tail}` : ""}`;
+			// so a stacked input (plan + skill + prompt) keeps its built order; a
+			// picked command leads it, after a leading `/goal` or `/plan`.
+			const outgoing = `${withLeadCommand(text, lead?.prefix)}${tail ? `\n\n${tail}` : ""}`;
 			setQuery(null);
 			setPathQuery(null);
 			lastPathQuery.current = null;
@@ -654,7 +677,7 @@ function ComposerInput({
 			form.current?.requestSubmit();
 			return;
 		}
-		if (promptText(editor).trim()) {
+		if (promptText(editor).trim() || (edit ? rewriteAttachments.current : getState().attachments).length) {
 			void submit(true);
 			return;
 		}

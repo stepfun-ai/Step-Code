@@ -20,6 +20,7 @@ type FakeSession = {
 	getUnknownToolSelectors: () => { tools: string[]; excludeTools: string[]; knownTools: string[] };
 	prompt: ReturnType<typeof vi.fn>;
 	reload: ReturnType<typeof vi.fn>;
+	setIncompleteTurnRecoveryEnabled: ReturnType<typeof vi.fn>;
 	emitToListeners: (event: unknown) => void;
 };
 
@@ -79,6 +80,7 @@ function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost 
 		getUnknownToolSelectors: () => ({ tools: [], excludeTools: [], knownTools: [] }),
 		prompt: vi.fn(async () => {}),
 		reload: vi.fn(async () => {}),
+		setIncompleteTurnRecoveryEnabled: vi.fn(),
 		emitToListeners: (event: unknown) => {
 			for (const listener of listeners) listener(event);
 		},
@@ -116,6 +118,23 @@ describe("runPrintMode", () => {
 		expect(session.prompt).toHaveBeenCalledWith("Say done", { images });
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
+	});
+
+	it("owns incomplete-turn recovery unless a completion feature supersedes it", async () => {
+		const plain = createRuntimeHost(createAssistantMessage({ text: "done" }));
+		await runPrintMode(plain as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+			initialMessage: "Say done",
+		});
+		expect(plain.session.setIncompleteTurnRecoveryEnabled.mock.calls).toEqual([[true]]);
+
+		const checked = createRuntimeHost(createAssistantMessage({ text: "done" }));
+		await runPrintMode(checked as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+			initialMessage: "Say done",
+			completionReview: true,
+		});
+		expect(checked.session.setIncompleteTurnRecoveryEnabled.mock.calls).toEqual([[false]]);
 	});
 
 	it("emits session_shutdown in json mode", async () => {

@@ -257,7 +257,7 @@ export function MigrationOnboarding({
 						{stage === "select" || stage === "invitation" ? (
 							<>
 								<div
-									className={`migration-resource-layout${focusedId && kind !== "mcp" && kind !== "rules" ? " migration-has-preview" : ""}${kind === "rules" ? " migration-resource-rules" : ""}`}
+									className={`migration-resource-layout${focusedId && kind === "skills" ? " migration-has-preview" : ""}${kind === "rules" ? " migration-resource-rules" : ""}`}
 								>
 									<CandidateList key={kind} onPickTarget={featureProps.onPickTarget} />
 									<PreviewPanel {...featureProps} />

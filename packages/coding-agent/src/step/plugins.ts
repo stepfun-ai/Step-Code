@@ -576,14 +576,17 @@ export function resolveProvisionInstallerUrl(env: NodeJS.ProcessEnv = process.en
 export function provisionInstallCommand(
 	provision: StepPluginProvision,
 	env: NodeJS.ProcessEnv = process.env,
+	platform: NodeJS.Platform = process.platform,
 ): string | undefined {
 	if (provision.installer !== "steppageInstaller") return undefined;
+	// The POSIX installer cannot set up Windows; Step installs the bundle itself there.
+	if (platform === "win32") return "step mcp prepare";
 	return `curl -fsSL ${shellQuote(resolveProvisionInstallerUrl(env))} | sh`;
 }
 
 /** Install the executable declared by a built-in plugin, when it is missing. */
 export async function provisionBuiltinPlugin(provision: StepPluginProvision): Promise<string | undefined> {
-	if (provision.command !== "steppage-mcp" || process.platform === "win32") {
+	if (provision.command !== "steppage-mcp") {
 		return undefined;
 	}
 	const install = provisionInstallCommand(provision);

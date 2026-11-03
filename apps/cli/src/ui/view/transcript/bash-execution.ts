@@ -3,11 +3,14 @@
  */
 
 import {
+	type CommandExecutionOutcome,
+	commandOutcomeNotice,
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	DynamicBorder,
 	keyHint,
 	keyText,
+	readCommandExecutionOutcome,
 	stripAnsi,
 	type TruncationResult,
 	theme,
@@ -49,6 +52,7 @@ export class BashExecutionComponent extends Container {
 	private outputLines: string[] = [];
 	private status: "running" | "complete" | "cancelled" | "error" = "running";
 	private exitCode: number | undefined = undefined;
+	private commandStatus: string | undefined;
 	private loader: Loader;
 	private truncationResult?: TruncationResult;
 	private fullOutputPath?: string;
@@ -165,9 +169,14 @@ export class BashExecutionComponent extends Container {
 					),
 				);
 			}
-			if (this.status === "cancelled") lines.push(`${muted(STEP_BODY_PREFIX)}${theme.fg("warning", "cancelled")}`);
-			if (this.status === "error")
-				lines.push(`${muted(STEP_BODY_PREFIX)}${theme.fg("error", `exit ${this.exitCode ?? "?"}`)}`);
+			if (this.status === "cancelled") {
+				lines.push(`${muted(STEP_BODY_PREFIX)}${theme.fg("warning", this.commandStatus ?? "cancelled")}`);
+			}
+			if (this.status === "error") {
+				lines.push(
+					`${muted(STEP_BODY_PREFIX)}${theme.fg("error", this.commandStatus ?? `exit ${this.exitCode ?? "?"}`)}`,
+				);
+			}
 			const wasTruncated = this.truncationResult?.truncated || contextTruncation.truncated;
 			if (wasTruncated && this.fullOutputPath) {
 				lines.push(`${muted(STEP_BODY_PREFIX)}${theme.fg("warning", `Full output: ${this.fullOutputPath}`)}`);
@@ -222,13 +231,22 @@ export class BashExecutionComponent extends Container {
 		cancelled: boolean,
 		truncationResult?: TruncationResult,
 		fullOutputPath?: string,
+		/** Structured facts when the caller has them; older callers omit this. */
+		execution?: CommandExecutionOutcome,
 	): void {
+		const observed = readCommandExecutionOutcome(execution);
 		this.exitCode = exitCode;
-		this.status = cancelled
-			? "cancelled"
-			: exitCode !== 0 && exitCode !== undefined && exitCode !== null
-				? "error"
-				: "complete";
+		this.commandStatus = observed ? commandOutcomeNotice(observed) : undefined;
+		this.status =
+			cancelled || observed?.status === "canceled"
+				? "cancelled"
+				: observed
+					? observed.status === "exited" && observed.exitCode === 0
+						? "complete"
+						: "error"
+					: exitCode !== 0 && exitCode !== undefined && exitCode !== null
+						? "error"
+						: "complete";
 		this.truncationResult = truncationResult;
 		this.fullOutputPath = fullOutputPath;
 

@@ -74,19 +74,28 @@ export function toggleSessionMenu(sessionId: string): void {
 	setUi({ sessionMenu: open ? null : { sessionId }, workspaceMenu: null, tagPicker: null, streamMenu: false });
 }
 
-/** Legacy `closeSessionMenu` (1287-1289). */
+/** Legacy `closeSessionMenu` (1287-1289); its "Move to group" submenu closes with it. */
 export function closeSessionMenu(): void {
-	setUi({ sessionMenu: null });
+	setUi({ sessionMenu: null, tagPicker: null });
 }
 
-/** Open or close `#tagPicker` for a session (legacy `openTagPicker`, 1022-1060). */
-export function toggleTagPicker(sessionId: string): void {
-	const open = getState().ui.tagPicker?.sessionId === sessionId;
-	setUi({ tagPicker: open ? null : { sessionId }, workspaceMenu: null, sessionMenu: null, streamMenu: false });
+/**
+ * Open `#tagPicker`, the "Move to group" submenu beside the first row of a
+ * session's open `#sessionMenu`; the menu stays open behind it.
+ */
+export function openTagPicker(sessionId: string): void {
+	if (getState().ui.tagPicker?.sessionId === sessionId) return;
+	setUi({ tagPicker: { sessionId }, workspaceMenu: null, streamMenu: false });
 }
 
+/** Close only the submenu (another menu row is hovered, or Escape in the group name field). */
 export function closeTagPicker(): void {
-	setUi({ tagPicker: null });
+	if (getState().ui.tagPicker) setUi({ tagPicker: null });
+}
+
+/** Close a row's "…" menu together with its group submenu (a group was picked, or an outside click). */
+export function closeRowMenus(): void {
+	setUi({ sessionMenu: null, tagPicker: null });
 }
 
 /* ── Conversation list ───────────────────────────────────────────────────── */

@@ -229,6 +229,31 @@ export class SessionImportService {
 
 	async scan(options: ImportScanOptions = {}): Promise<ImportScanResult> {
 		if (this.closed) throw new SessionImportError("Importer is closed", 503);
+		const { result, candidates } = await this.collect(options);
+		this.candidates.clear();
+		for (const [id, candidate] of candidates) this.candidates.set(id, candidate);
+		result.candidates.sort((a, b) => b.modified.localeCompare(a.modified));
+		return result;
+	}
+
+	/**
+	 * Whether discovery finds a source session that `accept` admits, stopping at the first one.
+	 * Unlike `scan`, it leaves the reviewed candidate cache alone, so a probe never invalidates the
+	 * candidate ids an open import or migration view still holds. Unreadable records count as absent.
+	 */
+	async probe(
+		options: Omit<ImportScanOptions, "customRoot">,
+		accept: (candidate: ImportCandidate) => boolean = () => true,
+	): Promise<boolean> {
+		if (this.closed) throw new SessionImportError("Importer is closed", 503);
+		const { stopped } = await this.collect(options, accept);
+		return stopped;
+	}
+
+	private async collect(
+		options: ImportScanOptions,
+		stopAt?: (candidate: ImportCandidate) => boolean,
+	): Promise<{ result: ImportScanResult; candidates: Map<string, CandidateFile>; stopped: boolean }> {
 		const result: ImportScanResult = { existingCount: 0, roots: {}, candidates: [], errors: [] };
 		const roots: [ImportSource, string][] = [
 			["workbuddy", options.customRoot?.trim() || options.workbuddyRoot?.trim() || workbuddyProjectsRoot(homedir())],
@@ -250,7 +275,9 @@ export class SessionImportService {
 		// Custom scans append capabilities; automatic scans replace them after discovery settles.
 		const candidates = new Map<string, CandidateFile>(options.customRoot ? this.candidates : []);
 		const knownPaths = new Set([...candidates.values()].map((file) => `${file.candidate.source}\0${file.path}`));
+		let stopped = false;
 		for (const [source, input] of roots) {
+			if (stopped) break;
 			try {
 				const root = await realpath(input);
 				if (!options.customRoot) result.roots[source] = root;
@@ -287,6 +314,7 @@ export class SessionImportService {
 					if (depth > MAX_DEPTH) throw new Error("Source directory depth limit exceeded");
 					const files = await readdir(dir, { withFileTypes: true });
 					for (const file of files) {
+						if (stopped) return;
 						if (this.closed) throw new Error("Importer is closed");
 						if (file.isSymbolicLink()) continue;
 						const archived = file.name === "archived_sessions";
@@ -338,6 +366,7 @@ export class SessionImportService {
 								knownPaths.add(key);
 								result.candidates.push(candidate);
 								result.roots[source] = root;
+								if (stopAt?.(candidate)) stopped = true;
 							} catch (error) {
 								result.errors.push({
 									source,
@@ -354,10 +383,7 @@ export class SessionImportService {
 					result.errors.push({ source, message: error instanceof Error ? error.message : String(error) });
 			}
 		}
-		this.candidates.clear();
-		for (const [id, candidate] of candidates) this.candidates.set(id, candidate);
-		result.candidates.sort((a, b) => b.modified.localeCompare(a.modified));
-		return result;
+		return { result, candidates, stopped };
 	}
 
 	private async discover(

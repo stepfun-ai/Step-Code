@@ -416,7 +416,10 @@ export function createEditToolDefinition(
 				? JSON.stringify({ path: previewInput.path, edits: previewInput.edits })
 				: undefined;
 			const typedResult = result as EditToolResultLike;
-			const resultDiff = !context.isError ? typedResult.details?.diff : undefined;
+			// A call can fail after its edit already landed (a cancelled `then_run`, a
+			// result-preparation failure). Its details still describe the change, so show
+			// them like any applied edit; a failure before the write carries no diff.
+			const resultDiff = typedResult.details?.diff;
 			let changed = false;
 			if (callComponent) {
 				if (typeof resultDiff === "string") {

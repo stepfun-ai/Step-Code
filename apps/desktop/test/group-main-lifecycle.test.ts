@@ -17,7 +17,7 @@ const handlers = new Map();
 export const ipcMain = { handle: (name, fn) => handlers.set(name, fn) };
 export const contextBridge = { exposeInMainWorld: (name, value) => { globalThis[name] = value; } };
 export const ipcRenderer = { invoke: async (name, ...args) => handlers.get(name)(globalThis.event, ...args) };
-export const dialog = {}, shell = { openExternal: async () => {}, openPath: async () => {} };
+export const dialog = {}, shell = { openExternal: async () => {}, openPath: async () => {} }, systemPreferences = {};
 export const nativeTheme = { shouldUseDarkColors: false }, screen = { getAllDisplays: () => [] };
 export const session = { defaultSession: { setPermissionCheckHandler() {}, setPermissionRequestHandler() {} } };
 export const Menu = { buildFromTemplate: () => ({ popup() {} }) };
@@ -67,6 +67,9 @@ test("actual main/window invoke chain keeps Host through failed quit, drains res
 	};
 	const hook = `import { registerHooks } from 'node:module';
 process.resourcesPath ??= ${JSON.stringify(directory)};
+// The scenario is macOS's lifecycle (closing the last window keeps the Host; Dock activation reopens it),
+// so pin the platform before main.ts loads instead of following the machine running the test.
+Object.defineProperty(process, 'platform', { value: 'darwin' });
 const replacements = ${JSON.stringify(replacements)};
 registerHooks({ resolve(specifier, context, next) {
  const key = specifier === 'electron' ? specifier : specifier.split('/').at(-1);

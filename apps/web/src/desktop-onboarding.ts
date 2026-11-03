@@ -263,11 +263,15 @@ export class DesktopOnboardingStore {
 			this.get();
 			renameSync(stage, this.path);
 			stage = undefined;
-			const dir = openSync(this.agentDir, constants.O_RDONLY);
-			try {
-				fsyncSync(dir);
-			} finally {
-				closeSync(dir);
+			// Windows cannot fsync a directory handle (EPERM); NTFS journals the rename itself.
+			// Failing here would report a write that already replaced the file.
+			if (process.platform !== "win32") {
+				const dir = openSync(this.agentDir, constants.O_RDONLY);
+				try {
+					fsyncSync(dir);
+				} finally {
+					closeSync(dir);
+				}
 			}
 			return next;
 		} finally {

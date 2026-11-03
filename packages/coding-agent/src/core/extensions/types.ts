@@ -55,6 +55,7 @@ import type { KeybindingsManager } from "../keybindings.ts";
 import type { CustomMessage } from "../messages.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
+import type { AgentRunFailure } from "../run-failure.ts";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -436,12 +437,43 @@ export interface ExtensionContext {
 	isIdle(): boolean;
 	/** Whether project-local trust is active for this context. */
 	isProjectTrusted(): boolean;
+	/**
+	 * The host can show a plan proposal and collect a decision for it.
+	 *
+	 * Unlike `hasUI`, this is about one specific surface, not about having a
+	 * dialog bridge at all: an rpc child has the bridge but no user to answer.
+	 * A host that cannot ask leaves this false, and the tool hands the proposal
+	 * to its caller as before.
+	 *
+	 * Required, so a host that forgets to declare it is a type error rather than a
+	 * silent fallback to the handoff behaviour.
+	 */
+	planReviewSurface: boolean;
 	/** The current abort signal, or undefined when the agent is not streaming. */
 	signal: AbortSignal | undefined;
 	/** Abort the current agent operation */
 	abort(): void;
 	/** Whether there are queued messages waiting */
 	hasPendingMessages(): boolean;
+	/**
+	 * Whether a decision the user has not answered blocks turns started on the
+	 * user's behalf. Features that can defer their own trigger — a scheduled job
+	 * that should stay due, a continuation that should retry later — ask this
+	 * instead of enqueueing work that would replay after the decision.
+	 *
+	 * Optional so an older host keeps compiling: a host without it has no gate.
+	 */
+	hasPendingUserDecision?(): boolean;
+	/**
+	 * Register a predicate that blocks automatic turn starts until it returns
+	 * false. User prompts always run; this gates what would start a turn on the
+	 * user's behalf, such as a cron delivery or a goal continuation whose feature
+	 * would otherwise need to know every other starter. Returns an unregister
+	 * function.
+	 *
+	 * Optional so an older host keeps compiling: a host without it ignores guards.
+	 */
+	registerAutomaticTurnGuard?(guard: () => boolean): () => void;
 	/** Gracefully shutdown pi and exit. Available in all contexts. */
 	shutdown(): void;
 	/** Get current context usage for the active model. */
@@ -511,7 +543,12 @@ export interface ReplacedSessionContext extends ExtensionCommandContext {
 
 	sendUserMessage(
 		content: string | (TextContent | ImageContent)[],
-		options?: { deliverAs?: "steer" | "followUp"; expandPromptTemplates?: boolean },
+		options?: {
+			deliverAs?: "steer" | "followUp";
+			expandPromptTemplates?: boolean;
+			/** Who authored the text. A host bridge forwarding a real user passes its own source. */
+			source?: InputSource;
+		},
 	): Promise<void>;
 }
 
@@ -551,7 +588,10 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	expanded: boolean;
 	/** Whether inline images are currently shown in the TUI. */
 	showImages: boolean;
-	/** Whether the current result is an error. */
+	/**
+	 * Whether the invocation failed. A product outcome such as a command's exit
+	 * code lives in `details.execution`, not here.
+	 */
 	isError: boolean;
 }
 
@@ -847,9 +887,17 @@ export interface AgentEndEvent {
 	messages: AgentMessage[];
 }
 
-/** Fired after an agent run has fully settled and no automatic retry, compaction, or queued continuation will run. */
+/**
+ * Fired after an agent run has fully settled and no automatic retry, compaction,
+ * or queued continuation will run.
+ *
+ * `failure` is set when the run produced no usable answer. A provider error is
+ * already visible as the assistant message's `stopReason`; an empty turn keeps
+ * the provider's own value, so its outcome can only be read here.
+ */
 export interface AgentSettledEvent {
 	type: "agent_settled";
+	failure?: AgentRunFailure;
 }
 
 export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom";
@@ -889,6 +937,16 @@ export interface TurnEndEvent {
 export interface MessageStartEvent {
 	type: "message_start";
 	message: AgentMessage;
+	/**
+	 * The message was written by a person, not generated on their behalf.
+	 *
+	 * Present on user messages: `true` when the person wrote it, `false` when an
+	 * extension produced it. Absent on other roles. A queued message and a prompt
+	 * look identical in the transcript, so an extension that must react to "the
+	 * user spoke" — rather than to "some user message exists" — reads this instead
+	 * of the content.
+	 */
+	fromUser?: boolean;
 }
 
 /** Fired during assistant message streaming with token-by-token updates */
@@ -934,6 +992,7 @@ export interface ToolExecutionEndEvent {
 	toolCallId: string;
 	toolName: string;
 	result: any;
+	/** Whether the invocation failed; read `result.details.execution` for a command's outcome. */
 	isError: boolean;
 }
 
@@ -1488,20 +1547,38 @@ export interface ExtensionAPI {
 	// Actions
 	// =========================================================================
 
-	/** Send a custom message to the session. */
+	/**
+	 * Send a custom message to the session.
+	 *
+	 * `triggerTurn` starts a turn when the session is idle, unless a decision the
+	 * user has not answered is pending: the message is then held and delivered as
+	 * context in the turn that answers it. Prefer checking
+	 * `ctx.hasPendingUserDecision()` when the feature can defer its own trigger.
+	 */
 	sendMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
 	): void;
 
 	/**
-	 * Send a user message to the agent. Always triggers a turn.
+	 * Send a user message to the agent, as text the user could have typed.
+	 *
+	 * Starts a turn unless the session is waiting on a decision the user has not
+	 * answered: that message is what answers it, so pass the real author through
+	 * `source` when a host bridge forwards a person's input. Extension-generated
+	 * text keeps the default `"extension"` source and waits for the answer.
+	 *
 	 * When the agent is streaming, use deliverAs to specify how to queue the message.
 	 * Set expandPromptTemplates to dispatch extension commands and expand skill commands and prompt templates.
 	 */
 	sendUserMessage(
 		content: string | (TextContent | ImageContent)[],
-		options?: { deliverAs?: "steer" | "followUp"; expandPromptTemplates?: boolean },
+		options?: {
+			deliverAs?: "steer" | "followUp";
+			expandPromptTemplates?: boolean;
+			/** Who authored the text. A host bridge forwarding a real user passes its own source. */
+			source?: InputSource;
+		},
 	): void;
 
 	/** Append a custom entry to the session for state persistence (not sent to LLM). */
@@ -1762,7 +1839,12 @@ export type SendMessageHandler = <T = unknown>(
 
 export type SendUserMessageHandler = (
 	content: string | (TextContent | ImageContent)[],
-	options?: { deliverAs?: "steer" | "followUp"; expandPromptTemplates?: boolean },
+	options?: {
+		deliverAs?: "steer" | "followUp";
+		expandPromptTemplates?: boolean;
+		/** Who authored the text. A host bridge forwarding a real user passes its own source. */
+		source?: InputSource;
+	},
 ) => void;
 
 export type AppendEntryHandler = <T = unknown>(customType: string, data?: T) => void;
@@ -1851,9 +1933,19 @@ export interface ExtensionContextActions {
 	getScopedModels: () => readonly ScopedModel[];
 	isIdle: () => boolean;
 	isProjectTrusted: () => boolean;
+	/** Whether the host can collect a plan review decision (optional; defaults to false). */
+	hasPlanReviewSurface?: () => boolean;
 	getSignal: () => AbortSignal | undefined;
 	abort: () => void;
 	hasPendingMessages: () => boolean;
+	/** Whether a decision the user has not answered blocks automatic turn starts. */
+	hasPendingUserDecision?: () => boolean;
+	/**
+	 * Register a predicate that blocks automatic turn starts until it returns
+	 * false. User prompts always run; this gates what starts a turn on the user's
+	 * behalf. Returns an unregister function.
+	 */
+	registerAutomaticTurnGuard?: (guard: () => boolean) => () => void;
 	shutdown: () => void;
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (options?: CompactOptions) => void;

@@ -901,9 +901,47 @@
         return out;
       }
 
+      /**
+       * A command's exit status is a result fact, not an invocation failure.
+       * Read the declared observation first and fall back to the legacy flag.
+       *
+       * The format mirrors `formatCommandExecutionOutcome` in agent-core; this
+       * static template cannot import it, so any wording change must be applied
+       * in both places and is covered by the export-html regression.
+       */
+      function commandOutcomeFailed(execution, fallback) {
+        if (!execution || typeof execution !== 'object') return fallback;
+        return !(execution.status === 'exited' && execution.exitCode === 0);
+      }
+
+      function commandOutcomeLabel(execution) {
+        if (!execution || typeof execution !== 'object') return '';
+        if (execution.status === 'canceled') return 'Command aborted';
+        if (execution.status === 'timed_out') {
+          const seconds = typeof execution.timeoutSeconds === 'number' ? ` after ${execution.timeoutSeconds} seconds` : '';
+          const signal = typeof execution.signal === 'string' ? ` (signal ${execution.signal})` : '';
+          return `Command timed out${seconds}${signal}`;
+        }
+        if (execution.status === 'signaled') return `Command terminated by signal ${execution.signal}`;
+        // A clean exit needs no status: absence already says it completed.
+        if (execution.status === 'exited' && execution.exitCode === 0) return '';
+        if (execution.status === 'exited') return `Command exited with code ${execution.exitCode}`;
+        return 'Command returned no exit code; check its effects before repeating it.';
+      }
+
+      function commandExecutionOf(result) {
+        if (!result || !result.details || typeof result.details !== 'object') return undefined;
+        if (result.details.execution) return result.details.execution;
+        // An embedded check reports its outcome under thenRun; an applied mutation
+        // with a failing check must not be styled as a clean success.
+        const thenRun = result.details.thenRun;
+        return thenRun && typeof thenRun === 'object' ? thenRun.execution : undefined;
+      }
+
       function renderToolCall(call) {
         const result = findToolResult(call.id);
-        const isError = result?.isError || false;
+        const execution = commandExecutionOf(result);
+        const isError = commandOutcomeFailed(execution, result?.isError || false);
         const statusClass = result ? (isError ? 'error' : 'success') : 'pending';
 
         const getResultText = () => {
@@ -1271,12 +1309,19 @@
           }
 
           if (msg.role === 'bashExecution') {
-            const isError = msg.cancelled || (msg.exitCode !== 0 && msg.exitCode !== null);
+            const execution = msg.execution;
+            const isError = commandOutcomeFailed(
+              execution,
+              msg.cancelled || (msg.exitCode !== 0 && msg.exitCode !== null),
+            );
             let html = `<div class="tool-execution ${isError ? 'error' : 'success'}" id="${entryDomId}">${tsHtml}`;
             html += `<div class="tool-command">$ ${escapeHtml(msg.command)}</div>`;
             if (msg.output) html += formatExpandableOutput(msg.output, 10);
-            if (msg.cancelled) {
+            const outcomeLabel = commandOutcomeLabel(execution);
+            if (msg.cancelled || (execution && execution.status === 'canceled')) {
               html += '<div style="color: var(--warning)">(cancelled)</div>';
+            } else if (outcomeLabel) {
+              html += `<div style="color: var(--error)">${escapeHtml(outcomeLabel)}</div>`;
             } else if (msg.exitCode !== 0 && msg.exitCode !== null) {
               html += `<div style="color: var(--error)">(exit ${msg.exitCode})</div>`;
             }

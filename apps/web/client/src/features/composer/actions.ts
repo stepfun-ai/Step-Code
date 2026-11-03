@@ -5,6 +5,7 @@
 
 import { t } from "../../i18n";
 import { api, apiSend, errorMessage } from "../../lib/api";
+import { splitAttachedFiles } from "../../lib/attached-files";
 import {
 	DRAFT_SELECTION_ID,
 	draftFullAccessQuestion,
@@ -94,6 +95,55 @@ export async function selectPolicy(preset: string): Promise<void> {
 		renderSnapshot(await apiSend<SessionSnapshot>(`/api/v1/sessions/${current.id}/policy`, "PATCH", { preset }), {
 			fromAction: true,
 		});
+	} catch (error) {
+		showError(errorMessage(error));
+	}
+}
+
+/**
+ * Answer the plan card with one of the kernel's own verbs.
+ *
+ * A decision cannot wait behind the turn it is meant to answer, and the host queue
+ * is held while a proposal is open, so a queued answer would never be dispatched.
+ * It goes straight to the kernel, which runs a command even while a turn is
+ * active. Only the card uses this: an ordinary `/plan <task>` typed into the
+ * composer keeps the normal queue semantics.
+ */
+export async function sendPlanDecision(text: string): Promise<boolean> {
+	const current = getState().current;
+	if (!current) return false;
+	try {
+		await api(`/api/v1/sessions/${current.id}/messages`, {
+			method: "POST",
+			body: JSON.stringify({ text, attachments: [], files: [] }),
+		});
+		// The card stays actionable until the snapshot says the proposal is answered,
+		// so pull the state the decision settled on. The decision itself is already
+		// made: a failed poll must not report it as failed, and an unawaited rejection
+		// would surface as an unhandled one.
+		void refreshCurrent().catch(() => {});
+		return true;
+	} catch (error) {
+		showError(errorMessage(error));
+		return false;
+	}
+}
+
+/**
+ * Leave plan mode now, without composing a message.
+ *
+ * `/plan off` is a kernel command, so the host applies it immediately even while
+ * a turn runs. Sending it as a message would queue it behind that turn instead —
+ * and a queued "leave" arrives after the turn it was meant to interrupt.
+ */
+export async function leavePlanMode(): Promise<void> {
+	const current = getState().current;
+	if (!current) return;
+	try {
+		await apiSend(`/api/v1/sessions/${current.id}/mode`, "PATCH", { mode: "plan", enabled: false });
+		// The route is fire-and-forget (a slash command can take seconds), so pull
+		// the state the mode change settled on instead of waiting for an event.
+		await refreshCurrent();
 	} catch (error) {
 		showError(errorMessage(error));
 	}
@@ -257,6 +307,25 @@ export function modePrefix(id: ModeId): string {
 }
 
 /**
+ * `text` with a picked command (`/skill:x`) in front. The kernel runs only the
+ * command that leads a message, so a slash mode the text already leads with
+ * (`/goal`, `/plan`) keeps the lead and the pick becomes the start of its
+ * argument: `/goal /skill:x task`, not `/skill:x /goal task`, which expanded
+ * the skill and never started the goal. The `ultracode` keyword is no command;
+ * the pick still leads it and the kernel finds the keyword in the request.
+ */
+export function withLeadCommand(text: string, command: string | undefined): string {
+	if (!command) return text;
+	for (const id of ["goal", "plan"] as const) {
+		const prefix = MODE_PREFIX[id];
+		if (text !== prefix.trimEnd() && !text.startsWith(prefix)) continue;
+		const rest = text.slice(prefix.length).trimStart();
+		return rest ? `${prefix}${command} ${rest}` : `${prefix}${command}`;
+	}
+	return `${command} ${text}`;
+}
+
+/**
  * Single-select: picking `id` makes it the only staged mode, picking it again
  * removes it. Nothing is written into the prompt here; the composer renders the
  * staged mode as the prompt's lead chip (see `insertModeLead`).
@@ -376,6 +445,18 @@ const SESSION_CONTEXT_MAX_CHARS = 4000;
 const SESSION_CONTEXT_MAX_MESSAGES = 20;
 
 /**
+ * A quoted user message with each attached file reduced to its name and stored
+ * path. A whole file block would read as the new message's own attachment and
+ * spend the transcript cap on file content; the path lets the model read the
+ * file itself when it needs it.
+ */
+function quotedUserText(content: string): string {
+	const { text, files } = splitAttachedFiles(content);
+	const references = files.map((file) => `[文件 ${file.name}，路径：${file.path}]`).join("\n");
+	return [text.trim(), references].filter(Boolean).join("\n");
+}
+
+/**
  * Package another session's conversation as a prompt tail block:
  * a `# userselect:` heading naming the source session and a fenced
  * transcript of its user/assistant messages, oldest first, capped. The block
@@ -392,7 +473,9 @@ export function packageSessionContext(title: string, entries: readonly TimelineI
 		)
 		.slice(-SESSION_CONTEXT_MAX_MESSAGES);
 	let transcript = messages
-		.map((message) => `${message.role === "user" ? "用户" : "助手"}: ${message.content.trim()}`)
+		.map((message) =>
+			message.role === "user" ? `用户: ${quotedUserText(message.content)}` : `助手: ${message.content.trim()}`,
+		)
 		.join("\n\n");
 	if (transcript.length > SESSION_CONTEXT_MAX_CHARS) {
 		transcript = `${transcript.slice(0, SESSION_CONTEXT_MAX_CHARS)}\n…（超出部分已截断）`;

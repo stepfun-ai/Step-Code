@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { chooseMode, clearModes, modePrefix } from "../client/src/features/composer/actions.ts";
+import { chooseMode, clearModes, modePrefix, withLeadCommand } from "../client/src/features/composer/actions.ts";
 import { commandLeadIcon, MODES, modeFromCommand, PICKABLE_MODES } from "../client/src/features/composer/modes.ts";
 import { MESSAGES } from "../client/src/i18n/messages.ts";
 import { createInitialState, getState, setState, type ModeId } from "../client/src/state/store.ts";
@@ -122,4 +122,14 @@ test("each leading command keeps one icon across typings and menu picks", () => 
 	assert.equal(commandLeadIcon("btw"), "question");
 	assert.equal(commandLeadIcon("feedback"), "thumbsUp");
 	assert.equal(commandLeadIcon("compact"), "prompt");
+});
+
+test("a picked command rides after a leading /goal or /plan, so the mode still runs", () => {
+	assert.equal(withLeadCommand("/goal 做一个下载器", "/skill:caveman"), "/goal /skill:caveman 做一个下载器");
+	assert.equal(withLeadCommand("/plan fix it", "/skill:review"), "/plan /skill:review fix it");
+	assert.equal(withLeadCommand("/goal", "/skill:caveman"), "/goal /skill:caveman");
+	// The keyword opt-in and plain text keep the command in front, where the kernel expands it.
+	assert.equal(withLeadCommand("ultracode: audit", "/skill:caveman"), "/skill:caveman ultracode: audit");
+	assert.equal(withLeadCommand("/goalkeeper rules", "/skill:x"), "/skill:x /goalkeeper rules");
+	assert.equal(withLeadCommand("hello", undefined), "hello");
 });

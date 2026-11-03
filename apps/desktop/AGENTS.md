@@ -37,7 +37,7 @@ apps/desktop/
   README.md              architecture, scripts, environment variables, files (keep in sync)
   package.json           main: dist/main.js
   tsconfig.json
-  scripts/build.mjs      esbuild bundle; --ensure-web builds @step-harness/web if its output is missing
+  scripts/build.mjs      esbuild bundle; --ensure-web rebuilds workspace packages and @step-harness/web when output is missing or stale
   scripts/package.mjs    stage the app and the server's dependency closure, write the release envelope, run electron-builder
   scripts/win-signer.cjs Windows Authenticode signing with the EV token (Windows packager only)
   scripts/icons.mjs      regenerate resources/icon.{png,icns,ico} from resources/icon.svg (macOS)
@@ -49,9 +49,11 @@ apps/desktop/
     window.ts            BrowserWindow options, navigation pinning, external links, macOS inset title bar
     browser-guests.ts    embedded-browser <webview> leases, attach checks, guest session/navigation/popup policy
     browser-guest-policy.ts  pure guest URL, request, lease and shortcut rules (unit-tested without Electron)
+    dist-freshness.ts    mtime probes for built workspace packages, used by scripts/build.mjs (pure, unit-tested)
     preload.ts           contextBridge -> window.stepcodeDesktop (implements the web contract)
     ipc.ts               ipcMain handlers + sender validation
     ipc-channels.ts      channel names shared by preload and main
+    microphone-access.ts OS microphone permission before recording; fixed macOS/Windows settings URLs (pure, unit-tested)
     menu.ts              application and edit context menus (incl. File -> Restart Server / Show Server Logs)
     pages.ts             error / loading pages shown when the server is not available
     shell-environment.ts read the login-shell environment for GUI launches
@@ -151,8 +153,8 @@ Run from the repo root.
 
 | Command | Use |
 |---|---|
-| `pnpm desktop` | Build the web app, bundle the desktop, launch Electron |
-| `pnpm --filter @step-harness/desktop dev` | Bundle and launch; builds the web app only when its output is missing |
+| `pnpm desktop` | Build the web app and any stale workspace packages, bundle the desktop, launch Electron |
+| `pnpm --filter @step-harness/desktop dev` | Bundle and launch; rebuilds the web app and workspace packages only when their output is missing or stale |
 | `pnpm --filter @step-harness/desktop build` | esbuild bundle only |
 | `pnpm --filter @step-harness/desktop typecheck` | Type check source and tests (also part of `pnpm run check`) |
 | `pnpm --filter @step-harness/desktop test` | Offline child-process, Node fallback, release-envelope and update-feed regressions |
@@ -160,13 +162,17 @@ Run from the repo root.
 | `STEPCODE_DESKTOP_SMOKE=1 pnpm --filter @step-harness/desktop dev` | Load hidden, print `STEPCODE_DESKTOP_SMOKE {json}`, exit 0/1 |
 | `pnpm run check` | Required before handing back any code change |
 
-The packages the server imports must be built first (`pnpm build` at the root). After a web change, rebuild the web
-app (`pnpm --filter @step-harness/web build`) and restart the desktop (or File -> Restart Server for host-only
-changes).
+`--ensure-web` compares build output timestamps with the sources of the packages the server imports
+(`@step-harness/coding-agent` and below) and rebuilds the stale chain with type-only scripts (`build:offline`,
+`build:unbundled`) before building the web app. Do not widen it to full package builds: `providers` `build`
+regenerates tracked model data and `coding-agent` `build` packages the CLI. `dist/` is git-ignored, so this is what
+makes a branch switch or pull work without a manual `pnpm build`; packaging still needs the root build for the CLI.
 
 ## Testing
 
 - Any change here: `typecheck` and `test`, then launch the app and exercise what you changed. Report what you checked.
+- Change to `src/dist-freshness.ts` or the `--ensure-web` path: `test` plus one launch after touching a package
+  source file, and one launch without changes to confirm the builds are skipped.
 - Change to the bridge, window or server hosting: also run the smoke mode, and one real session in a scratch
   workspace that edits a file (confirm the change on disk).
 - Automation: append `--remote-debugging-port=<port>` to `electron .` and drive the window over CDP. Use an isolated

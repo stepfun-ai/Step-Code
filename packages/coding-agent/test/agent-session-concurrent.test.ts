@@ -362,6 +362,52 @@ describe("AgentSession concurrent prompt guard", () => {
 		await expect(session.prompt("Second message")).resolves.not.toThrow();
 	});
 
+	it("removes a delivered image-only steer from the pending queue", async () => {
+		// The first response waits for the steer to be queued; later ones finish at once.
+		let releaseFirst = () => {};
+		const firstHeld = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		let calls = 0;
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: stepModel(), systemPrompt: "Test", tools: [] },
+			streamFn: () => {
+				const hold = calls === 0 ? firstHeld : Promise.resolve();
+				calls += 1;
+				const stream = new MockAssistantStream();
+				void hold.then(() => {
+					stream.push({ type: "start", partial: createAssistantMessage("") });
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Done") });
+				});
+				return stream;
+			},
+		});
+		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
+		const modelRegistry = await createModelRegistry(authStorage, tempDir);
+		await authStorage.modify("step", async () => ({ type: "api_key", key: "test-key" }));
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settingsManager: SettingsManager.create(tempDir, tempDir),
+			cwd: tempDir,
+			modelRuntime: getModelRuntime(modelRegistry),
+			resourceLoader: createTestResourceLoader(),
+		});
+
+		const first = session.prompt("First message");
+		await waitForStreaming(session);
+		await session.steer("", [{ type: "image", data: "Zml4dHVyZQ==", mimeType: "image/png" }]);
+		expect(session.getSteeringMessages()).toEqual([""]);
+
+		releaseFirst();
+		await first;
+		await session.agent.waitForIdle();
+
+		expect(calls).toBe(2);
+		expect(session.getSteeringMessages()).toEqual([]);
+	});
+
 	it("should wait for queued agent events before emitting tool_call", async () => {
 		const model = stepModel();
 		const tool = {
