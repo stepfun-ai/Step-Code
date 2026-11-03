@@ -96,6 +96,29 @@ function opensTurn(item: TimelineItem, turnId: string): boolean {
 }
 
 /**
+ * The card's second line: the link label, only when it describes the file in words ("贪吃蛇小游戏",
+ * "Weekly report"). A label that merely names the file, a folder on its path, or a package, module
+ * or symbol (`app-boot`, `pluginMarket`, `@scope/pkg`) adds nothing the name and tooltip do not
+ * already say, and reads as noise, so the card shows its name alone.
+ */
+export function artifactDescription(artifact: Pick<TurnArtifact, "path" | "label">): string | undefined {
+	const label = artifact.label.trim();
+	if (!label) return;
+	const fold = (value: string) => value.toLowerCase();
+	const path = fold(artifact.path.replace(/\\/g, "/"));
+	const folded = fold(label.replace(/\\/g, "/"));
+	// The name itself, or the path's tail at a folder boundary (plugin-manager/index.ts).
+	if (path === folded || path.endsWith(`/${folded}`)) return;
+	// One word that is a folder on the path or the file's stem (README for README.zh.md).
+	const segments = path.split("/");
+	const stem = (segments.at(-1) ?? "").split(".")[0];
+	if (folded === stem || segments.includes(folded)) return;
+	// An unspaced token spelled like code: kebab/snake/dotted/scoped/pathy, or camelCase.
+	if (!/\s/u.test(label) && (/[-_./@$:#]/u.test(label) || /\p{Ll}\p{Lu}/u.test(label))) return;
+	return label;
+}
+
+/**
  * Attach the turn's own change records to its deliveries. Both sides name the file relative to the
  * workspace, but changes keep the tool's spelling (a backslash, a leading `./`), so they meet on the
  * same normalized key the recognition uses. Unchanged artifacts keep their object.

@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { artifactKind, localFileReference, workspaceFilePath, workspaceFileReference } from "../client/src/lib/file-references.ts";
 import { markdownFileReferences } from "../client/src/lib/markdown.ts";
 import { MarkdownContent } from "../client/src/ui/MarkdownView/markdown-content.ts";
-import { turnArtifacts, withTurnChanges } from "../client/src/features/conversation/turn-artifacts.ts";
+import { artifactDescription, turnArtifacts, withTurnChanges } from "../client/src/features/conversation/turn-artifacts.ts";
 import { collectTurnFooters } from "../client/src/features/conversation/turn-footers.ts";
 import { openFileReference, toggleDeliveryFile } from "../client/src/features/files/actions.ts";
 import { activeRightPanel, openRightPanel } from "../client/src/state/right-panel.ts";
@@ -205,4 +205,25 @@ test("a delivery carries its own turn's change, matched across the tool's path s
 	assert.equal(withTurnChanges(artifacts, turn, "D:/Work"), attached);
 	assert.equal(withTurnChanges(artifacts, undefined, "D:/Work"), artifacts);
 	assert.equal(withTurnChanges(artifacts, { ...turn, files: [] }, "D:/Work"), artifacts);
+});
+
+test("a delivery card describes a file only with a label written in words", () => {
+	const describe = (path: string, label: string) => artifactDescription({ path, label });
+	// Words describe the file: they get the second line.
+	assert.equal(describe("site/index.html", "贪吃蛇小游戏"), "贪吃蛇小游戏");
+	assert.equal(describe("output/report.md", "Weekly report"), "Weekly report");
+	assert.equal(describe("output/report.md", "Summary"), "Summary");
+	// The file's own name, stem or path tail, in any case, adds nothing.
+	assert.equal(describe("output/report.md", "Report"), undefined);
+	assert.equal(describe("docs/architecture.zh.md", "architecture.zh.md"), undefined);
+	assert.equal(describe("packages/boot/plugin-manager/src/index.ts", "plugin-manager/src/index.ts"), undefined);
+	assert.equal(describe("docs/README.md", "readme"), undefined);
+	// Package, module and symbol names (labels from a real reply) are noise, not a description.
+	assert.equal(describe("packages/boot/app-boot/README.zh.md", "app-boot"), undefined);
+	assert.equal(describe("docs/subsystems/client-modules.zh.md", "client-modules"), undefined);
+	assert.equal(describe("packages/client/hmr/README.zh.md", "dsh-client-hmr"), undefined);
+	assert.equal(describe("packages/client/hmr/README.zh.md", "hmr"), undefined);
+	assert.equal(describe("packages/boot/plugin-market/README.zh.md", "pluginMarket"), undefined);
+	assert.equal(describe("packages/x/README.md", "@deepseek-ai/dsh"), undefined);
+	assert.equal(describe("notes.md", "  "), undefined);
 });
