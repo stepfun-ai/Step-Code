@@ -278,6 +278,25 @@ export function modePrefix(id: ModeId): string {
 }
 
 /**
+ * `text` with a picked command (`/skill:x`) in front. The kernel runs only the
+ * command that leads a message, so a slash mode the text already leads with
+ * (`/goal`, `/plan`) keeps the lead and the pick becomes the start of its
+ * argument: `/goal /skill:x task`, not `/skill:x /goal task`, which expanded
+ * the skill and never started the goal. The `ultracode` keyword is no command;
+ * the pick still leads it and the kernel finds the keyword in the request.
+ */
+export function withLeadCommand(text: string, command: string | undefined): string {
+	if (!command) return text;
+	for (const id of ["goal", "plan"] as const) {
+		const prefix = MODE_PREFIX[id];
+		if (text !== prefix.trimEnd() && !text.startsWith(prefix)) continue;
+		const rest = text.slice(prefix.length).trimStart();
+		return rest ? `${prefix}${command} ${rest}` : `${prefix}${command}`;
+	}
+	return `${command} ${text}`;
+}
+
+/**
  * Single-select: picking `id` makes it the only staged mode, picking it again
  * removes it. Nothing is written into the prompt here; the composer renders the
  * staged mode as the prompt's lead chip (see `insertModeLead`).

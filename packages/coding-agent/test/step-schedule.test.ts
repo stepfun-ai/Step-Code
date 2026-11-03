@@ -303,6 +303,15 @@ describe("StepGoalRuntime", () => {
 		expect(prompt).toContain("original/user-triggered turn");
 		expect(prompt).toContain("fresh blocked audit");
 		expect(prompt).toContain("budget is nearly exhausted");
+		expect(prompt).not.toContain("asks for these skills");
+	});
+
+	test("names the skills an objective picked with /skill:", () => {
+		const harness = runtimeHarness();
+		const goal = harness.runtime.start("/skill:caveman build the downloader, then /skill:review-pr it", "session-1");
+		const prompt = continuationPrompt(goal);
+		expect(prompt).toContain("/skill:caveman build the downloader");
+		expect(prompt).toContain("The objective asks for these skills: caveman, review-pr.");
 	});
 
 	test("returns a completion usage report only for completed budgeted goals", async () => {

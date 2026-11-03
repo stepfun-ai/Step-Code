@@ -50,6 +50,7 @@ import {
 	syncStagedModeLead,
 	turnActive,
 	updateQueued,
+	withLeadCommand,
 } from "./actions";
 import { type ComposerDraft, composerDraft } from "./drafts";
 import { FileMenu, type FileMenuHandle } from "./FileMenu";
@@ -538,9 +539,9 @@ function ComposerInput({
 				...inputPicks.contextPackages.map((item) => item.block),
 			].join("\n\n");
 			// Lead chips serialize their own commands into `text` in staged order,
-			// so a stacked input (plan + skill + prompt) keeps its built order.
-			const command = lead ? `${lead.prefix} ` : "";
-			const outgoing = `${command}${text}${tail ? `\n\n${tail}` : ""}`;
+			// so a stacked input (plan + skill + prompt) keeps its built order; a
+			// picked command leads it, after a leading `/goal` or `/plan`.
+			const outgoing = `${withLeadCommand(text, lead?.prefix)}${tail ? `\n\n${tail}` : ""}`;
 			setQuery(null);
 			setPathQuery(null);
 			lastPathQuery.current = null;
