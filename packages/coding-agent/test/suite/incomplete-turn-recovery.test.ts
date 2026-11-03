@@ -1,11 +1,5 @@
 import type { AgentTool } from "@step-harness/agent-core";
-import {
-	fauxAssistantMessage,
-	fauxText,
-	fauxThinking,
-	fauxToolCall,
-	INCOMPLETE_TURN_MESSAGES,
-} from "@step-harness/providers";
+import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@step-harness/providers";
 import type { AssistantMessage } from "@step-harness/providers/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
@@ -95,16 +89,21 @@ describe("incomplete assistant turn recovery", () => {
 		expect(messages[1].diagnostics).toEqual([
 			expect.objectContaining({
 				type: "incomplete_turn",
-				details: {
+				details: expect.objectContaining({
 					reason: "no_visible_output",
 					consecutiveTurns: 2,
+					maxAttempts: 1,
 					hadThinking: true,
 					hadVisibleText: false,
-				},
+				}),
 			}),
 		]);
 		expect(settledFailures(harness)).toEqual([
-			{ kind: "incomplete_turn", reason: "no_visible_output", message: INCOMPLETE_TURN_MESSAGES.no_visible_output },
+			{
+				kind: "incomplete_turn",
+				reason: "no_visible_output",
+				message: expect.stringContaining("the run ended without an answer"),
+			},
 		]);
 
 		const sessionFile = harness.sessionManager.getSessionFile();
@@ -538,7 +537,11 @@ describe("incomplete assistant turn recovery", () => {
 		const messages = assistants(harness);
 		expect(messages.filter((message) => message.incomplete !== undefined)).toHaveLength(2);
 		expect(settledFailures(harness)).toEqual([
-			{ kind: "incomplete_turn", reason: "no_visible_output", message: INCOMPLETE_TURN_MESSAGES.no_visible_output },
+			{
+				kind: "incomplete_turn",
+				reason: "no_visible_output",
+				message: expect.stringContaining("the run ended without an answer"),
+			},
 		]);
 	});
 
@@ -852,7 +855,7 @@ describe("incomplete assistant turn recovery", () => {
 		const messages = assistants(harness).filter((message) => message.incomplete !== undefined);
 		expect(messages.map((message) => message.incomplete)).toEqual([reason, reason]);
 		expect(settledFailures(harness)).toEqual([
-			{ kind: "incomplete_turn", reason, message: INCOMPLETE_TURN_MESSAGES[reason] },
+			{ kind: "incomplete_turn", reason, message: expect.stringContaining("the run ended without an answer") },
 		]);
 	});
 
@@ -963,6 +966,54 @@ describe("incomplete assistant turn recovery", () => {
 		expect(recoveryEntries(harness)).toHaveLength(0);
 		// A decision the user still owes is not a failure of their run.
 		expect(settledFailures(harness)).toEqual([]);
+	});
+
+	it("reports the terminal retry limit and records recovery metadata", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage(fauxThinking("first attempt")),
+			fauxAssistantMessage(fauxThinking("second attempt")),
+		]);
+
+		await harness.session.prompt("Inspect the workspace");
+
+		const [failure] = settledFailures(harness);
+		expect(failure.message).toContain("Retry limit reached (1/1)");
+		expect(failure.message).toContain("the run ended without an answer");
+		// Classification records the budget, but only the recovery entry proves it started.
+		const last = assistants(harness)[1];
+		expect(last.diagnostics?.[0]?.details).toMatchObject({ consecutiveTurns: 2, maxAttempts: 1 });
+		expect(recoveryEntries(harness)[0]).toMatchObject({ details: { attempt: 1, maxAttempts: 1 } });
+	});
+
+	it("preserves the same recovery instructions after an earlier failed run", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		const requests: string[] = [];
+		harness.setResponses([
+			fauxAssistantMessage(fauxThinking("first run, first attempt")),
+			(context) => {
+				requests.push(JSON.stringify(context.messages));
+				return fauxAssistantMessage(fauxThinking("first run, second attempt"));
+			},
+			fauxAssistantMessage(fauxThinking("second run, first attempt")),
+			(context) => {
+				requests.push(JSON.stringify(context.messages));
+				return fauxAssistantMessage("Answered the second run.");
+			},
+		]);
+
+		await harness.session.prompt("First run");
+		await harness.session.prompt("Second run");
+
+		expect(requests).toHaveLength(2);
+		expect(requests[0]).toContain("The last turn produced no visible answer");
+		const recoveries = recoveryEntries(harness).filter((entry) => entry.type === "custom_message");
+		expect(recoveries).toHaveLength(2);
+		expect(recoveries[1].content).toEqual(recoveries[0].content);
+		expect(recoveries[1].content).toContain("Do not put tool calls or commands inside reasoning only.");
+		expect(harness.session.getLastAssistantText()).toBe("Answered the second run.");
 	});
 
 	it("does not recover a provider error", async () => {

@@ -3,6 +3,56 @@ import type { AssistantMessage } from "@step-harness/providers";
 import { WorkingOutputTracker } from "../src/ui/view/chrome/status-indicator.ts";
 import type { RuntimeContext } from "../src/ui/runtime/context.ts";
 import { handleSessionEvent } from "../src/ui/runtime/session-events.ts";
+import { INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE } from "@step-harness/coding-agent";
+
+test("announces only a recovery that actually starts and uses its attempt metadata", async () => {
+	const showStatus = vi.fn();
+	const ctx = {
+		isInitialized: true,
+		footer: { invalidate: vi.fn() },
+		showStatus,
+		addMessageToChat: vi.fn(),
+		redraw: { requestRender: vi.fn() },
+	} as unknown as RuntimeContext;
+	await handleSessionEvent(ctx, {
+		type: "message_start",
+		message: { role: "custom", customType: "other", content: "", display: false, timestamp: 1 },
+	});
+	expect(showStatus).not.toHaveBeenCalled();
+	await handleSessionEvent(ctx, {
+		type: "message_start",
+		message: {
+			role: "custom",
+			customType: INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
+			content: "",
+			display: false,
+			timestamp: 2,
+			details: { attempt: 2, maxAttempts: 3 },
+		},
+	});
+	expect(showStatus).toHaveBeenCalledExactlyOnceWith("Retry attempt 2/3 started after an empty model turn.");
+	expect(showStatus.mock.calls[0][0]).not.toContain("retrying");
+});
+
+test("settlement displays a final failure even when it equals the turn explanation", async () => {
+	const showError = vi.fn();
+	const ctx = {
+		isInitialized: true,
+		footer: { invalidate: vi.fn() },
+		showError,
+		checkShutdownRequested: vi.fn(),
+	} as unknown as RuntimeContext;
+	const failure = {
+		kind: "incomplete_turn" as const,
+		reason: "no_visible_output" as const,
+		message: "The model returned no visible answer or executable tool call.",
+	};
+	await handleSessionEvent(ctx, { type: "agent_settled", failure });
+	expect(showError).toHaveBeenCalledExactlyOnceWith(failure.message);
+	showError.mockClear();
+	await handleSessionEvent(ctx, { type: "agent_settled" });
+	expect(showError).not.toHaveBeenCalled();
+});
 
 test.each(["agent_end", "auto_clm_end", "compaction_end"] as const)(
 	"clears terminal progress on %s even after the setting is disabled",

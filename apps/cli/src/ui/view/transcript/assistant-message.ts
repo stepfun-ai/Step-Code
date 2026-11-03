@@ -221,13 +221,11 @@ export class AssistantMessageComponent extends Container {
 				this.contentContainer.addChild(new Spacer(1));
 				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
 			} else if (message.incomplete && INCOMPLETE_TURN_MESSAGES[message.incomplete]) {
-				// The provider reported a normal stop while the turn carried nothing to
-				// act on. Without this line the transcript would show an empty answer.
-				// Warning, not error: the session recovers the first one, and only a
-				// repeated empty turn ends the run.
+				// A turn's classification cannot prove that recovery started or the run
+				// ended. The live host presents those actions from their own events.
 				this.contentContainer.addChild(new Spacer(1));
 				this.contentContainer.addChild(
-					new Text(theme.fg("warning", INCOMPLETE_TURN_MESSAGES[message.incomplete]), this.outputPad, 0),
+					new Text(theme.fg("dim", INCOMPLETE_TURN_MESSAGES[message.incomplete]), this.outputPad, 0),
 				);
 			}
 		}

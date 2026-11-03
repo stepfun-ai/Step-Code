@@ -28,10 +28,11 @@ import {
 	type AgentSessionEvent,
 	createCompactionSummaryMessage,
 	getStepGoalStatus,
+	INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
+	INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
 	theme,
 } from "@step-harness/coding-agent";
 import { Spacer, Text } from "@step-harness/pi-tui";
-import { INCOMPLETE_TURN_MESSAGES } from "@step-harness/providers";
 import {
 	BranchSummaryStatusIndicator,
 	buildStatusTips,
@@ -136,6 +137,26 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 
 		case "message_start":
 			if (event.message.role === "custom") {
+				// This event starts the actual recovery input, unlike the earlier turn
+				// classification. Use past tense because showStatus adds a history row.
+				if (event.message.customType === INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE) {
+					const details = event.message.details;
+					const recordedAttempt =
+						typeof details === "object" && details !== null && "attempt" in details ? details.attempt : undefined;
+					const recordedMax =
+						typeof details === "object" && details !== null && "maxAttempts" in details
+							? details.maxAttempts
+							: undefined;
+					const attempt =
+						typeof recordedAttempt === "number" && Number.isInteger(recordedAttempt) && recordedAttempt > 0
+							? recordedAttempt
+							: 1;
+					const maxAttempts =
+						typeof recordedMax === "number" && Number.isInteger(recordedMax) && recordedMax > 0
+							? recordedMax
+							: INCOMPLETE_TURN_RECOVERY_ATTEMPTS;
+					ctx.showStatus(`Retry attempt ${attempt}/${maxAttempts} started after an empty model turn.`);
+				}
 				ctx.addMessageToChat(event.message);
 				ctx.redraw.requestRender();
 			} else if (event.message.role === "user") {
@@ -347,12 +368,9 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 			break;
 
 		case "agent_settled":
-			// A settled run is not automatically a successful one. The transcript already
-			// shows the empty turn, so only report a failure that says more than that:
-			// a recovery that could not make room carries the compaction reason.
-			if (event.failure && event.failure.message !== INCOMPLETE_TURN_MESSAGES[event.failure.reason]) {
-				ctx.showError(event.failure.message);
-			}
+			// A settled run is not automatically a successful one, and the transcript line
+			// alone reads as a remark about one turn. Say the run ended, and why.
+			if (event.failure) ctx.showError(event.failure.message);
 			await ctx.checkShutdownRequested();
 			break;
 

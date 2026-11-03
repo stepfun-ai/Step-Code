@@ -236,6 +236,7 @@ export { FooterDataProvider } from "./core/footer-data-provider.ts";
 export { configureHttpDispatcher, formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "./core/http-dispatcher.ts";
 export {
 	createIncompleteTurnRecoveryMessage,
+	INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
 	INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
 } from "./core/incomplete-turn-recovery.ts";
 export { KeybindingsManager } from "./core/keybindings.ts";

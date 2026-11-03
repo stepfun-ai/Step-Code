@@ -121,7 +121,12 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
-import { createIncompleteTurnRecoveryMessage, recordIncompleteTurn } from "./incomplete-turn-recovery.ts";
+import {
+	createIncompleteTurnRecoveryMessage,
+	INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
+	incompleteTurnFailureMessage,
+	recordIncompleteTurn,
+} from "./incomplete-turn-recovery.ts";
 import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
@@ -1545,6 +1550,7 @@ export class AgentSession {
 		// the transcript already holds.
 		recordIncompleteTurn(message, reason, {
 			streak: this._incompleteTurnStreak + 1,
+			maxAttempts: INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
 			details: { ...(overflowKind ? { overflowKind } : {}) },
 		});
 		if (!this._incompleteTurnRecoveryEnabled) {
@@ -1556,8 +1562,13 @@ export class AgentSession {
 			return;
 		}
 		this._incompleteTurnStreak += 1;
-		if (this._incompleteTurnStreak > 1) {
-			this._recordIncompleteRunFailure(reason, INCOMPLETE_TURN_MESSAGES[reason]);
+		if (this._incompleteTurnStreak > INCOMPLETE_TURN_RECOVERY_ATTEMPTS) {
+			this._recordIncompleteRunFailure(
+				reason,
+				incompleteTurnFailureMessage(reason, {
+					maxAttempts: INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
+				}),
+			);
 			return;
 		}
 		if (overflowKind && !this.settingsManager.getCompactionSettings().enabled) {
@@ -2318,10 +2329,11 @@ export class AgentSession {
 			// here; a compaction may still have run above, which only helps the next
 			// prompt fit.
 			if (this._runFailure) return "stop";
-			this._pendingIncompleteTurnRecovery = createIncompleteTurnRecoveryMessage(
-				incompleteReason,
-				this._lastAssistantEntryId,
-			);
+			this._pendingIncompleteTurnRecovery = createIncompleteTurnRecoveryMessage(incompleteReason, {
+				recoversEntryId: this._lastAssistantEntryId,
+				attempt: this._incompleteTurnStreak,
+				maxAttempts: INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
+			});
 			return "recover-incomplete";
 		}
 

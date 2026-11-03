@@ -74,7 +74,7 @@ describe("AssistantMessageComponent", () => {
 		expect(rendered).toContain("Response was truncated before completion.");
 	});
 
-	test("renders an incomplete turn instead of an empty answer", () => {
+	test("renders an incomplete turn without assuming a run outcome", () => {
 		initTheme("dark");
 
 		const component = new AssistantMessageComponent(
@@ -87,6 +87,23 @@ describe("AssistantMessageComponent", () => {
 		const rendered = stripAnsi(component.render(80).join("\n"));
 
 		expect(rendered).toContain("The model returned no visible answer or executable tool call.");
+		expect(rendered).not.toMatch(/retried|retry limit|run ended/);
+	});
+
+	test.each([1, 2])("classification streak %s does not prove recovery or termination", (consecutiveTurns) => {
+		initTheme("dark");
+
+		const message = createAssistantMessage([{ type: "thinking", thinking: "private reasoning" }], {
+			stopReason: "stop",
+			incomplete: "no_visible_output",
+		});
+		message.diagnostics = [
+			{ type: "incomplete_turn", timestamp: 1, details: { consecutiveTurns, maxAttempts: 1 } },
+		];
+		const rendered = stripAnsi(new AssistantMessageComponent(message, true).render(80).join("\n"));
+
+		expect(rendered).toContain("The model returned no visible answer or executable tool call.");
+		expect(rendered).not.toMatch(/retried|retry limit|run ended/);
 	});
 
 	test("renders a completed turn without a status line", () => {

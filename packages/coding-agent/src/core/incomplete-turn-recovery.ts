@@ -2,11 +2,19 @@ import {
 	type AssistantMessage,
 	appendAssistantMessageDiagnostic,
 	contentBlocks,
+	INCOMPLETE_TURN_MESSAGES,
 	type IncompleteTurnReason,
 } from "@step-harness/providers";
 import type { CustomMessage } from "./messages.ts";
 
 export const INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE = "step-incomplete-turn-recovery";
+
+/**
+ * How many recoveries one run may spend on empty turns before it ends.
+ *
+ * The existing policy permits one recovery before a repeated empty turn fails.
+ */
+export const INCOMPLETE_TURN_RECOVERY_ATTEMPTS = 1;
 
 /**
  * Recovery instructions for a turn that produced nothing actionable.
@@ -28,6 +36,14 @@ const RECOVERY_PROMPTS: Record<IncompleteTurnReason, string> = {
 	].join("\n"),
 };
 
+export interface IncompleteTurnRecoveryOptions {
+	/** Session entry this follow-up answers. Metadata only, never sent to the model. */
+	recoversEntryId?: string;
+	/** 1-based number of this recovery within the run. */
+	attempt?: number;
+	maxAttempts?: number;
+}
+
 /**
  * The hidden follow-up that asks the model to continue an empty turn.
  *
@@ -38,28 +54,47 @@ const RECOVERY_PROMPTS: Record<IncompleteTurnReason, string> = {
  */
 export function createIncompleteTurnRecoveryMessage(
 	reason: IncompleteTurnReason,
-	recoversEntryId?: string,
+	options: IncompleteTurnRecoveryOptions = {},
 ): CustomMessage {
 	return {
 		role: "custom",
 		customType: INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
 		content: RECOVERY_PROMPTS[reason],
 		display: false,
-		...(recoversEntryId ? { details: { recoversEntryId } } : {}),
+		details: {
+			...(options.recoversEntryId ? { recoversEntryId: options.recoversEntryId } : {}),
+			attempt: options.attempt ?? 1,
+			maxAttempts: options.maxAttempts ?? INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
+		},
 		timestamp: Date.now(),
 	};
+}
+
+/**
+ * The failure wording for the consecutive-empty-turn limit.
+ *
+ * It says what happened and that retrying stopped, because "the model returned no
+ * visible answer" alone reads as a per-turn remark rather than the end of the run.
+ */
+export function incompleteTurnFailureMessage(
+	reason: IncompleteTurnReason,
+	options: { maxAttempts?: number } = {},
+): string {
+	const max = options.maxAttempts ?? INCOMPLETE_TURN_RECOVERY_ATTEMPTS;
+	return `${INCOMPLETE_TURN_MESSAGES[reason]} Retry limit reached (${max}/${max}); the run ended without an answer.`;
 }
 
 /**
  * Record why an incomplete turn could not stand, on the turn itself.
  *
  * The message keeps the provider's stop reason: this only adds the diagnostic and
- * never rewrites a provider fact.
+ * never rewrites a provider fact. Classification does not establish whether a
+ * recovery was started or a run ended.
  */
 export function recordIncompleteTurn(
 	message: AssistantMessage,
 	reason: IncompleteTurnReason,
-	options: { streak: number; details?: Record<string, unknown> },
+	options: { streak: number; maxAttempts?: number; details?: Record<string, unknown> },
 ): void {
 	const content = contentBlocks(message);
 	appendAssistantMessageDiagnostic(message, {
@@ -68,6 +103,7 @@ export function recordIncompleteTurn(
 		details: {
 			reason,
 			consecutiveTurns: options.streak,
+			maxAttempts: options.maxAttempts ?? INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
 			hadThinking: content.some((block) => block.type === "thinking"),
 			hadVisibleText: content.some(
 				(block) => block.type === "text" && typeof block.text === "string" && block.text.trim().length > 0,

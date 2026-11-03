@@ -81,6 +81,7 @@ export {
 } from "./extensions/index.ts";
 export {
 	createIncompleteTurnRecoveryMessage,
+	INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
 	INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
 } from "./incomplete-turn-recovery.ts";
 export {
