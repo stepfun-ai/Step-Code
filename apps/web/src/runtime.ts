@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
+	type AgentRunFailure,
 	type AgentSession,
 	type AgentSessionEvent,
 	type AgentSessionRuntime,
@@ -36,6 +37,7 @@ import {
 	getStepMcpStatuses,
 	getStepPlanState,
 	getSupportedThinkingLevels,
+	INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
 	type InlineExtension,
 	isChildAgentSession,
 	listAllStepSessions,
@@ -106,6 +108,7 @@ import {
 	webPromptCommands,
 } from "./prompt-commands.ts";
 import { RetryTracker } from "./retry-state.ts";
+import { recordRunEnd, settleRunOutcome } from "./run-outcome.ts";
 import { SelectionBroker, type SelectionEvent, type SelectionRequest, selectionSelect } from "./selection.ts";
 import { generateSessionTitle, type SlashCommandKind, sessionTitleInput } from "./session-title.ts";
 import { type WebSkill, webSkills } from "./skills.ts";
@@ -687,6 +690,11 @@ export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 	};
 }
 
+/** The run-level failure a settled event reported, if any. */
+export function settledRunFailure(event: { failure?: AgentRunFailure }): AgentRunFailure | undefined {
+	return event.failure;
+}
+
 /** The echoed command line of a command-echo custom entry, or undefined for every other entry. */
 function commandEchoOf(entry: SessionEntry): string | undefined {
 	if (entry.type !== "custom" || entry.customType !== COMMAND_ECHO_TYPE) return undefined;
@@ -751,7 +759,12 @@ export function hasInterruptedTurn(entries: readonly SessionEntry[], running: bo
 		const message = entry.message;
 		if (message.role === "user") return true;
 		if (message.role === "toolResult") return hasUnansweredToolCall(entries, index);
-		if (message.role === "assistant") return message.stopReason === "aborted" || message.stopReason === "toolUse";
+		// An empty tool-use turn has no call at all, so it cannot be the killed-host
+		// shape this looks for; its own classification already explains it.
+		if (message.role === "assistant")
+			return (
+				message.stopReason === "aborted" || (message.stopReason === "toolUse" && message.incomplete === undefined)
+			);
 	}
 	return false;
 }
@@ -765,6 +778,7 @@ export function hasInterruptedTurn(entries: readonly SessionEntry[], running: bo
 export function projectEntries(entries: readonly SessionEntry[]): Record<string, unknown>[] {
 	const timings = savedThinkingTimings(entries);
 	const promptCommands = pairPromptCommands(entries);
+	const recovered = recoveredEmptyTurns(entries);
 	return entries.map((entry) => {
 		const thinkingTimings =
 			entry.type === "message" && entry.message.role === "assistant"
@@ -775,8 +789,41 @@ export function projectEntries(entries: readonly SessionEntry[]): Record<string,
 			...projectEntry(entry),
 			...(thinkingTimings ? { thinkingTimings } : {}),
 			...(promptCommand ? { promptCommand } : {}),
+			// Only a turn that was actually empty can be a recovered one; a stale or
+			// hand-edited pairing must not relabel a completed answer.
+			...(recovered.has(entry.id) &&
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			isIncompleteTurn(entry.message)
+				? { incompleteTurnRecovered: true }
+				: {}),
 		};
 	});
+}
+
+/** Whether this message carries the kernel's empty-turn classification. */
+function isIncompleteTurn(message: object): boolean {
+	return "incomplete" in message && message.incomplete !== undefined;
+}
+
+/**
+ * The assistant entries whose empty turn the session already recovered.
+ *
+ * The recovery message names the entry it answers, so this is identity, not
+ * adjacency: a session also writes usage provenance, a compaction, a model or
+ * thinking-level change, and a session-name entry between the two. Anything that
+ * relied on neighbours would break the first time one of those landed there.
+ */
+function recoveredEmptyTurns(entries: readonly SessionEntry[]): Set<string> {
+	const recovered = new Set<string>();
+	for (const entry of entries) {
+		if (entry.type !== "custom_message" || entry.customType !== INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE) continue;
+		const details = entry.details;
+		if (!details || typeof details !== "object") continue;
+		const recovers = "recoversEntryId" in details ? details.recoversEntryId : undefined;
+		if (typeof recovers === "string" && recovers) recovered.add(recovers);
+	}
+	return recovered;
 }
 
 /** The summary board's goal section data, or undefined when the session has no goal to show. */
@@ -903,8 +950,10 @@ export class WebSession {
 	private holdQueue = false;
 	/** Messages taken from the queue whose prompt has not started yet. */
 	private dispatchInFlight = 0;
-	/** The last run ended in an error or abort; its settle leaves the queue for the user. */
+	/** The last run ended in an error, an abort, or without an answer; its settle leaves the queue for the user. */
 	private lastRunFailed = false;
+	/** The last `agent_end` reported a provider error the kernel was not going to retry. */
+	private lastRunErrored = false;
 	/**
 	 * The last run was stopped by the user rather than failing on its own.
 	 *
@@ -1226,6 +1275,9 @@ export class WebSession {
 		this.unsubscribeSession?.();
 		this.session = session;
 		this.retry.clear();
+		// Run-scoped outcome state belongs to the session that produced it; a rebound
+		// session has run nothing yet.
+		this.lastRunErrored = false;
 		void this.adoptFallbackModel(session);
 		const thinkingClock = new ThinkingClock();
 		this.unsubscribeSession = session.subscribe((event) => {
@@ -1249,16 +1301,36 @@ export class WebSession {
 				this.setStatus("running", false);
 				this.holdQueue = false;
 				this.lastRunFailed = false;
+				this.lastRunErrored = false;
 				this.lastRunAborted = false;
 			}
-			if (event.type === "agent_settled") this.setStatus("completed", this.unseen());
+			if (event.type === "agent_settled") {
+				// Settled is not success. An empty turn keeps the provider's stop reason on
+				// its message, so the run's outcome can only come from this event — and a
+				// provider error, which this event does not carry, still has to be kept
+				// from being overwritten here by the earlier `agent_end`.
+				// Read once: a run can settle without emitting its own `agent_start` (an
+				// abort during the pre-prompt compaction, a CLM fault), and a stale `true`
+				// would report the user's own stop as a failure.
+				const settled = settleRunOutcome({ errored: this.lastRunErrored }, event);
+				this.lastRunErrored = settled.cleared.errored;
+				const status = settled.outcome.failed ? "failed" : "completed";
+				if (status === "failed") this.lastRunFailed = true;
+				this.setStatus(status, this.unseen());
+				// Classification is only a turn explanation. The settled event proves that
+				// the run failed; never suppress its error based on similar display text.
+				const failure = settledRunFailure(event);
+				if (failure) this.emit({ type: "notice", level: "error", text: failure.message });
+			}
 			if (event.type === "agent_end") {
 				const stops = event.messages.flatMap((message) =>
 					message.role === "assistant" ? [message.stopReason] : [],
 				);
 				// A failure the kernel is about to retry is not the run's outcome: the
 				// session keeps running through the backoff (`auto_retry_start` follows).
-				if (stops.includes("error") && !event.willRetry) this.setStatus("failed", this.unseen());
+				const failed = recordRunEnd(stops, event.willRetry).errored;
+				this.lastRunErrored = failed;
+				if (failed) this.setStatus("failed", this.unseen());
 				this.lastRunFailed = stops.includes("error") || stops.includes("aborted");
 				// An error may also carry `aborted` after a retry gave up; the user's
 				// own stop is the case with no error at all.
