@@ -705,6 +705,91 @@ describe("Agent", () => {
 		expect(agent.state.messages).not.toContainEqual(message);
 	});
 
+	it("delivers a queued message before continuing from a tool result", async () => {
+		// The loop polls steering only before its first request, so continuing from a
+		// tool result would ask the model without the queued follow-up — a request
+		// taken on the user's behalf, past the decision the tool result waits for.
+		let responseCount = 0;
+		const seen: string[][] = [];
+		const agent = new Agent({
+			streamFn: (_model, context) => {
+				const stream = new MockAssistantStream();
+				responseCount++;
+				seen.push(
+					context.messages.map((message) =>
+						typeof message.content === "string"
+							? message.content
+							: message.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+					),
+				);
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage(`Reply ${responseCount}`) });
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: [{ type: "text", text: "Initial" }], timestamp: 1 },
+			createAssistantMessage("Thinking"),
+			{ role: "user", content: [{ type: "text", text: "Plan prompt" }], timestamp: 2 },
+			{
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "exit_plan_mode",
+				content: [{ type: "text", text: "Submitted for review." }],
+				isError: false,
+				timestamp: 3,
+			},
+		];
+		const followUp = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "Their words" }],
+			timestamp: 4,
+		};
+		agent.followUp(followUp);
+
+		await agent.continue({ deliverQueued: true });
+
+		// One request, and the message it would have missed is the last thing in it.
+		expect(seen).toHaveLength(1);
+		expect(seen[0]?.at(-1)).toBe("Their words");
+	});
+
+	it("continues from a tool result when the queue stays rejected", async () => {
+		// The ordinary continuation is unchanged: nothing deliverable means the model
+		// resumes from the transcript, and held work stays where it is.
+		let responseCount = 0;
+		const agent = new Agent({
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				responseCount++;
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage(`Reply ${responseCount}`) });
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: [{ type: "text", text: "Initial" }], timestamp: 1 },
+			{
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "read_file",
+				content: [{ type: "text", text: "Contents" }],
+				isError: false,
+				timestamp: 2,
+			},
+		];
+		const held = { role: "user" as const, content: [{ type: "text" as const, text: "Held" }], timestamp: 3 };
+		agent.followUp(held);
+		agent.setQueueDeliveryFilter(() => false);
+
+		await agent.continue({ deliverQueued: true });
+
+		expect(responseCount).toBe(1);
+		expect(agent.hasQueuedMessages()).toBe(true);
+	});
+
 	it("holds a queued message a delivery filter refuses", async () => {
 		// Holding is per message: the loop takes a batch at a time, so refusing one
 		// message must not carry the ones behind it along, and the held message has

@@ -420,8 +420,16 @@ export class Agent {
 		await this.runPromptMessages(messages);
 	}
 
-	/** Continue from the current transcript. The last message must be a user or tool-result message. */
-	async continue(): Promise<void> {
+	/**
+	 * Continue from the current transcript.
+	 *
+	 * `deliverQueued` asks for the queued input that may be delivered now to become
+	 * this turn's prompt, instead of continuing from the transcript. A caller that
+	 * is resuming after a retry or a context repair must leave it false: those
+	 * resume the same work, and a follow-up the person queued is meant to arrive
+	 * after it finishes, not to replace it.
+	 */
+	async continue(options: { deliverQueued?: boolean } = {}): Promise<void> {
 		if (this.activeRun) {
 			throw new Error("Agent is already processing. Wait for completion before continuing.");
 		}
@@ -445,6 +453,23 @@ export class Agent {
 			}
 
 			throw new Error("Cannot continue from message role: assistant");
+		}
+
+		// `runContinuation` only polls steering before its first request, so a queued
+		// follow-up would otherwise wait behind a request the model takes without ever
+		// seeing it. Delivering it here makes it that request's input.
+		if (options.deliverQueued) {
+			const queuedSteering = this.steeringQueue.drain(this.queueDeliveryFilter);
+			if (queuedSteering.length > 0) {
+				await this.runPromptMessages(queuedSteering, { skipInitialSteeringPoll: true });
+				return;
+			}
+
+			const queuedFollowUps = this.followUpQueue.drain(this.queueDeliveryFilter);
+			if (queuedFollowUps.length > 0) {
+				await this.runPromptMessages(queuedFollowUps);
+				return;
+			}
 		}
 
 		await this.runContinuation();
