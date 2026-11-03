@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ToolInfo } from "../src/core/extensions/types.ts";
+import type { InlineExtension, ToolInfo } from "../src/core/extensions/types.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
@@ -12,21 +12,25 @@ import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
 import {
 	Bm25Ranker,
 	createToolSearchDocument,
-	createToolSearchToolDefinition,
 	DEFAULT_TOOL_SEARCH_LIMIT,
 	searchAndLoad,
 	type ToolSearchCatalog,
 	tokenize,
 } from "../src/core/tools/tool-search.ts";
-import { createStepToolSearchExtension } from "../src/features/step-tool-search.ts";
 import { decideStepToolCall, stepPermissionStateForPreset } from "../src/step/permissions.ts";
 import { stepModel } from "./utilities.ts";
 
-function toolInfo(name: string, description: string, parameters = Type.Object({})): ToolInfo {
+function toolInfo(
+	name: string,
+	description: string,
+	exposure: ToolInfo["exposure"] = "deferred",
+	parameters = Type.Object({}),
+): ToolInfo {
 	return {
 		name,
 		description,
 		parameters,
+		exposure,
 		sourceInfo: createSyntheticSourceInfo(`<test:${name}>`, { source: "extension" }),
 	};
 }
@@ -86,11 +90,10 @@ describe("tool search ranker", () => {
 
 describe("searchAndLoad", () => {
 	const inactive = toolInfo("issues", "Lists open issues in a repository");
-	const active = toolInfo("read", "Reads a file");
+	const active = toolInfo("read", "Reads a file", "direct");
 
 	it("activates the matches and keeps the active tools", () => {
-		const tools = [active, inactive];
-		const catalog = fakeCatalog(tools, ["read"]);
+		const catalog = fakeCatalog([active, inactive], ["read"]);
 		const found = searchAndLoad(catalog, "open issues", DEFAULT_TOOL_SEARCH_LIMIT);
 		expect(found.map((tool) => tool.name)).toEqual(["issues"]);
 		expect(found[0]?.description).toBe("Lists open issues in a repository");
@@ -107,48 +110,32 @@ describe("searchAndLoad", () => {
 		const catalog = fakeCatalog([active, inactive], ["read", "issues"]);
 		expect(searchAndLoad(catalog, "issues", DEFAULT_TOOL_SEARCH_LIMIT)).toEqual([]);
 	});
-});
 
-describe("tool_search tool", () => {
-	it("reports the loaded tools", async () => {
-		const catalog = fakeCatalog([toolInfo("issues", "Lists open issues")], []);
-		const definition = createToolSearchToolDefinition(catalog);
-		const result = await definition.execute("call-1", { query: "issues" });
-		expect(result.content).toEqual([
-			{ type: "text", text: "Loaded 1 tool. They are available from your next call:\n- issues: Lists open issues" },
-		]);
-		expect(result.details).toEqual({ loaded: ["issues"] });
-	});
-
-	it("reports an empty result without activating anything", async () => {
-		const catalog = fakeCatalog([toolInfo("issues", "Lists open issues")], []);
-		const result = await createToolSearchToolDefinition(catalog).execute("call-1", { query: "kubernetes" });
-		expect(result.content).toEqual([{ type: "text", text: "No matching tools found." }]);
-		expect(catalog.activations).toEqual([]);
-	});
-
-	it("rejects an empty query and a bad limit", async () => {
-		const definition = createToolSearchToolDefinition(fakeCatalog([], []));
-		await expect(definition.execute("call-1", { query: "  " })).rejects.toThrow("query must not be empty");
-		await expect(definition.execute("call-1", { query: "x", limit: 0 })).rejects.toThrow(
-			"limit must be a positive integer",
-		);
+	it("skips a direct or hidden tool", () => {
+		const direct = toolInfo("issues_direct", "Lists open issues directly", "direct");
+		const hidden = toolInfo("issues_hidden", "Lists open issues secretly", "hidden");
+		const catalog = fakeCatalog([direct, hidden], []);
+		expect(searchAndLoad(catalog, "issues", DEFAULT_TOOL_SEARCH_LIMIT)).toEqual([]);
 	});
 });
 
-describe("tool_search permissions", () => {
+describe("find_tools permissions", () => {
 	it("runs without approval because it touches no files", () => {
-		const decision = decideStepToolCall("tool_search", { query: "weather" }, stepPermissionStateForPreset("approve-for-me"));
+		const decision = decideStepToolCall(
+			"find_tools",
+			{ query: "weather" },
+			stepPermissionStateForPreset("approve-for-me"),
+		);
 		expect(decision).toMatchObject({ action: "allow", hazardous: false });
 	});
 });
 
-describe("tool_search session wiring", () => {
+describe("exposure and the session tool set", () => {
 	let tempDir: string;
 	let agentDir: string;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-tool-search-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDir = join(tmpdir(), `pi-tool-exposure-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		agentDir = join(tempDir, "agent");
 		mkdirSync(agentDir, { recursive: true });
 	});
@@ -157,16 +144,16 @@ describe("tool_search session wiring", () => {
 		if (tempDir && existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	async function createSession(defaultTools?: string[], options: { tools?: string[] } = {}) {
-		const settingsManager = SettingsManager.inMemory(defaultTools ? { defaultTools } : {});
+	async function createSession(factories: InlineExtension[] = []) {
+		const settingsManager = SettingsManager.inMemory({});
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: tempDir,
 			agentDir,
 			settingsManager,
-			extensionFactories: [createStepToolSearchExtension()],
+			extensionFactories: factories,
 		});
 		await resourceLoader.reload();
-		return (
+		const session = (
 			await createAgentSession({
 				cwd: tempDir,
 				agentDir,
@@ -174,36 +161,64 @@ describe("tool_search session wiring", () => {
 				settingsManager,
 				sessionManager: SessionManager.inMemory(tempDir),
 				resourceLoader,
-				tools: options.tools,
 			})
 		).session;
+		await session.bindExtensions({});
+		return session;
 	}
 
-	it("registers tool_search without declaring it", async () => {
-		const session = await createSession();
-		expect(session.getAllTools().map((tool) => tool.name)).toContain("tool_search");
-		expect(session.getActiveToolNames()).not.toContain("tool_search");
-		expect(session.systemPrompt).not.toContain("- tool_search:");
+	function pluginTool(name: string, exposure: "direct" | "deferred" | "hidden") {
+		return {
+			name,
+			label: name,
+			description: `${name} plugin tool`,
+			exposure,
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], details: {} }),
+		};
+	}
+
+	it("leaves a hidden tool out of the catalog", async () => {
+		const session = await createSession([(pi) => void pi.registerTool(pluginTool("secret_tool", "hidden"))]);
+		expect(session.getAllTools().map((tool) => tool.name)).not.toContain("secret_tool");
+		expect(session.getActiveToolNames()).not.toContain("secret_tool");
 		session.dispose();
 	});
 
-	it("declares tool_search when the tool settings ask for it", async () => {
-		const session = await createSession(["read", "bash", "edit", "write", "tool_search"]);
-		expect(session.getActiveToolNames()).toContain("tool_search");
-		expect(session.systemPrompt).toContain("- tool_search:");
+	it("keeps a deferred tool registered but undeclared", async () => {
+		const session = await createSession([(pi) => void pi.registerTool(pluginTool("plugin_tool", "deferred"))]);
+		expect(session.getAllTools().map((tool) => tool.name)).toContain("plugin_tool");
+		expect(session.getActiveToolNames()).not.toContain("plugin_tool");
 		session.dispose();
 	});
 
-	it("declares tool_search when the tool selector names it", async () => {
-		const session = await createSession(undefined, { tools: ["read", "tool_search"] });
-		expect(session.getActiveToolNames()).toContain("tool_search");
+	it("declares a direct tool like any other", async () => {
+		const session = await createSession([(pi) => void pi.registerTool(pluginTool("direct_tool", "direct"))]);
+		expect(session.getActiveToolNames()).toContain("direct_tool");
 		session.dispose();
 	});
 
-	it("keeps tool_search active once a session enables it", async () => {
-		const session = await createSession();
-		session.setActiveToolsByName(["read", "bash", "edit", "write", "tool_search"]);
-		expect(session.getActiveToolNames()).toContain("tool_search");
+	it("activates a deferred tool the settings name", async () => {
+		const settingsManager = SettingsManager.inMemory({ defaultTools: ["read", "plugin_tool"] });
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir,
+			settingsManager,
+			extensionFactories: [(pi) => void pi.registerTool(pluginTool("plugin_tool", "deferred"))],
+		});
+		await resourceLoader.reload();
+		const session = (
+			await createAgentSession({
+				cwd: tempDir,
+				agentDir,
+				model: stepModel(),
+				settingsManager,
+				sessionManager: SessionManager.inMemory(tempDir),
+				resourceLoader,
+			})
+		).session;
+		await session.bindExtensions({});
+		expect(session.getActiveToolNames()).toContain("plugin_tool");
 		session.dispose();
 	});
 });

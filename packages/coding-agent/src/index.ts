@@ -526,7 +526,6 @@ export {
 	stepScheduleExtensionInline,
 	UpdateGoalParams,
 } from "./features/step-schedule.ts";
-export { createStepToolSearchExtension } from "./features/step-tool-search.ts";
 export {
 	type CompletedSubagentResponse,
 	readSubagentLaneSnapshot,

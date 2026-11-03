@@ -5,38 +5,35 @@ import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from "@step-
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import type { ExtensionAPI } from "../src/core/extensions/types.ts";
+import type { InlineExtension } from "../src/core/extensions/types.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import { createStepToolSearchExtension } from "../src/features/step-tool-search.ts";
+import { createStepToolProfile } from "../src/step/tool-profile.ts";
 
-/**
- * A plugin tool the model never sees until `tool_search` loads it: registered, but opted out of
- * the default active set.
- */
-function deferredTool(name: string, description: string, query: string) {
+/** A plugin tool the model never sees until `find_tools` loads it. */
+function deferredTool(name: string, description: string) {
 	return {
 		name,
 		label: name,
 		description,
-		defaultActive: false,
+		exposure: "deferred" as const,
 		parameters: Type.Object({ query: Type.String() }),
 		async execute(_toolCallId: string) {
-			return { content: [{ type: "text" as const, text: `${name}:${query}` }], details: {} };
+			return { content: [{ type: "text" as const, text: `${name} ran` }], details: {} };
 		},
 	};
 }
 
-describe("tool_search over a real model turn", () => {
+describe("find_tools over a real model turn", () => {
 	let tempDir: string;
 	let faux: ReturnType<typeof registerFauxProvider>;
-	const cleanups: Array<() => void | Promise<void>> = [];
+	const cleanups: Array<() => unknown> = [];
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-tool-search-e2e-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDir = join(tmpdir(), `pi-find-tools-e2e-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 	});
 
@@ -46,7 +43,7 @@ describe("tool_search over a real model turn", () => {
 		if (tempDir && existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	async function createSession(extensionFactories: ((pi: ExtensionAPI) => void)[]) {
+	async function createSession(extensionFactories: InlineExtension[]) {
 		faux = registerFauxProvider();
 		const authStorage = AuthStorage.inMemory();
 		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
@@ -72,9 +69,7 @@ describe("tool_search over a real model turn", () => {
 				},
 			],
 		});
-		const settingsManager = SettingsManager.inMemory({
-			defaultTools: ["read", "bash", "edit", "write", "tool_search"],
-		});
+		const settingsManager = SettingsManager.inMemory({});
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: tempDir,
 			agentDir: tempDir,
@@ -93,6 +88,9 @@ describe("tool_search over a real model turn", () => {
 			settingsManager,
 			sessionManager: SessionManager.inMemory(tempDir),
 			resourceLoader,
+			// The Step profile supplies `find_tools` and turns the native built-ins off.
+			customTools: createStepToolProfile(tempDir),
+			noTools: "builtin",
 		});
 		await session.bindExtensions({});
 		cleanups.push(() => session.dispose());
@@ -100,59 +98,50 @@ describe("tool_search over a real model turn", () => {
 	}
 
 	it("declares the loaded tool on the next request", async () => {
-		const declaredToolNames: string[][] = [];
+		const declared: string[][] = [];
 		const toolResultTexts: string[] = [];
 		const session = await createSession([
 			(pi) => {
-				pi.registerTool(deferredTool("issue_search", "Lists open issues in a repository", "query"));
-				pi.registerTool(deferredTool("calendar_read", "Reads calendar entries", "query"));
-			},
-			createStepToolSearchExtension(),
-			(pi) => {
+				pi.registerTool(deferredTool("issue_search", "Lists open issues in a repository"));
+				pi.registerTool(deferredTool("calendar_read", "Reads calendar entries"));
 				pi.on("tool_result", (event) => {
-					toolResultTexts.push(
-						event.content
-							.map((block: { type: string; text?: string }) => (block.type === "text" ? block.text : ""))
-							.join(""),
-					);
+					toolResultTexts.push(event.content.map((block) => (block.type === "text" ? block.text : "")).join(""));
 				});
 			},
 		]);
 		faux.setResponses([
 			(context) => {
-				declaredToolNames.push((context.tools ?? []).map((tool: { name: string }) => tool.name).sort());
-				return fauxAssistantMessage([fauxToolCall("tool_search", { query: "issues" })]);
+				declared.push((context.tools ?? []).map((tool: { name: string }) => tool.name).sort());
+				return fauxAssistantMessage(fauxToolCall("find_tools", { query: "open issues" }), {
+					stopReason: "toolUse",
+				});
 			},
 			(context) => {
-				declaredToolNames.push((context.tools ?? []).map((tool: { name: string }) => tool.name).sort());
+				declared.push((context.tools ?? []).map((tool: { name: string }) => tool.name).sort());
 				return fauxAssistantMessage("done");
 			},
 		]);
 
 		await session.prompt("list the open issues");
 
-		expect(declaredToolNames).toHaveLength(2);
 		// First request: the deferred tools are registered but not declared.
-		expect(declaredToolNames[0]).toContain("tool_search");
-		expect(declaredToolNames[0]).not.toContain("issue_search");
-		expect(declaredToolNames[0]).not.toContain("calendar_read");
+		expect(declared[0]).toContain("find_tools");
+		expect(declared[0]).not.toContain("issue_search");
+		expect(declared[0]).not.toContain("calendar_read");
 		// Second request: the loaded tool is declared, the unrelated one still is not.
-		expect(declaredToolNames[1]).toContain("issue_search");
-		expect(declaredToolNames[1]).not.toContain("calendar_read");
-		expect(toolResultTexts.join("\n")).toContain("Loaded 1 tool");
-		expect(toolResultTexts.join("\n")).toContain("- issue_search: Lists open issues in a repository");
+		expect(declared[1]).toContain("issue_search");
+		expect(declared[1]).not.toContain("calendar_read");
+		expect(toolResultTexts.join("\n")).toContain("Newly available from your next call: issue_search");
+		expect(toolResultTexts.join("\n")).toContain("1. issue_search");
 	});
 
 	it("records the loaded tools as an active-tool change on the tool result", async () => {
-		const session = await createSession([
-			(pi) => {
-				pi.registerTool(deferredTool("issue_search", "Lists open issues in a repository", "query"));
-			},
-			createStepToolSearchExtension(),
-		]);
 		const addedToolNames: string[][] = [];
+		const session = await createSession([
+			(pi) => pi.registerTool(deferredTool("issue_search", "Lists open issues in a repository")),
+		]);
 		faux.setResponses([
-			() => fauxAssistantMessage(fauxToolCall("tool_search", { query: "issues" }), { stopReason: "toolUse" }),
+			() => fauxAssistantMessage(fauxToolCall("find_tools", { query: "open issues" }), { stopReason: "toolUse" }),
 			(context) => {
 				addedToolNames.push(
 					context.messages

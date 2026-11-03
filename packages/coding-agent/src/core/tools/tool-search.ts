@@ -1,19 +1,15 @@
 /**
- * Tool discovery: a BM25 ranker over tool metadata, and the `tool_search` tool built on it.
+ * Tool discovery: a BM25 ranker over tool metadata for the model-facing tool finder.
  *
- * `tool_search` searches the tools that are registered but not declared to the model and activates
- * the matches, so the next model call declares them. Activation goes through the active tool set,
- * so it is recorded in the transcript like any other tool change and survives resume and fork on
- * that branch.
+ * The finder ranks the tools that are registered but not declared to the model and activates the
+ * matches, so the next model call declares them. Activation goes through the active tool set, so
+ * it is recorded in the transcript like any other tool change and survives resume and fork.
  */
-import { type Static, Type } from "typebox";
-import type { AgentToolResult, ToolDefinition, ToolInfo } from "../extensions/types.ts";
-
-export const TOOL_SEARCH_TOOL_NAME = "tool_search";
+import type { ToolInfo } from "../extensions/types.ts";
 
 export const DEFAULT_TOOL_SEARCH_LIMIT = 8;
 
-/** The part of the extension runtime `tool_search` needs, so it stays testable without a session. */
+/** The part of the host tool set the finder needs, kept narrow so it is testable without a session. */
 export interface ToolSearchCatalog {
 	getActiveTools(): string[];
 	getAllTools(): ToolInfo[];
@@ -219,75 +215,17 @@ export class Bm25Ranker {
 	}
 }
 
-export const toolSearchSchema = Type.Object({
-	query: Type.String({ description: "Search query for deferred tools." }),
-	limit: Type.Optional(
-		Type.Number({ description: `Maximum number of tools to return. Defaults to ${DEFAULT_TOOL_SEARCH_LIMIT}.` }),
-	),
-});
-
-/** Rank the tools that are registered but not active yet, and activate the matches. */
-export function searchAndLoad(catalog: ToolSearchCatalog, query: string, limit: number): ToolSearchResult[] {
+/**
+ * Rank the deferred tools that are not declared yet, and activate the matches. Hidden tools and
+ * tools that are already active are never candidates.
+ */
+export function searchAndLoad(catalog: ToolSearchCatalog, query: string, limit: number): ToolInfo[] {
 	const active = catalog.getActiveTools();
-	const inactive = new Set(active);
-	const candidates = catalog.getAllTools().filter((tool) => !inactive.has(tool.name));
-	const documents = candidates.map((tool) => createToolSearchDocument(tool));
-	const matches = new Bm25Ranker().rank(query, documents, limit);
+	const declared = new Set(active);
+	const candidates = catalog.getAllTools().filter((tool) => tool.exposure === "deferred" && !declared.has(tool.name));
+	const matches = new Bm25Ranker().rank(query, candidates.map(createToolSearchDocument), limit);
 	if (matches.length === 0) return [];
 	catalog.setActiveTools([...active, ...matches.map((match) => match.name)]);
-	const descriptions = new Map(candidates.map((tool) => [tool.name, tool.description]));
-	return matches.map((match) => ({ name: match.name, description: descriptions.get(match.name) ?? "" }));
-}
-
-/**
- * The `tool_search` description. It does not list the searchable tools, so it stays the same while
- * tools are registered, for example when MCP servers connect.
- */
-export const TOOL_SEARCH_DESCRIPTION = `# Tool discovery
-
-Searches the tools that are not loaded yet and declares the matches for the next model call.
-
-A tool that is not in your tool list may still be registered, for example one you turned off or
-one that a plugin publishes. Use this tool (\`${TOOL_SEARCH_TOOL_NAME}\`) to look for it instead of
-telling the user the tool does not exist.`;
-
-export interface ToolSearchDetails {
-	loaded: string[];
-}
-
-/**
- * The tool definition with a two-argument `execute`: `tool_search` needs no abort signal, progress
- * callback, or extension context, and a narrower signature still registers as a tool.
- */
-export type ToolSearchToolDefinition = Omit<
-	ToolDefinition<typeof toolSearchSchema, ToolSearchDetails>,
-	"parameters" | "execute"
-> & {
-	parameters: typeof toolSearchSchema;
-	execute(toolCallId: string, params: Static<typeof toolSearchSchema>): Promise<AgentToolResult<ToolSearchDetails>>;
-};
-
-export function createToolSearchToolDefinition(catalog: ToolSearchCatalog): ToolSearchToolDefinition {
-	return {
-		name: TOOL_SEARCH_TOOL_NAME,
-		label: "Tool Search",
-		description: TOOL_SEARCH_DESCRIPTION,
-		promptSnippet: "Search for tools that are not loaded yet and load the matches",
-		parameters: toolSearchSchema,
-		// Inactive until the session asks for it; see `_refreshToolRegistry`.
-		defaultActive: false,
-		async execute(_toolCallId, { query, limit }) {
-			if (query.trim() === "") throw new Error("query must not be empty");
-			const max = limit ?? DEFAULT_TOOL_SEARCH_LIMIT;
-			if (!Number.isInteger(max) || max <= 0) throw new Error("limit must be a positive integer");
-			const found = searchAndLoad(catalog, query, max);
-			const text =
-				found.length === 0
-					? "No matching tools found."
-					: `Loaded ${found.length} tool${found.length === 1 ? "" : "s"}. They are available from your next call:\n${found
-							.map((tool) => `- ${tool.name}: ${tool.description.trim().split(/\r?\n/)[0]}`)
-							.join("\n")}`;
-			return { content: [{ type: "text", text }], details: { loaded: found.map((tool) => tool.name) } };
-		},
-	};
+	const byName = new Map(candidates.map((tool) => [tool.name, tool]));
+	return matches.map((match) => byName.get(match.name)!).filter(Boolean);
 }
