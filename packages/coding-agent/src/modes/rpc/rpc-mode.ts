@@ -63,6 +63,15 @@ export type {
  */
 export interface RpcModeOptions {
 	includeLiveEvents?: boolean;
+	/**
+	 * This client can draw a plan proposal and collect the user's decision.
+	 *
+	 * `mode: "rpc"` alone cannot say so: every rpc host has a dialog bridge. A
+	 * client that renders the proposal itself sets this and plan mode stays on
+	 * until the user answers; without it the handoff-and-exit behavior is
+	 * unchanged. Read from `--plan-review-surface`.
+	 */
+	planReviewSurface?: boolean;
 }
 
 export async function runRpcMode(runtimeHost: AgentSessionRuntimeHost, options: RpcModeOptions = {}): Promise<never> {
@@ -354,6 +363,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntimeHost, options: 
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
 			mode: "rpc",
+			// The client, not the transport, answers a plan review: declare only what
+			// it was told at startup.
+			planReviewSurface: options.planReviewSurface === true,
 			commandContextActions: {
 				waitForIdle: () => session.waitForIdle(),
 				newSession: async (options) => runtimeHost.newSession(options),

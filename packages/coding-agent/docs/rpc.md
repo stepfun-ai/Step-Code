@@ -797,6 +797,10 @@ entry), this returns the handoff text for that exact snapshot instead, because
 the assistant message only introduces the submission. `/plan approve`, a request
 for changes, or `/plan off` clears the proposal and the assistant text returns.
 
+A newer answer wins over the proposal: on a host that draws the proposal a
+question does not settle the wait, but the model has answered it, and reporting
+the proposal instead would hide that answer.
+
 ```json
 {"type": "get_last_assistant_text"}
 ```
@@ -872,6 +876,19 @@ Each command has:
 - `path`: Absolute file path to the command source (optional)
 
 **Note**: Built-in TUI commands (`/settings`, `/hotkeys`, etc.) are not included. They are handled only in interactive mode and would not execute if sent via `prompt`.
+
+## Plan Review Surface
+
+`--plan-review-surface` tells the session that this client draws the proposal and
+collects the user's decision. With it, `exit_plan_mode` keeps plan mode on, ends
+the turn, and records the proposal as waiting; the client answers with `/plan
+approve` or `/plan approve <hash>`, or ends it with `/plan off`. Without it the
+rpc host keeps the handoff behavior: plan mode exits, the turn ends, and approval
+belongs to the caller.
+
+The flag is not implied by `--mode rpc`: every rpc client has a dialog bridge,
+and only the client knows whether it can show a plan. `RpcModeOptions.planReviewSurface`
+carries the same value when the host is embedded in-process.
 
 ## Events
 
