@@ -726,6 +726,13 @@ export interface NoticeItem {
 	readonly text: string;
 	/** Render `text` as Markdown (a `/btw` answer) instead of preformatted text. */
 	readonly markdown?: boolean;
+	/**
+	 * Client copy of the host's `reply` flag: published while the kernel was
+	 * still accepting the user's own input (a command's handler, the input hooks
+	 * before a turn). Reply warnings stay in the transcript; other warnings go to
+	 * the composer's badge (see `state/notices.ts`).
+	 */
+	readonly reply?: boolean;
 }
 
 export interface WebWorkspace {

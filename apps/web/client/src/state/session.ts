@@ -25,6 +25,7 @@ import {
 	retainComposerDraftWork,
 	sessionComposerDraft,
 } from "./composer-drafts";
+import { isAmbientWarning, isCommandText } from "./notices";
 import { observePerformance } from "./performance";
 import { arrangementChanged, pruneSessionPreferences, writeSessionPreferences } from "./session-order";
 import { type AppState, getState, mapWith, setState, setUi, type ToastState } from "./store";
@@ -111,7 +112,11 @@ export function goalStatusNotice(text: string): boolean {
 	return GOAL_STATUS_NOTICE.test(text.trim());
 }
 
-export function pushNotice(level: NoticeItem["level"], text: string, options?: { readonly markdown?: boolean }): void {
+export function pushNotice(
+	level: NoticeItem["level"],
+	text: string,
+	options?: { readonly markdown?: boolean; readonly reply?: boolean },
+): void {
 	if (goalStatusNotice(text)) return;
 	const current = getState().current;
 	noticeSeq += 1;
@@ -121,6 +126,7 @@ export function pushNotice(level: NoticeItem["level"], text: string, options?: {
 		level,
 		text,
 		...(options?.markdown ? { markdown: true } : {}),
+		...(options?.reply ? { reply: true } : {}),
 	};
 	setState((state) => ({ notices: [...state.notices, item].slice(-NOTICE_LIMIT) }));
 }
@@ -183,6 +189,13 @@ export function applySideAnswer(answer: SideAnswer): void {
 /** Remove one notice the reader dismissed. */
 export function dismissNotice(id: string): void {
 	setState((state) => ({ notices: state.notices.filter((notice) => notice.id !== id) }));
+}
+
+/** Remove every ambient warning the bound session collected (the badge's "clear all"). */
+export function dismissWarnings(sessionId: string): void {
+	setState((state) => ({
+		notices: state.notices.filter((notice) => notice.sessionId !== sessionId || !isAmbientWarning(notice)),
+	}));
 }
 
 /** Show the top-centre toast for 4.2s (legacy `showError`, 3184-3193). `danger=false` is the neutral tone. */
@@ -1529,6 +1542,7 @@ export function connectStream(id: string): void {
 			text?: string;
 			markdown?: boolean;
 			transient?: boolean;
+			reply?: boolean;
 		};
 		if (typeof notice.text !== "string" || !notice.text) return;
 		const level =
@@ -1540,14 +1554,20 @@ export function connectStream(id: string): void {
 			showToast(notice.text, level === "error" ? "danger" : "neutral");
 			return;
 		}
-		pushNotice(level, notice.text, notice.markdown ? { markdown: true } : undefined);
+		// The host marks a notice published while it was still accepting the user's
+		// own input as that input's reply: a reply warning stays in the transcript,
+		// any other warning goes to the composer's badge (see state/notices.ts).
+		pushNotice(level, notice.text, {
+			...(notice.markdown ? { markdown: true } : {}),
+			...(notice.reply === true ? { reply: true } : {}),
+		});
 		// A command answered in place (`/btw`, `/status`, a refusal) starts no turn,
 		// so the optimistic bubble that `sendMessage` drew would otherwise sit
 		// under a "thinking" indicator forever. Only a command can be answered
 		// this way: a prompt's notices (session start, permission) belong to a
 		// turn whose bubble must stay until its message is recorded.
 		setState((state) => ({
-			pendingTurn: /^\s*\/[A-Za-z0-9]/u.test(state.pendingTurn?.text ?? "") ? null : state.pendingTurn,
+			pendingTurn: isCommandText(state.pendingTurn?.text) ? null : state.pendingTurn,
 		}));
 	});
 	// A `/btw` answer: its own tab in the rail, never a transcript row.

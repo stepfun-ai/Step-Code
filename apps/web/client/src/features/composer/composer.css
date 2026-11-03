@@ -1580,3 +1580,70 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 .composer--edit .composer-controls {
 	margin-top: 6px;
 }
+
+/*
+ * Warning badge: an attention mark at the start of the composer controls.
+ * Warnings are not transcript rows, so this is the only place a page remembers
+ * them; the panel is the list behind the mark.
+ */
+.warnings-trigger {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: 4px;
+	height: var(--control-h);
+	padding: 0 8px;
+	border: 0;
+	border-radius: var(--radius-row);
+	background: var(--attention-surface);
+	color: var(--attention);
+	font: inherit;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+}
+.warnings-trigger:hover,
+.warnings-trigger[aria-expanded="true"] {
+	background: var(--hover);
+}
+.warnings-panel-body {
+	min-width: 280px;
+	max-width: 360px;
+}
+.warnings-panel-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 8px 10px;
+	border-bottom: 1px solid var(--line);
+	font-size: 12px;
+}
+.warnings-clear {
+	font-size: 12px;
+	color: var(--ink-2);
+}
+.warnings-list {
+	max-height: 320px;
+	margin: 0;
+	padding: 4px 0;
+	overflow-y: auto;
+	list-style: none;
+}
+.warnings-item {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 8px 10px;
+}
+.warnings-text {
+	margin: 0;
+	color: var(--ink-2);
+	font-size: 12px;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+.warnings-dismiss {
+	flex: none;
+}
