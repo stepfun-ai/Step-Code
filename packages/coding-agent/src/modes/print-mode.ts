@@ -1,0 +1,479 @@
+/**
+ * Print mode (single-shot): Send prompts, output result, exit.
+ *
+ * Used for:
+ * - `pi -p "prompt"` - text output
+ * - `pi --mode json "prompt"` - JSON event stream
+ */
+
+import type { AgentMessage } from "@step-harness/agent-core";
+import { type AssistantMessage, type ImageContent, INCOMPLETE_TURN_MESSAGES } from "@step-harness/providers";
+import type { AgentSessionEvent } from "../core/agent-session.ts";
+import type { AgentSessionRuntimeHost } from "../core/agent-session-runtime.ts";
+import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
+import { type ExternalPlanHandoff, readExternalPlanHandoff } from "../features/plan-handoff.ts";
+import { killTrackedDetachedChildren } from "../utils/shell.ts";
+import {
+	type CompletionCheckOptions,
+	completionCheckFeedback,
+	createGitCompletionCheck,
+	type GitCompletionState,
+	getCompletionCheckAttempts,
+} from "./completion-check.ts";
+import { toJsonEvent } from "./json-event.ts";
+
+/**
+ * Options for print mode.
+ */
+export interface PrintModeOptions extends CompletionCheckOptions {
+	/** Output mode: "text" for final response only, "json" for all events */
+	mode: "text" | "json";
+	/** Array of additional prompts to send after initialMessage */
+	messages?: string[];
+	/** First message to send (may contain @file content) */
+	initialMessage?: string;
+	/** Images to attach to the initial message */
+	initialImages?: ImageContent[];
+	/**
+	 * Also write live progress (`message_update`, `tool_execution_update`) to the
+	 * JSON stream. Off by default: a JSON run is a record of facts, and progress
+	 * frames are neither replayable nor bounded by the producer. See
+	 * `core/session-event-durability.ts`.
+	 */
+	includeLiveEvents?: boolean;
+}
+
+interface TerminatingBlock {
+	toolName: string;
+	reason: string;
+}
+
+function isTextPart(part: unknown): part is { type: "text"; text: string } {
+	if (typeof part !== "object" || part === null) return false;
+	const candidate = part as { type?: unknown; text?: unknown };
+	return candidate.type === "text" && typeof candidate.text === "string";
+}
+
+/**
+ * Return the tool name and reason when an event is a tool call that a hook
+ * blocked and asked the run to stop on.
+ *
+ * Ordinary tool errors are recoverable and the model routinely works around
+ * them, so reporting every one of them would turn successful runs into
+ * failures. `terminate` marks the blocks that actually end the run, which is
+ * the case a non-interactive caller cannot otherwise see.
+ */
+function getTerminatingBlock(event: AgentSessionEvent): TerminatingBlock | undefined {
+	if (event.type !== "tool_execution_end" || !event.isError) return undefined;
+	const result: unknown = event.result;
+	if (typeof result !== "object" || result === null) return undefined;
+	const { terminate, content } = result as { terminate?: unknown; content?: unknown };
+	if (terminate !== true) return undefined;
+	const reason = Array.isArray(content)
+		? content
+				.filter(isTextPart)
+				.map((part) => part.text)
+				.join("\n")
+				.trim()
+		: "";
+	return { toolName: event.toolName, reason: reason || "no reason given" };
+}
+
+/**
+ * The reviewed proposal when a run handed approval to the caller.
+ *
+ * A successful plan handoff is not approval to send automatic execution
+ * prompts. The turn also ends on the tool result, so text mode has no assistant
+ * message to print; the handoff text is what the caller needs instead.
+ */
+function getExternalPlanHandoff(event: AgentSessionEvent): ExternalPlanHandoff | undefined {
+	if (event.type !== "tool_execution_end" || event.isError || event.toolName !== "exit_plan_mode") return undefined;
+	return readExternalPlanHandoff(event.result);
+}
+
+/**
+ * The assistant message that makes this run a failure, if any.
+ *
+ * `includeIncomplete` decides whether an empty turn is this invocation's result.
+ * A completion check owns missing output, so it passes `false`: the empty turn is
+ * that follow-up's input there, and the checker reports the exit code instead.
+ */
+function getAssistantFailure(
+	message: AgentMessage | undefined,
+	options: { includeIncomplete: boolean },
+): AssistantMessage | undefined {
+	if (message?.role !== "assistant") return undefined;
+	const assistant = message as AssistantMessage;
+	if (assistant.stopReason === "error" || assistant.stopReason === "aborted") return assistant;
+	if (options.includeIncomplete && assistant.incomplete) return assistant;
+	return undefined;
+}
+
+/** User-facing text for a failed assistant message. */
+function assistantFailureText(assistant: AssistantMessage): string {
+	// `incomplete` is read back from a session file, so an unknown value must fall
+	// through to the provider's own message rather than print `undefined`.
+	const described = assistant.incomplete ? INCOMPLETE_TURN_MESSAGES[assistant.incomplete] : undefined;
+	if (described) return described;
+	return assistant.errorMessage || `Request ${assistant.stopReason}`;
+}
+
+function hasFinalAssistantText(message: AgentMessage | undefined): boolean {
+	if (message?.role !== "assistant" || getAssistantFailure(message, { includeIncomplete: false })) return false;
+	const assistant = message as AssistantMessage;
+	return (
+		assistant.stopReason !== "toolUse" &&
+		!assistant.content.some((part) => part.type === "toolCall") &&
+		assistant.content.some((part) => part.type === "text" && part.text.trim().length > 0)
+	);
+}
+
+/**
+ * Run in print (single-shot) mode.
+ * Sends prompts to the agent and outputs the result.
+ */
+export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options: PrintModeOptions): Promise<number> {
+	const includeLiveEvents = options.includeLiveEvents === true;
+	const { mode, messages = [], initialMessage, initialImages } = options;
+	let exitCode = 0;
+	let session = runtimeHost.session;
+	let unsubscribe: (() => void) | undefined;
+	let unsubscribeBackpressure: (() => void) | undefined;
+	let disposed = false;
+	const signalCleanupHandlers: Array<() => void> = [];
+	// Tool calls a hook blocked and asked the run to stop on. Without a UI these
+	// only reach the model, so a denied call looked like the run doing nothing.
+	// Feedback issue-d8b499026f19831c.
+	const terminatingBlocks: TerminatingBlock[] = [];
+	// Sticky across native retries and runtime rebinds: the completion check
+	// must never resume past a terminal denial, assistant error, or abort.
+	let assistantFailure: AssistantMessage | undefined;
+	// Sticky for automatic feedback, including after explicit caller messages.
+	let externalApprovalRequired = false;
+	// Only a handoff from the latest prompt excuses missing final output.
+	let latestPromptHasExternalHandoff = false;
+	// The latest handoff's text, for a text-mode caller that has no event stream.
+	let latestExternalHandoffText = "";
+	const completionAbort = new AbortController();
+	let completionAttempts: number | undefined;
+	let reviewRequested = false;
+	let reviewSent = false;
+
+	const disposeRuntime = async (): Promise<void> => {
+		if (disposed) return;
+		disposed = true;
+		completionAbort.abort();
+		unsubscribe?.();
+		unsubscribeBackpressure?.();
+		await runtimeHost.dispose();
+	};
+
+	const registerSignalHandlers = (): void => {
+		const signals: NodeJS.Signals[] = ["SIGTERM", "SIGINT"];
+		if (process.platform !== "win32") {
+			signals.push("SIGHUP");
+		}
+
+		for (const signal of signals) {
+			const handler = () => {
+				killTrackedDetachedChildren();
+				void disposeRuntime().finally(() => {
+					process.exit(signal === "SIGHUP" ? 129 : signal === "SIGINT" ? 130 : 143);
+				});
+			};
+			process.on(signal, handler);
+			signalCleanupHandlers.push(() => process.off(signal, handler));
+		}
+	};
+
+	registerSignalHandlers();
+
+	runtimeHost.setRebindSession(async () => {
+		await rebindSession();
+	});
+
+	const rebindSession = async (): Promise<void> => {
+		const nextSession = runtimeHost.session;
+		// Subscribe before bindExtensions: session_start handlers may immediately
+		// emit custom messages or start a prompt, and those events belong in the
+		// print/JSON stream just as they do in interactive mode.
+		unsubscribe?.();
+		unsubscribeBackpressure?.();
+		session = nextSession;
+		// completion-check owns the bounded follow-up for missing output. Running the
+		// generic recovery too would add a second model call and consume its budget.
+		session.setIncompleteTurnRecoveryEnabled(completionAttempts === undefined);
+		// The handoff flags describe the previous session's last prompt. A rebound
+		// session has run nothing yet, so keeping them would print a stale proposal
+		// if this run ends without a new assistant message.
+		latestPromptHasExternalHandoff = false;
+		latestExternalHandoffText = "";
+		unsubscribe = session.subscribe((event) => {
+			const block = getTerminatingBlock(event);
+			if (block) terminatingBlocks.push(block);
+			const handoff = getExternalPlanHandoff(event);
+			if (handoff) {
+				externalApprovalRequired = true;
+				latestPromptHasExternalHandoff = true;
+				latestExternalHandoffText = handoff.text;
+			}
+			// Only a completion check reads this, and it owns missing output: an empty
+			// turn is its follow-up's input, not this invocation's failure.
+			if (event.type === "message_end")
+				assistantFailure ??= getAssistantFailure(event.message, { includeIncomplete: false });
+			if (mode === "json") {
+				// The projection decides what a record contains; a caller that filters
+				// first would be a second, silently divergent policy.
+				const projected = toJsonEvent(event, { includeLiveEvents });
+				if (projected) writeRawStdout(`${JSON.stringify(projected)}\n`);
+			}
+		});
+		unsubscribeBackpressure =
+			mode === "json"
+				? session.agent.subscribe(async () => {
+						await waitForRawStdoutBackpressure();
+					})
+				: undefined;
+		await session.bindExtensions({
+			mode: mode === "json" ? "json" : "print",
+			commandContextActions: {
+				waitForIdle: () => session.waitForIdle(),
+				newSession: async (newSessionOptions) => runtimeHost.newSession(newSessionOptions),
+				fork: async (entryId, forkOptions) => {
+					const result = await runtimeHost.fork(entryId, forkOptions);
+					return { cancelled: result.cancelled };
+				},
+				navigateTree: async (targetId, navigateOptions) => {
+					const result = await session.navigateTree(targetId, {
+						summarize: navigateOptions?.summarize,
+						customInstructions: navigateOptions?.customInstructions,
+						replaceInstructions: navigateOptions?.replaceInstructions,
+						label: navigateOptions?.label,
+					});
+					return { cancelled: result.cancelled };
+				},
+				switchSession: async (sessionPath, switchOptions) => {
+					return runtimeHost.switchSession(sessionPath, switchOptions);
+				},
+				reload: async () => {
+					await session.reload();
+				},
+			},
+			onError: (err) => {
+				console.error(`Extension error (${err.extensionPath}): ${err.error}`);
+			},
+		});
+	};
+
+	try {
+		completionAttempts = getCompletionCheckAttempts(options);
+		if (completionAttempts !== undefined && mode !== "text" && mode !== "json") {
+			const flag = options.completionCheck ? "--completion-check" : "--completion-review";
+			throw new Error(`${flag} is only supported in print or JSON mode`);
+		}
+		const completionSession = session;
+		const completionCwd = runtimeHost.cwd;
+		const checkGit =
+			options.completionCheck === "git-committed"
+				? await createGitCompletionCheck(completionCwd, completionAbort.signal)
+				: undefined;
+
+		if (mode === "json") {
+			const header = session.sessionManager.getHeader();
+			if (header) {
+				writeRawStdout(`${JSON.stringify(header)}\n`);
+			}
+		}
+
+		await rebindSession();
+
+		// Extensions have registered by now, so the tool set is final: report any
+		// --tools/--exclude-tools name that matches nothing instead of silently
+		// ignoring it. Warnings go to stderr to keep the text answer and the JSON
+		// event stream on stdout parseable.
+		const unknownSelectors = session.getUnknownToolSelectors();
+		if (unknownSelectors.tools.length > 0 || unknownSelectors.excludeTools.length > 0) {
+			for (const [flag, names] of [
+				["--tools", unknownSelectors.tools],
+				["--exclude-tools", unknownSelectors.excludeTools],
+			] as const) {
+				if (names.length > 0) {
+					console.error(`Warning: ${flag}: unrecognized tool name(s) ignored: ${names.join(", ")}`);
+				}
+			}
+			console.error(`Available tools: ${unknownSelectors.knownTools.join(", ") || "(none)"}`);
+		}
+
+		const terminalOutcome = () => disposed || terminatingBlocks.length > 0 || assistantFailure !== undefined;
+		// A plan handoff suppresses automatic feedback, not explicit caller input.
+		const automaticCompletionBlocked = () => terminalOutcome() || externalApprovalRequired;
+		if (initialMessage && !(completionAttempts !== undefined && terminalOutcome())) {
+			latestPromptHasExternalHandoff = false;
+			await session.prompt(initialMessage, { images: initialImages });
+			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1), { includeIncomplete: false });
+		}
+
+		// Keep all explicit user messages in order; the completion budget is for
+		// the entire invocation, not a fresh budget after each user message.
+		for (const message of messages) {
+			if (completionAttempts !== undefined && terminalOutcome()) break;
+			latestPromptHasExternalHandoff = false;
+			await session.prompt(message);
+			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1), { includeIncomplete: false });
+		}
+
+		if (completionAttempts !== undefined) {
+			// A completion check owns missing output here, so an empty turn is its
+			// bounded follow-up's input rather than this invocation's failure.
+			assistantFailure ??= getAssistantFailure(session.state.messages.at(-1), { includeIncomplete: false });
+			for (let attempt = 0; attempt <= completionAttempts && !automaticCompletionBlocked(); attempt++) {
+				// Extension commands may explicitly replace the runtime. Keep normal
+				// rebinding intact, but never carry automatic feedback to a new session.
+				if (session !== completionSession || runtimeHost.cwd !== completionCwd) break;
+				let git: GitCompletionState | undefined;
+				try {
+					git = await checkGit?.();
+				} catch (error) {
+					console.error(error instanceof Error ? error.message : "Completion check: Git state unavailable.");
+					if (mode === "json") {
+						writeRawStdout(
+							`${JSON.stringify({ type: "completion_check", check: "git-committed", attempt, status: "unavailable", willFollowUp: false, ...(options.completionReview ? { review: { requested: reviewRequested, sent: reviewSent } } : {}) })}\n`,
+						);
+					}
+					// Do not turn a task failure with valid final text into a retryable
+					// infrastructure error after the model has already run.
+					break;
+				}
+				if (automaticCompletionBlocked() || session !== completionSession || runtimeHost.cwd !== completionCwd)
+					break;
+				const hasFinalText = hasFinalAssistantText(session.state.messages.at(-1));
+				const requestReview = options.completionReview === true && !reviewRequested;
+				const passed =
+					(!git || (git.hasNewCommit && git.hasCommittedChanges && !git.trackedDirty && !git.untrackedFiles)) &&
+					hasFinalText &&
+					!requestReview;
+				const willFollowUp = !passed && attempt < completionAttempts;
+				if (willFollowUp && requestReview) reviewRequested = true;
+				const completionEvent = {
+					type: "completion_check",
+					check: options.completionCheck ?? "task-review",
+					attempt,
+					maxAttempts: completionAttempts,
+					...git,
+					hasFinalText,
+					// Standalone review records completion of the bounded follow-up,
+					// never a judgment that the task itself passed verification.
+					status: passed ? (checkGit ? "passed" : "completed") : willFollowUp ? "follow_up" : "exhausted",
+					willFollowUp,
+					...(options.completionReview
+						? {
+								review: { requested: reviewRequested, sent: reviewSent },
+								...(willFollowUp ? { followUpKind: requestReview ? "review" : "completion" } : {}),
+							}
+						: {}),
+				};
+				if (mode === "json") {
+					writeRawStdout(`${JSON.stringify(completionEvent)}\n`);
+					await waitForRawStdoutBackpressure();
+				}
+				if (!willFollowUp) {
+					if (!passed) console.error(`Completion check incomplete after ${attempt} follow-up(s).`);
+					break;
+				}
+				// Backpressure may yield to a signal or a runtime replacement.
+				if (automaticCompletionBlocked() || session !== completionSession || runtimeHost.cwd !== completionCwd)
+					break;
+				const feedback = completionCheckFeedback(git, hasFinalText, requestReview);
+				// A requested prompt can still fail preflight or be intercepted by an
+				// extension. A user-message event is evidence of delivery to this session,
+				// even if a later assistant error prevents another completion inspection.
+				const unsubscribeReview = requestReview
+					? session.subscribe((event) => {
+							if (reviewSent || event.type !== "message_end" || event.message.role !== "user") return;
+							const content = event.message.content;
+							if (
+								typeof content === "string"
+									? content !== feedback
+									: !content.some((part) => isTextPart(part) && part.text === feedback)
+							) {
+								return;
+							}
+							reviewSent = true;
+							if (mode === "json") {
+								writeRawStdout(
+									`${JSON.stringify({ ...completionEvent, review: { requested: true, sent: true } })}\n`,
+								);
+							}
+						})
+					: undefined;
+				try {
+					latestPromptHasExternalHandoff = false;
+					await session.prompt(feedback, { expandPromptTemplates: false });
+				} finally {
+					unsubscribeReview?.();
+				}
+				assistantFailure ??= getAssistantFailure(session.state.messages.at(-1), { includeIncomplete: false });
+			}
+		}
+
+		// Exit-code determination applies to both text and json modes so a failed
+		// request or a hook-terminated run reports a non-zero status consistently;
+		// only the assistant-text stdout print is text-mode specific. Diagnostics go
+		// to stderr, keeping the json event stream on stdout parseable.
+		for (const block of terminatingBlocks) {
+			console.error(`Blocked ${block.toolName}: ${block.reason}`);
+		}
+		if (terminatingBlocks.length > 0) exitCode = 1;
+
+		const state = session.state;
+		const lastMessage = state.messages[state.messages.length - 1];
+
+		if (lastMessage?.role === "assistant") {
+			const assistantMsg = lastMessage as AssistantMessage;
+			// An empty turn is only a failure when no completion check owns missing
+			// output; that path reports it as an incomplete result instead.
+			const lastFailure = getAssistantFailure(lastMessage, {
+				includeIncomplete: completionAttempts === undefined,
+			});
+			if (lastFailure) {
+				console.error(assistantFailureText(lastFailure));
+				exitCode = 1;
+			} else if (mode === "text") {
+				for (const content of assistantMsg.content) {
+					if (content.type === "text") {
+						writeRawStdout(`${content.text}\n`);
+					}
+				}
+			}
+		} else if (mode === "text" && latestPromptHasExternalHandoff && latestExternalHandoffText) {
+			// The handoff ends the turn on the tool result, so the run stops before
+			// any assistant text. A text caller has no event stream to read the
+			// proposal from, and an empty stdout at exit 0 hides it entirely.
+			writeRawStdout(`${latestExternalHandoffText}\n`);
+		}
+
+		if (completionAttempts !== undefined && exitCode === 0 && !hasFinalAssistantText(lastMessage)) {
+			if (assistantFailure) {
+				console.error(assistantFailureText(assistantFailure));
+				exitCode = 1;
+			} else if (!latestPromptHasExternalHandoff) {
+				console.error("Completion check incomplete: no final answer text after bounded follow-up.");
+				exitCode = 2;
+			}
+		}
+
+		return exitCode;
+	} catch (error: unknown) {
+		console.error(error instanceof Error ? error.message : String(error));
+		return 1;
+	} finally {
+		// Sweep any detached background children on the normal/error-return path; the
+		// signal path already sweeps in its handler before process.exit.
+		killTrackedDetachedChildren();
+		for (const cleanup of signalCleanupHandlers) {
+			cleanup();
+		}
+		await disposeRuntime();
+		await flushRawStdout();
+	}
+}

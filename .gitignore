@@ -1,0 +1,62 @@
+node_modules/
+dist/
+.artifacts/
+*.log
+.DS_Store
+*.tsbuildinfo
+# packages/*/node_modules/
+packages/*/dist/
+packages/*/dist-chrome/
+packages/*/dist-firefox/
+packages/ai/src/providers/data/
+packages/ai/src/providers/.model-generation-*/
+*.cpuprofile
+
+# Environment
+.env
+
+# Editor files
+.vscode/
+.zed/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# Package specific
+.npm/
+coverage/
+.nyc_output/
+.pi_config/
+tui-debug.log
+compaction-results/
+.opencode/
+syntax.jsonl
+out.jsonl
+pi-*.html
+out.html
+packages/coding-agent/binaries/
+todo.md
+plans/
+.stepcode/
+# Retired product namespace may be created while migrating older installs.
+.step-harness/
+collect.sh
+.playwright-mcp/
+
+# 本地探索/调试产物，不入库
+pixel-art/
+.playwright-mcp/
+*.pdf
+
+# 仓库根目录的临时截图/草稿
+/*.png
+/goal-*.txt
+/README-draft.md
+/_scope_body.md
+/api-docs.md
+/delivery.md
+/goal-g3.md
+/goal-test.md
+/windows-xp-*.md

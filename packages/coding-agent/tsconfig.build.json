@@ -1,0 +1,19 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"outDir": "./dist",
+		"paths": {
+			"@step-harness/agent-core": ["../agent-core/dist/index.d.ts"],
+			"@step-harness/agent-core/*": ["../agent-core/dist/*.d.ts"],
+			"@step-harness/providers": ["../providers/dist/index.d.ts"],
+			"@step-harness/providers/step-provider": ["../providers/dist/step-provider/index.d.ts"],
+			"@step-harness/providers/*": ["../providers/dist/*.d.ts", "../providers/dist/providers/*.d.ts"],
+			"@step-harness/pi-tui": ["../tui/dist/index.d.ts"],
+			"@step-harness/pi-tui/*": ["../tui/dist/*.d.ts", "../tui/dist/components/*.d.ts"],
+			"@step-harness/config": ["../config/dist/index.d.ts"]
+		},
+		"rootDir": "./src"
+	},
+	"include": ["src/**/*.ts", "src/**/*.d.ts"],
+	"exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+}

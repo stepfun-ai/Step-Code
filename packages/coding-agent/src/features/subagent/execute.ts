@@ -1,0 +1,672 @@
+/**
+ * Blocking subagent orchestration: mode selection (single/parallel/chain),
+ * task normalization, project-agent confirmation, per-task execution with
+ * optional worktree isolation and telemetry, bounded-concurrency fan-out, and
+ * result aggregation. Tool registration, rendering, and the child runner stay
+ * in step-subagent.ts.
+ */
+
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import type { AgentToolResult, AgentToolUpdateCallback } from "@step-harness/agent-core";
+import type { Static } from "typebox";
+import { SUBAGENT_SESSION_ID_PREFIX } from "../../core/child-session.ts";
+import type { ExtensionContext } from "../../core/extensions/types.ts";
+import { type StepTelemetryReporter, trackStepTelemetry } from "../../step/telemetry.ts";
+import {
+	cloneUsage,
+	emptyUsage,
+	finalOutput,
+	isFailed,
+	makeToolResult,
+	resultText,
+	type StepChainItem,
+	type StepSubagentDetails,
+	type StepSubagentExtensionOptions,
+	type StepSubagentResultRecord,
+	type StepSubagentRunner,
+	type StepSubagentRunResult,
+	type StepTaskItem,
+	type StepWorktreeLease,
+	type StepWorktreeManager,
+	type SubagentParams,
+	sanitizeLabel,
+} from "../step-subagent.ts";
+import {
+	discoverStepAgents,
+	formatStepAgentCatalog,
+	resolveStepAgent,
+	type StepAgentConfig,
+	type StepAgentDiscoveryResult,
+	type StepAgentScope,
+} from "../step-subagent-agents.ts";
+import { acquireWorkflowAdmission } from "../workflow/admission.ts";
+import {
+	clampWorkflowConcurrency,
+	configuredWorkflowConcurrencyLimit,
+	type WorkflowSemaphore,
+} from "../workflow/budget.ts";
+import { truncateText } from "./lane-events.ts";
+import type { StepSubagentLaneRuntime } from "./lane-lifecycle.ts";
+import { finalRoster, liveRoster } from "./projection.ts";
+
+/**
+ * Repaint budget for live frames.
+ *
+ * A frame is a snapshot for a human watching the UI, not a fact: the transport
+ * drops it from the persisted stream unless the host opts in. Recomputing the
+ * roster projection per streamed token costs more than a screen can show, and
+ * 100ms is the cadence the bash tool already uses.
+ */
+const LIVE_FRAME_INTERVAL_MS = 100;
+
+export interface StepSubagentTaskInput {
+	agent: string;
+	task: string;
+	cwd?: string;
+	model?: string;
+	contextMode?: "inherit" | "fresh";
+	isolateWorkspace?: boolean;
+	worktreeName?: string;
+	retainWorktree?: boolean;
+}
+
+function statusForResult(result: StepSubagentRunResult): StepSubagentResultRecord["status"] {
+	if (result.exitCode === -1) return "running";
+	if (result.stopReason === "aborted") return "aborted";
+	return isFailed(result) ? "failed" : "completed";
+}
+
+function resultRecord(
+	agent: string,
+	task: string,
+	result: StepSubagentRunResult,
+	extra: Partial<Pick<StepSubagentResultRecord, "agentSource" | "step" | "worktreePath" | "worktreeBranch">> = {},
+): StepSubagentResultRecord {
+	return {
+		agent,
+		agentSource: extra.agentSource ?? "unknown",
+		task,
+		status: statusForResult(result),
+		...result,
+		...extra,
+		usage: cloneUsage(result.usage),
+	};
+}
+
+function makeEmptyResult(agent: string, task: string): StepSubagentResultRecord {
+	return {
+		agent,
+		agentSource: "unknown",
+		task,
+		status: "queued",
+		exitCode: -1,
+		messages: [],
+		stderr: "",
+		usage: emptyUsage(),
+		updatedAt: Date.now(),
+	};
+}
+
+function makeSkippedResult(record: StepSubagentResultRecord): StepSubagentResultRecord {
+	return { ...record, status: "skipped", updatedAt: Date.now() };
+}
+
+/**
+ * The parent model only sees `content`, never `details`, so a chain's text must
+ * carry both the outcome and the output that matters: the last completed step
+ * on success, the stopping step's error otherwise. Earlier step bodies stay in
+ * `details.results` instead of piling into the parent's context.
+ */
+function chainResultText(records: readonly StepSubagentResultRecord[]): string {
+	const steps = records.map((record, index) => `${index + 1}. ${record.agent}: ${record.status}`).join("\n");
+	const stopped = records.findIndex((record) => record.status !== "completed");
+	if (stopped === -1) {
+		const last = records.at(-1);
+		if (!last) return "(no output)";
+		return `Chain: ${records.length}/${records.length} steps completed\n${steps}\n\n### Final output (step ${records.length}, ${last.agent})\n\n${resultText(last)}`;
+	}
+	const failed = records[stopped];
+	const sections = [
+		`Chain stopped at step ${stopped + 1}/${records.length} (${failed.agent}: ${failed.status}); the chain did not complete.\n${steps}`,
+		`### Error (step ${stopped + 1}, ${failed.agent})\n\n${resultText(failed)}`,
+	];
+	const previous = stopped > 0 ? records[stopped - 1] : undefined;
+	if (previous) {
+		sections.push(
+			`### Last completed output (step ${stopped}, ${previous.agent})\n\n${truncateText(resultText(previous), 50_000)}`,
+		);
+	}
+	return sections.join("\n\n");
+}
+
+function resultDetailsText(details: StepSubagentDetails): string {
+	return details.results
+		.map((result) => {
+			const worktree = result.worktreePath ? ` worktree=${result.worktreePath}` : "";
+			return `${result.agent}: ${result.status}${worktree}`;
+		})
+		.join("; ");
+}
+
+function buildDetails(
+	mode: StepSubagentDetails["mode"],
+	discovery: StepAgentDiscoveryResult,
+	scope: StepAgentScope,
+	results: StepSubagentResultRecord[],
+): StepSubagentDetails {
+	return {
+		mode,
+		agentScope: scope,
+		userAgentsDir: discovery.userAgentsDir,
+		projectAgentsDir: discovery.projectAgentsDir,
+		results,
+	};
+}
+
+async function mapWithConcurrency<T, R>(
+	items: readonly T[],
+	concurrency: number,
+	fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+	const results = new Array<R>(items.length);
+	let next = 0;
+	const workers = Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, async () => {
+		while (true) {
+			const index = next++;
+			if (index >= items.length) return;
+			results[index] = await fn(items[index], index);
+		}
+	});
+	await Promise.all(workers);
+	return results;
+}
+
+function makeFailureResult(
+	agent: string,
+	task: string,
+	message: string,
+	source: StepAgentConfig["source"] | "unknown" = "unknown",
+): StepSubagentResultRecord {
+	return resultRecord(
+		agent,
+		task,
+		{
+			messages: [],
+			stderr: message,
+			exitCode: 1,
+			usage: emptyUsage(),
+			stopReason: "error",
+			errorMessage: message,
+		},
+		{ agentSource: source },
+	);
+}
+
+function taskLabel(task: StepSubagentTaskInput, index?: number): string {
+	return sanitizeLabel(task.worktreeName ?? task.agent, index === undefined ? "agent" : `agent-${index + 1}`);
+}
+
+function taskFromParams(params: SubagentParams): StepSubagentTaskInput | undefined {
+	const task = params.task?.trim();
+	const agent = params.agent?.trim();
+	if (!task || !agent) return undefined;
+	return {
+		agent,
+		task,
+		cwd: params.cwd,
+		isolateWorkspace: params.isolateWorkspace,
+		worktreeName: params.worktreeName,
+		retainWorktree: params.retainWorktree,
+	};
+}
+
+function normalizeTaskInput(task: Static<typeof StepTaskItem> | Static<typeof StepChainItem>): StepSubagentTaskInput {
+	const runtimeTask = task as Static<typeof StepTaskItem> & {
+		isolateWorkspace?: boolean;
+		worktreeName?: string;
+		retainWorktree?: boolean;
+	};
+	return {
+		agent: task.agent,
+		task: task.task,
+		cwd: task.cwd,
+		isolateWorkspace: runtimeTask.isolateWorkspace,
+		worktreeName: runtimeTask.worktreeName,
+		retainWorktree: runtimeTask.retainWorktree,
+	};
+}
+
+async function confirmProjectAgents(
+	ctx: ExtensionContext,
+	params: SubagentParams,
+	discovery: StepAgentDiscoveryResult,
+	tasks: readonly StepSubagentTaskInput[],
+): Promise<boolean> {
+	if (params.confirmProjectAgents === false || !ctx.hasUI || ctx.isProjectTrusted()) return true;
+	if (params.agentScope === "user") return true;
+	const projectNames = [
+		...new Set(
+			tasks
+				.map((task) => resolveStepAgent(discovery.agents, task.agent)?.name ?? task.agent)
+				.filter((name) => discovery.agents.some((agent) => agent.name === name && agent.source === "project")),
+		),
+	];
+	if (projectNames.length === 0) return true;
+	return ctx.ui.confirm(
+		"Run project-local agents?",
+		`Agents: ${projectNames.join(", ")}\nSource: ${discovery.projectAgentsDir ?? "(unknown)"}\n\nProject definitions are repository-controlled. Continue only for a trusted repository.`,
+	);
+}
+
+export type SubagentExecutionOptions = Required<
+	Pick<
+		StepSubagentExtensionOptions,
+		"agentDir" | "configDirName" | "includeBuiltinAgents" | "maxParallelTasks" | "maxConcurrency"
+	>
+> & {
+	worktreeManager: StepWorktreeManager;
+	runner: StepSubagentRunner;
+	telemetry?: StepTelemetryReporter;
+};
+
+/** A validated, approved call: discovery ran, exactly one mode was selected, and project agents were confirmed. */
+export interface PreparedSubagentRun {
+	mode: StepSubagentDetails["mode"];
+	scope: StepAgentScope;
+	discovery: StepAgentDiscoveryResult;
+	tasks: StepSubagentTaskInput[];
+}
+
+export type SubagentPreflight =
+	| { ok: true; run: PreparedSubagentRun }
+	| { ok: false; result: AgentToolResult<StepSubagentDetails> };
+
+/**
+ * Everything that can reject a call before any child starts: discovery, mode
+ * selection, the batch-size limit, and project-agent confirmation. With
+ * `requireKnownAgents` an unknown agent name is rejected here as well, instead
+ * of surfacing as one failed task; a background lane uses it so a bad call
+ * returns an ordinary error and never creates a lane.
+ */
+export async function prepareSubagentRun(
+	params: SubagentParams,
+	ctx: ExtensionContext,
+	options: SubagentExecutionOptions,
+	preflight: { requireKnownAgents?: boolean } = {},
+): Promise<SubagentPreflight> {
+	const scope = params.agentScope ?? "user";
+	const discovery = await discoverStepAgents(ctx.cwd, {
+		agentDir: options.agentDir,
+		configDirName: options.configDirName,
+		includeBuiltin: options.includeBuiltinAgents,
+		scope,
+	});
+	const parallelInput = params.tasks;
+	const chainInput = params.chain;
+	// This mirrors Pi's example: an empty optional array does not select a mode.
+	const hasParallelInput = (parallelInput?.length ?? 0) > 0;
+	const hasChainInput = (chainInput?.length ?? 0) > 0;
+	const single = !hasParallelInput && !hasChainInput ? taskFromParams(params) : undefined;
+	const parallel = hasParallelInput ? parallelInput!.map(normalizeTaskInput) : undefined;
+	const chain = hasChainInput ? chainInput!.map(normalizeTaskInput) : undefined;
+	const modeCount = Number(Boolean(single)) + Number(hasParallelInput) + Number(hasChainInput);
+	if (modeCount !== 1) {
+		const details = buildDetails("single", discovery, scope, []);
+		return {
+			ok: false,
+			result: makeToolResult(
+				details,
+				`Invalid parameters. Provide exactly one mode. Available agents: ${formatStepAgentCatalog(discovery.agents)}`,
+				true,
+			),
+		};
+	}
+	if (parallel && parallel.length > options.maxParallelTasks) {
+		const details = buildDetails("parallel", discovery, scope, []);
+		return {
+			ok: false,
+			result: makeToolResult(
+				details,
+				`Too many parallel tasks (${parallel.length}); maximum is ${options.maxParallelTasks}.`,
+				true,
+			),
+		};
+	}
+	const tasks = parallel ?? chain ?? [single!];
+	const mode: StepSubagentDetails["mode"] = chain ? "chain" : parallel ? "parallel" : "single";
+	if (preflight.requireKnownAgents) {
+		const unknown = [
+			...new Set(tasks.filter((task) => !resolveStepAgent(discovery.agents, task.agent)).map((task) => task.agent)),
+		];
+		if (unknown.length > 0) {
+			return {
+				ok: false,
+				result: makeToolResult(
+					buildDetails(mode, discovery, scope, []),
+					`Unknown agent${unknown.length > 1 ? "s" : ""}: ${unknown.map((name) => `"${name}"`).join(", ")}. Available agents: ${formatStepAgentCatalog(discovery.agents)}`,
+					true,
+				),
+			};
+		}
+	}
+	if (!(await confirmProjectAgents(ctx, params, discovery, tasks))) {
+		const details = buildDetails(mode, discovery, scope, []);
+		return { ok: false, result: makeToolResult(details, "Canceled: project-local agents not approved.", true) };
+	}
+	return { ok: true, run: { mode, scope, discovery, tasks } };
+}
+
+export async function executeSubagent(
+	params: SubagentParams,
+	signal: AbortSignal | undefined,
+	onUpdate: AgentToolUpdateCallback<StepSubagentDetails> | undefined,
+	ctx: ExtensionContext,
+	options: SubagentExecutionOptions,
+	laneRuntime?: StepSubagentLaneRuntime,
+): Promise<AgentToolResult<StepSubagentDetails>> {
+	const preflight = await prepareSubagentRun(params, ctx, options);
+	if (!preflight.ok) return preflight.result;
+	return runPreparedSubagent(preflight.run, signal, onUpdate, ctx, options, laneRuntime);
+}
+
+export async function runPreparedSubagent(
+	prepared: PreparedSubagentRun,
+	signal: AbortSignal | undefined,
+	onUpdate: AgentToolUpdateCallback<StepSubagentDetails> | undefined,
+	ctx: ExtensionContext,
+	options: SubagentExecutionOptions,
+	laneRuntime?: StepSubagentLaneRuntime,
+): Promise<AgentToolResult<StepSubagentDetails>> {
+	const parentCwd = ctx.cwd,
+		parentSessionId = ctx.sessionManager?.getSessionId?.();
+	const { mode, scope, discovery, tasks } = prepared;
+	const parallel = mode === "parallel" ? tasks : undefined;
+	const chain = mode === "chain" ? tasks : undefined;
+
+	const records = tasks.map((task) => makeEmptyResult(task.agent, task.task));
+	let lastFrameAt = 0;
+	let pendingFrame: ReturnType<typeof setTimeout> | undefined;
+	const execution = laneRuntime ? "background" : "blocking";
+	const createdAt = tasks.map(() => Date.now());
+	const createdTasks = new Set<number>();
+	const reportCreated = (agent: StepAgentConfig, index: number): void => {
+		if (!options.telemetry) return;
+		createdTasks.add(index);
+		trackStepTelemetry(options.telemetry, "subagent_task_created", {
+			execution,
+			agent_type: agent.name,
+			model_profile: agent.model ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "inherited"),
+		});
+		createdAt[index] = Date.now();
+	};
+	const reportFinished = (record: StepSubagentResultRecord, index: number): void => {
+		if (!options.telemetry || !createdTasks.has(index)) return;
+		const status =
+			record.status === "completed" ? "completed" : record.status === "aborted" ? "interrupted" : "error";
+		trackStepTelemetry(options.telemetry, "subagent_task_finished", {
+			execution,
+			status,
+			duration_ms: Math.max(0, Date.now() - (createdAt[index] ?? Date.now())),
+		});
+	};
+	/**
+	 * Publish one live frame.
+	 *
+	 * A frame is a replacement snapshot for a human watching the UI. It is
+	 * explicitly *not* a fact the model or a log needs: the transport drops it
+	 * from the persisted stream unless the host asks for live events, and the
+	 * terminal result restates everything worth keeping. That is why the two
+	 * knobs here are latency and repaint cost, not durability.
+	 *
+	 * The window is a repaint budget: recomputing a roster projection per streamed
+	 * token costs more than the UI can show, and 100ms is the cadence the bash
+	 * tool already uses. It is not a log-safety mechanism — nothing here reaches
+	 * a log file by default — so it can be tuned or removed without affecting
+	 * what gets persisted.
+	 */
+	const emit = (mode: StepSubagentDetails["mode"]): void => {
+		if (!onUpdate) return;
+		const wait = LIVE_FRAME_INTERVAL_MS - (Date.now() - lastFrameAt);
+		if (wait > 0) {
+			// The newest roster wins; an intermediate frame is stale by definition.
+			pendingFrame ??= setTimeout(() => {
+				pendingFrame = undefined;
+				publishFrame(mode);
+			}, wait);
+			pendingFrame.unref?.();
+			return;
+		}
+		publishFrame(mode);
+	};
+
+	const publishFrame = (mode: StepSubagentDetails["mode"]): void => {
+		if (!onUpdate) return;
+		lastFrameAt = Date.now();
+		const roster = liveRoster(records);
+		const details = buildDetails(mode, discovery, scope, roster.results);
+		onUpdate(
+			makeToolResult(
+				roster.omittedResults === undefined ? details : { ...details, omittedResults: roster.omittedResults },
+				resultDetailsText(details),
+			),
+		);
+	};
+
+	const runOne = async (
+		task: StepSubagentTaskInput,
+		index: number,
+		admission?: WorkflowSemaphore,
+	): Promise<StepSubagentResultRecord> => {
+		const agent = resolveStepAgent(discovery.agents, task.agent);
+		if (!agent) {
+			const failed = makeFailureResult(
+				task.agent,
+				task.task,
+				`Unknown agent: "${task.agent}". Available agents: ${formatStepAgentCatalog(discovery.agents)}`,
+			);
+			records[index] = failed;
+			emit(mode);
+			reportFinished(failed, index);
+			return failed;
+		}
+		reportCreated(agent, index);
+		// A parallel batch shares the process-wide window with workflow nodes, so the
+		// two together never exceed the host ceiling. The task stays queued until admitted.
+		let releaseSlot: (() => void) | undefined;
+		if (admission) {
+			try {
+				releaseSlot = await admission.acquire(signal);
+			} catch (error) {
+				const aborted = resultRecord(
+					agent.name,
+					task.task,
+					{
+						messages: [],
+						stderr: "",
+						exitCode: 1,
+						usage: emptyUsage(),
+						stopReason: "aborted",
+						errorMessage: error instanceof Error ? error.message : String(error),
+					},
+					{ agentSource: agent.source },
+				);
+				records[index] = aborted;
+				emit(mode);
+				reportFinished(aborted, index);
+				return aborted;
+			}
+		}
+		let requestEpoch = admission?.epoch ?? 0;
+		const sessionId = laneRuntime?.sessionId
+			? index === 0
+				? laneRuntime.sessionId
+				: `${laneRuntime.sessionId}-${index}`
+			: `${SUBAGENT_SESSION_ID_PREFIX}${randomUUID()}`;
+		// Flip the queued placeholder before spawning, so the step reads as running
+		// (with a clock) from the moment it is dispatched, not from its first event.
+		records[index] = {
+			...records[index],
+			agentSource: agent.source,
+			sessionId,
+			status: "running",
+			startedAt: Date.now(),
+			updatedAt: Date.now(),
+		};
+		emit(mode);
+		const baseCwd = path.resolve(ctx.cwd, task.cwd ?? ".");
+		let worktree: StepWorktreeLease | undefined;
+		let childCwd = baseCwd;
+		try {
+			if (task.isolateWorkspace) {
+				worktree = await options.worktreeManager.allocate(baseCwd, taskLabel(task, index));
+				childCwd = worktree.path;
+			}
+			const withSession = (result: StepSubagentRunResult): StepSubagentRunResult => ({
+				...result,
+				sessionId,
+			});
+			const seenResponses = new Set<string>();
+			const observedMessages = new WeakSet<StepSubagentRunResult["messages"][number]>();
+			const retainCompletedResponses = (result: StepSubagentRunResult): void => {
+				if (!laneRuntime?.onCompletedResponse) return;
+				for (const message of result.messages) {
+					if (message.role !== "assistant" || message.stopReason !== "stop" || observedMessages.has(message))
+						continue;
+					observedMessages.add(message);
+					const output = message.content
+						.filter((part) => part.type === "text")
+						.map((part) => part.text)
+						.join("\n");
+					const key = `${message.timestamp}:${output}`;
+					if (!output || seenResponses.has(key)) continue;
+					seenResponses.add(key);
+					laneRuntime.onCompletedResponse({
+						agent: agent.name,
+						task: task.task,
+						taskIndex: index,
+						sessionId,
+						timestamp: message.timestamp,
+						output,
+					});
+				}
+			};
+			const update = (partial: StepSubagentRunResult): void => {
+				retainCompletedResponses(partial);
+				records[index] = resultRecord(agent.name, task.task, withSession(partial), {
+					agentSource: agent.source,
+					worktreePath: worktree?.path,
+					worktreeBranch: worktree?.branch,
+				});
+				emit(mode);
+			};
+			const child = await options.runner({
+				parentCwd,
+				parentSessionId,
+				agent,
+				task: task.task,
+				cwd: childCwd,
+				model: task.model ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined),
+				thinkingLevel: ctx.thinkingLevel,
+				signal,
+				onUpdate: update,
+				onNeedsInput: laneRuntime?.onNeedsInput,
+				onChildRespawn: laneRuntime?.onChildRespawn,
+				sessionId,
+				keepAlive: laneRuntime?.keepAlive === true,
+				...(laneRuntime?.turnTimeoutMs ? { turnTimeoutMs: laneRuntime.turnTimeoutMs } : {}),
+				// An admitted child keeps its shared slot until its process has exited.
+				...(admission ? { awaitExit: true } : {}),
+				...(admission
+					? {
+							onModelRequest: (event) => {
+								if (event.type === "started") requestEpoch = admission.epoch;
+								else if (event.type === "succeeded") admission.succeeded(requestEpoch);
+								else admission.throttle(requestEpoch, event.delayMs);
+								if (event.type !== "started") requestEpoch = admission.epoch;
+							},
+						}
+					: {}),
+			});
+			retainCompletedResponses(child);
+			const completed = resultRecord(agent.name, task.task, withSession(child), {
+				agentSource: agent.source,
+				worktreePath: worktree?.path,
+				worktreeBranch: worktree?.branch,
+			});
+			records[index] = completed;
+			emit(mode);
+			if (worktree && task.retainWorktree === false) await worktree.cleanup();
+			reportFinished(completed, index);
+			return completed;
+		} catch (error) {
+			if (worktree && task.retainWorktree === false) await worktree.cleanup().catch(() => undefined);
+			const message = error instanceof Error ? error.message : String(error);
+			const failed = {
+				...makeFailureResult(agent.name, task.task, message, agent.source),
+				sessionId,
+			};
+			records[index] = failed;
+			emit(mode);
+			reportFinished(failed, index);
+			return failed;
+		} finally {
+			releaseSlot?.();
+		}
+	};
+
+	// Publish the roster before dispatching. Every other emit happens inside
+	// runOne, so without this the first update waits on a child's first streamed
+	// event — process spawn, its mcp servers, then a first token — and the live
+	// list stays invisible for the tens of seconds a caller most wants it. The
+	// records are already seeded by makeEmptyResult, so this renders every lane
+	// at 0s, including ones still queued behind maxConcurrency.
+	emit(mode);
+	if (parallel) {
+		// The configured provider limit caps subagent batches the same way it caps workflows.
+		const ceiling = Math.min(options.maxConcurrency, clampWorkflowConcurrency(configuredWorkflowConcurrencyLimit()));
+		const lease = acquireWorkflowAdmission(ceiling);
+		try {
+			await mapWithConcurrency(parallel, ceiling, (task, index) => runOne(task, index, lease.semaphore));
+		} finally {
+			lease.release();
+		}
+	} else if (chain) {
+		let previous = "";
+		for (let index = 0; index < chain.length; index++) {
+			const task = {
+				...chain[index],
+				// Function replacement inserts `previous` verbatim. A string replacement would
+				// let $-patterns in the prior subagent's output ($&, $`, $', $$) be reinterpreted
+				// by String.prototype.replace, corrupting the next task's prompt.
+				task: chain[index].task.replace(/\{previous\}/g, () => previous),
+			};
+			const record = await runOne(task, index);
+			previous = finalOutput(record.messages) || resultText(record);
+			if (record.status !== "completed") {
+				for (let rest = index + 1; rest < chain.length; rest++) records[rest] = makeSkippedResult(records[rest]);
+				emit(mode);
+				break;
+			}
+		}
+	} else await runOne(tasks[0], 0);
+	if (pendingFrame) {
+		clearTimeout(pendingFrame);
+		pendingFrame = undefined;
+		publishFrame(mode);
+	}
+	const finalDetails = buildDetails(mode, discovery, scope, finalRoster(records));
+	if (mode === "parallel") {
+		const success = records.filter((record) => record.status === "completed").length;
+		const summaries = records.map(
+			(record) => `### ${record.agent} (${record.status})\n\n${truncateText(resultText(record), 50_000)}`,
+		);
+		return makeToolResult(
+			finalDetails,
+			`Parallel: ${success}/${records.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`,
+		);
+	}
+	if (mode === "chain") return makeToolResult(finalDetails, chainResultText(records));
+	const record = records[0];
+	return makeToolResult(finalDetails, record ? resultText(record) : "(no output)");
+}

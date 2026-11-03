@@ -1,0 +1,165 @@
+import { visibleWidth } from "@step-harness/pi-tui";
+import { describe, expect, it } from "vitest";
+import { INITIAL_STEP_LOGIN_STEP, reduceStepLogin, resolveStepLoginProfiles } from "../src/step/onboarding.ts";
+import { StepOnboardingView } from "../src/step/onboarding-view.ts";
+import { initTheme } from "../src/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
+
+describe("Step login onboarding", () => {
+	it("offers the four Step login profiles in StepCode order", () => {
+		expect(resolveStepLoginProfiles().map((profile) => profile.id)).toEqual([
+			"step_plan",
+			"step_plan_oversea",
+			"platform_cn",
+			"platform_oversea",
+		]);
+	});
+
+	it("keeps each platform profile paired with its own endpoint", () => {
+		const profiles = resolveStepLoginProfiles();
+		expect(profiles.find((profile) => profile.id === "step_plan")?.baseUrl).toBe("https://api.stepfun.com/step_plan");
+		expect(profiles.find((profile) => profile.id === "step_plan_oversea")?.baseUrl).toBe(
+			"https://api.stepfun.ai/step_plan",
+		);
+		expect(profiles.find((profile) => profile.id === "platform_cn")?.baseUrl).toBe("https://api.stepfun.com/v1");
+		expect(profiles.find((profile) => profile.id === "platform_oversea")?.baseUrl).toBe("https://api.stepfun.ai/v1");
+	});
+
+	it("points each Step Plan profile at its own developer-center login page", () => {
+		const profiles = resolveStepLoginProfiles();
+		const mainland = profiles.find((profile) => profile.id === "step_plan");
+		const oversea = profiles.find((profile) => profile.id === "step_plan_oversea");
+		expect(mainland?.authBaseUrl).toBe("https://platform.stepfun.com");
+		expect(oversea?.authBaseUrl).toBe("https://platform.stepfun.ai");
+		expect(oversea?.credentialSource).toBe("browser");
+	});
+
+	it("reads each profile endpoint from its own environment override", () => {
+		const profiles = resolveStepLoginProfiles({
+			STEPCODE_STEP_PLAN_API_OVERSEA_URL: "https://api.oversea.test/step_plan/",
+			STEPCODE_DEVCENTER_AUTH_OVERSEA_URL: "https://platform.oversea.test",
+		});
+		const oversea = profiles.find((profile) => profile.id === "step_plan_oversea");
+		expect(oversea?.baseUrl).toBe("https://api.oversea.test/step_plan");
+		expect(oversea?.authBaseUrl).toBe("https://platform.oversea.test");
+		expect(profiles.find((profile) => profile.id === "step_plan")?.baseUrl).toBe("https://api.stepfun.com/step_plan");
+	});
+
+	it("routes browser and API-key choices through one reducer", () => {
+		const browser = reduceStepLogin(INITIAL_STEP_LOGIN_STEP, {
+			type: "choose",
+			choice: "step_plan",
+		});
+		const apiKey = reduceStepLogin(INITIAL_STEP_LOGIN_STEP, {
+			type: "choose",
+			choice: "platform_cn",
+		});
+
+		const overseaBrowser = reduceStepLogin(INITIAL_STEP_LOGIN_STEP, {
+			type: "choose",
+			choice: "step_plan_oversea",
+		});
+
+		expect(browser).toEqual({
+			kind: "continueInBrowser",
+			choice: "step_plan",
+			authUrl: "",
+		});
+		expect(overseaBrowser).toEqual({
+			kind: "continueInBrowser",
+			choice: "step_plan_oversea",
+			authUrl: "",
+		});
+		expect(apiKey).toEqual({ kind: "apiKeyEntry", choice: "platform_cn", value: "", error: null });
+		expect(reduceStepLogin(apiKey, { type: "credential", apiKey: "platform-key" })).toEqual({
+			kind: "saving",
+			choice: "platform_cn",
+		});
+	});
+
+	it("renders the same four choices used by every login entry point", () => {
+		initTheme("dark");
+		const view = new StepOnboardingView(resolveStepLoginProfiles(), {
+			onChoose: () => {},
+			onSubmitApiKey: () => {},
+			onType: () => {},
+			onBackspace: () => {},
+			onBack: () => {},
+			onQuit: () => {},
+			requestRender: () => {},
+		});
+
+		const rendered = view.render(100).join("\n");
+		expect(rendered).toContain("1. Step Plan");
+		expect(rendered).toContain("2. Step Plan Oversea");
+		expect(rendered).toContain("3. Step Platform (API key");
+		expect(rendered).toContain("4. Step Platform Oversea");
+		expect(rendered).toContain("Usage included with Mini, Plus, Pro, and Max plans");
+	});
+
+	it.each([12, 40, 80, 160])("shows the complete authorization URL at width %s", (width) => {
+		const view = new StepOnboardingView(resolveStepLoginProfiles(), {
+			onChoose: () => {},
+			onSubmitApiKey: () => {},
+			onType: () => {},
+			onBackspace: () => {},
+			onBack: () => {},
+			onQuit: () => {},
+			requestRender: () => {},
+		});
+		const authUrl = `https://platform.stepfun.com/cli-login?flow_id=${"a".repeat(32)}&extra=${"b".repeat(80)}`;
+		view.setStep({
+			kind: "continueInBrowser",
+			choice: "step_plan",
+			authUrl,
+		});
+		const rows = view.render(width);
+		expect(rows.map(stripAnsi).join("")).toContain(authUrl);
+		expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+	});
+
+	it.each(["step_plan", "step_plan_oversea"] as const)(
+		"renders and navigates missing-plan actions for %s",
+		(choice) => {
+			const selected: string[] = [];
+			let retries = 0;
+			let purchases = 0;
+			let changed = 0;
+			let quit = 0;
+			const view = new StepOnboardingView(resolveStepLoginProfiles(), {
+				onChoose: (profile) => selected.push(profile),
+				onSubmitApiKey: () => {},
+				onType: () => {},
+				onBackspace: () => {},
+				onBack: () => {
+					changed++;
+				},
+				onQuit: () => {
+					quit++;
+				},
+				onRetryPlan: () => {
+					retries++;
+				},
+				onOpenPlan: () => {
+					purchases++;
+				},
+				requestRender: () => {},
+			});
+			view.setStep({ kind: "planRequired", choice });
+			for (const width of [12, 40, 80, 160]) {
+				const rows = view.render(width);
+				expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+				expect(rows.map(stripAnsi).join("")).toContain(
+					`https://platform.stepfun.${choice === "step_plan" ? "com" : "ai"}/step-plan`,
+				);
+			}
+			view.handleInput("\r");
+			expect(selected).toEqual([choice === "step_plan" ? "platform_cn" : "platform_oversea"]);
+			view.handleInput("2");
+			view.handleInput("3");
+			view.handleInput("4");
+			view.handleInput("\x1b");
+			expect([purchases, retries, changed, quit]).toEqual([1, 1, 1, 1]);
+		},
+	);
+});

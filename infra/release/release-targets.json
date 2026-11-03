@@ -1,0 +1,8 @@
+[
+	{ "id": "darwin-arm64", "archiveType": "tar.gz", "binary": "step" },
+	{ "id": "darwin-x64", "archiveType": "tar.gz", "binary": "step" },
+	{ "id": "linux-arm64", "archiveType": "tar.gz", "binary": "step" },
+	{ "id": "linux-x64", "archiveType": "tar.gz", "binary": "step" },
+	{ "id": "windows-arm64", "archiveType": "zip", "binary": "step.exe" },
+	{ "id": "windows-x64", "archiveType": "zip", "binary": "step.exe" }
+]

@@ -1,0 +1,297 @@
+import type { MarkdownTransformer } from "@step-harness/coding-agent";
+import { getMarkdownTheme, theme } from "@step-harness/coding-agent";
+import {
+	Container,
+	isIncrementalRenderDisabled,
+	Markdown,
+	type MarkdownTheme,
+	Spacer,
+	Text,
+} from "@step-harness/pi-tui";
+import type { AssistantMessage } from "@step-harness/providers";
+import { INCOMPLETE_TURN_MESSAGES } from "@step-harness/providers";
+import { createLiveMarkdownTransform } from "./markdown-transform.ts";
+
+const OSC133_ZONE_START = "\x1b]133;A\x07";
+const OSC133_ZONE_END = "\x1b]133;B\x07";
+const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
+
+/** Cached zone-marked output, keyed by the child lines it was derived from. */
+type ZoneCache = { width: number; native: string[]; lines: string[] };
+
+/** A `Markdown` instance kept alive across deltas of the same message. */
+type MarkdownSlot = { kind: "text" | "thinking"; markdown: Markdown };
+
+/**
+ * Component that renders a complete assistant message
+ */
+export class AssistantMessageComponent extends Container {
+	private contentContainer: Container;
+	private hideThinkingBlock: boolean;
+	private markdownTheme: MarkdownTheme;
+	private hiddenThinkingLabel: string;
+	private outputPad: number;
+	private markdownTransformers: readonly MarkdownTransformer[];
+	private lastMessage?: AssistantMessage;
+	private hasToolCalls = false;
+	private isStreaming = false;
+	private zoneCache?: ZoneCache;
+	/**
+	 * Markdown children in content order.
+	 *
+	 * A streamed reply calls `updateContent` for every delta. Rebuilding the
+	 * components would throw away the markdown renderer's certified prefix, so the
+	 * instances are kept and re-pointed at the new text instead.
+	 */
+	private markdownSlots: MarkdownSlot[] = [];
+	private slotCursor = 0;
+
+	constructor(
+		message?: AssistantMessage,
+		hideThinkingBlock = false,
+		markdownTheme: MarkdownTheme = getMarkdownTheme(),
+		hiddenThinkingLabel = "Thinking...",
+		outputPad = 1,
+		markdownTransformers: readonly MarkdownTransformer[] = [],
+	) {
+		super();
+
+		this.hideThinkingBlock = hideThinkingBlock;
+		this.markdownTheme = markdownTheme;
+		this.hiddenThinkingLabel = hiddenThinkingLabel;
+		this.outputPad = outputPad;
+		this.markdownTransformers = markdownTransformers;
+
+		// Container for text/thinking content
+		this.contentContainer = new Container();
+		this.addChild(this.contentContainer);
+
+		if (message) {
+			this.updateContent(message);
+		}
+	}
+
+	override invalidate(): void {
+		super.invalidate();
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		}
+	}
+
+	setHideThinkingBlock(hide: boolean): void {
+		this.hideThinkingBlock = hide;
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		}
+	}
+
+	setHiddenThinkingLabel(label: string): void {
+		this.hiddenThinkingLabel = label;
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		}
+	}
+
+	setOutputPad(padding: number): void {
+		if (padding === this.outputPad) {
+			return;
+		}
+		this.outputPad = padding;
+		// Padding is fixed when a `Markdown` is constructed, so the slots cannot be
+		// reused across a padding change.
+		this.markdownSlots = [];
+		this.slotCursor = 0;
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		}
+	}
+
+	override render(width: number): string[] {
+		// super.render() hands back an array Container reuses while nothing changed, so
+		// the zone markers must go into a new array instead of being written in place.
+		const native = super.render(width);
+		const cached = this.zoneCache;
+		if (
+			!isIncrementalRenderDisabled() &&
+			cached !== undefined &&
+			cached.width === width &&
+			cached.native === native
+		) {
+			return cached.lines;
+		}
+
+		if (this.hasToolCalls || native.length === 0) {
+			// Never hand the parent the array the base Container owns: a caller that
+			// reuses its cached prefix must be able to treat render() as read-only.
+			// The copy is memoized, so the ref stays stable while nothing changed.
+			this.zoneCache = { width, native, lines: [...native] };
+			return this.zoneCache.lines;
+		}
+
+		const lines = [...native];
+		lines[0] = OSC133_ZONE_START + lines[0];
+		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
+		this.zoneCache = { width, native, lines };
+		return lines;
+	}
+
+	updateContent(message: AssistantMessage, isStreaming = this.isStreaming): void {
+		this.lastMessage = message;
+		this.isStreaming = isStreaming;
+
+		// Clear content container
+		this.contentContainer.clear();
+		this.slotCursor = 0;
+
+		const hasVisibleContent = message.content.some(
+			(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
+		);
+
+		if (hasVisibleContent) {
+			this.contentContainer.addChild(new Spacer(1));
+		}
+
+		// Render content in order
+		for (let i = 0; i < message.content.length; i++) {
+			const content = message.content[i];
+			if (content.type === "text" && content.text.trim()) {
+				// Assistant text messages with no background - trim the text
+				// Set paddingY=0 to avoid extra spacing before tool executions
+				this.contentContainer.addChild(this.textMarkdown(content.text.trim()));
+			} else if (content.type === "thinking") {
+				const thinkingBlocks: string[] = [];
+				for (; i < message.content.length; i++) {
+					const thinkingContent = message.content[i];
+					if (thinkingContent.type !== "thinking") {
+						break;
+					}
+					const thinking = thinkingContent.thinking.trim();
+					if (thinking) {
+						thinkingBlocks.push(thinking);
+					}
+				}
+				i--;
+
+				if (thinkingBlocks.length === 0) {
+					continue;
+				}
+
+				// Add spacing only when another visible assistant content block follows.
+				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
+				const hasVisibleContentAfter = message.content
+					.slice(i + 1)
+					.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
+
+				if (this.hideThinkingBlock) {
+					// Show one static label for each run of thinking blocks when hidden.
+					this.contentContainer.addChild(
+						new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0),
+					);
+				} else {
+					// Render each run of thinking blocks as one Markdown section.
+					this.contentContainer.addChild(this.thinkingMarkdown(thinkingBlocks.join("\n\n")));
+				}
+				if (hasVisibleContentAfter) {
+					this.contentContainer.addChild(new Spacer(1));
+				}
+			}
+		}
+		this.markdownSlots.length = this.slotCursor;
+
+		// Check if incomplete/failed - show after partial content.
+		// For aborted/error tool calls, tool execution components show the error.
+		// Length stops can happen before a tool call is complete, so surface them here too.
+		const hasToolCalls = message.content.some((c) => c.type === "toolCall");
+		this.hasToolCalls = hasToolCalls;
+		if (message.stopReason === "length") {
+			this.contentContainer.addChild(new Spacer(1));
+			this.contentContainer.addChild(
+				new Text(theme.fg("error", "Response was truncated before completion."), this.outputPad, 0),
+			);
+		} else if (!hasToolCalls) {
+			if (message.stopReason === "aborted") {
+				const abortMessage =
+					message.errorMessage && message.errorMessage !== "Request was aborted"
+						? message.errorMessage
+						: "Operation aborted";
+				this.contentContainer.addChild(new Spacer(1));
+				this.contentContainer.addChild(new Text(theme.fg("error", abortMessage), this.outputPad, 0));
+			} else if (message.stopReason === "error") {
+				const errorMsg = message.errorMessage || "Unknown error";
+				this.contentContainer.addChild(new Spacer(1));
+				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
+			} else if (message.incomplete && INCOMPLETE_TURN_MESSAGES[message.incomplete]) {
+				// The provider reported a normal stop while the turn carried nothing to
+				// act on. Without this line the transcript would show an empty answer.
+				// Warning, not error: the session recovers the first one, and only a
+				// repeated empty turn ends the run.
+				this.contentContainer.addChild(new Spacer(1));
+				this.contentContainer.addChild(
+					new Text(theme.fg("warning", INCOMPLETE_TURN_MESSAGES[message.incomplete]), this.outputPad, 0),
+				);
+			}
+		}
+	}
+
+	/** Markdown for an assistant text block, reused while the block keeps its kind. */
+	private textMarkdown(text: string): Markdown {
+		return this.claimSlot(
+			"text",
+			(value) =>
+				new Markdown(value, this.outputPad, 0, this.markdownTheme, undefined, {
+					transform: createLiveMarkdownTransform(
+						"assistant",
+						() => this.isStreaming,
+						() => this.markdownTransformers,
+					),
+				}),
+			text,
+		);
+	}
+
+	/** Markdown for one run of thinking blocks. */
+	private thinkingMarkdown(text: string): Markdown {
+		return this.claimSlot(
+			"thinking",
+			(value) =>
+				new Markdown(
+					value,
+					this.outputPad,
+					0,
+					{ ...this.markdownTheme, code: (code: string) => theme.fg("muted", code) },
+					{
+						color: (styled: string) => theme.fg("thinkingText", styled),
+						italic: true,
+					},
+					{
+						transform: createLiveMarkdownTransform(
+							"assistant-thinking",
+							() => this.isStreaming,
+							() => this.markdownTransformers,
+						),
+					},
+				),
+			text,
+		);
+	}
+
+	/**
+	 * Return the slot at the current content position, re-pointing it at `text`.
+	 *
+	 * Slots are matched by kind rather than by content index: a message can gain a
+	 * thinking block in front of a text block, and an instance is only worth keeping
+	 * when it renders the same kind of content as before.
+	 */
+	private claimSlot(kind: MarkdownSlot["kind"], create: (text: string) => Markdown, text: string): Markdown {
+		const slot = this.markdownSlots[this.slotCursor];
+		if (slot !== undefined && slot.kind === kind) {
+			slot.markdown.setText(text);
+			this.slotCursor++;
+			return slot.markdown;
+		}
+		const markdown = create(text);
+		this.markdownSlots[this.slotCursor] = { kind, markdown };
+		this.slotCursor++;
+		return markdown;
+	}
+}

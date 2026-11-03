@@ -1,0 +1,7 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "packages/extensions/*"
+  - "packages/coding-agent/examples/extensions/with-deps"
+  - "packages/coding-agent/examples/extensions/sandbox"
+  - "packages/coding-agent/examples/extensions/gondolin"

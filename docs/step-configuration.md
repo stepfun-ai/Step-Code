@@ -1,0 +1,240 @@
+# Step configuration files
+
+Step creates the global `~/.stepcode/config.toml` when it first runs.
+The project file `<cwd>/.stepcode/config.toml` is optional: a missing file
+contributes no project settings and does not produce a startup warning.
+Reading or reloading settings does not create the project file or directory.
+
+Trusted projects can override global settings through the project file.
+Explicitly saving project settings creates a valid TOML file if necessary.
+Malformed TOML and filesystem errors other than a missing file are still
+reported; malformed files are not overwritten by settings updates.
+
+The retired `step-settings.json` and `settings.json` files are no longer read,
+written, or covered by the project trust prompt. A project that still ships one
+is ignored; move any settings it holds into the project `config.toml`.
+
+There is no automatic import from the legacy pre-Step `config.json` layout. `models.json`
+and `auth.json` keep their own formats — they hold model definitions and
+credentials, not settings — and a stale Step endpoint recorded in `models.json`
+by an older release is still repaired in place at startup.
+
+## Step Plan login and API-key fallback
+
+Browser sign-in checks the selected region's `/step_plan/v1/usage` endpoint
+after saving the credential. An empty interactive launch also checks a stored
+Step Plan login before opening the session. The model list is not proof of an
+active subscription: it can contain fallback models for an account without a
+plan.
+
+When the usage response confirms there is no active subscription or usable
+top-up credit, the login screen offers an API key, the subscription page,
+checking again after purchase, or another account / login method. The API-key
+option opens the existing Platform key-entry screen for the same region and
+only replaces the credential when the key is submitted. Canceling preserves
+the stored Plan credential. Mainland and overseas profiles follow the same
+flow and keep their own endpoints.
+
+An active plan with exhausted quota remains a Plan login. A top-up-only account
+with usable credit can also continue. Network failures, missing usage endpoints,
+invalid responses, and uncertain account state produce a warning instead of
+being classified as a missing subscription. Explicit API keys, Platform logins,
+other selected providers, and non-interactive commands skip the startup Plan
+check. No additional model request is made for this check.
+
+## Mandatory command approval
+
+Ask and Approve for Me cannot automatically approve commands matched by the
+built-in command rules. In particular, `rm` with both recursive and force
+options requires confirmation for every target, including `./build` and
+`/tmp/cache`. Full Access is the only tier that runs them without confirmation,
+and it requires the one-time risk acknowledgment; a run without an approval
+channel cannot execute a dangerous command under the other tiers even with
+`nonInteractiveApproval = "allow"`.
+
+By default, a run without an approval channel terminates after such a block.
+`--non-interactive-denial continue` (or `STEP_NON_INTERACTIVE_DENIAL=continue`)
+keeps a recoverable confirmation blocked but reports it as a failed tool result,
+so an unattended agent can take a safer route instead of ending the run.
+Unsupported shells and shell-configuration failures still terminate because the
+agent cannot repair the execution environment by retrying. Explicit denials —
+`deny` tool overrides — still terminate, and dangerous commands remain blocked
+outside Full Access.
+
+See [command permissions](command-permissions.md) for matching behavior and
+how to extend the built-in rules.
+
+### Full Access confirmation
+
+Select Full Access using `/permissions full-access` or `Shift+Tab`:
+
+- **Yes, continue anyway** enables Full Access for this session without saving the tier.
+- **Yes, and don't ask again** saves Full Access and its risk acknowledgment for future launches.
+- **Cancel** keeps the current tier.
+
+A session-only acknowledgment expires when the session is replaced or closed.
+Without an interactive UI, an unacknowledged Full Access selection falls back to
+Approve for Me. An acknowledged Full Access selection also runs dangerous
+commands unattended. Explicit per-tool `deny` and `confirm` overrides still apply.
+
+### Upgrading permission settings and automatic continuation
+
+Saved Bypass, Autopilot, and Read Only policies reset to Ask on upgrade, including
+their old `mode`, unattended-approval and auto-resume fields. Saved policies with
+only the old low-level approval mode also reset to Ask. Select a new tier through
+`/permissions` or `Shift+Tab`; Full Access requires the risk acknowledgment above.
+Once a new tier is saved, later launches retain it.
+
+Both Approve for Me and Full Access enable the bounded model-error continuation
+by default; Ask does not resume automatically. Selecting either automatic tier
+enables continuation even if the old tier had saved `autoResume = false`.
+The existing retry limits and backoff remain unchanged. `STEP_AUTO_RESUME` or an
+explicit `autoResume` config value can override continuation at startup without
+granting extra permissions.
+
+## Environment and shell commands
+
+`STEP_CODING_AGENT_DIR` selects the agent directory for CLI and SDK callers.
+`STEP_CODING_AGENT_SESSION_DIR` selects session storage unless `--session-dir`
+is supplied. These names are fixed; the application display name does not select
+another environment namespace.
+
+The shared runtime defaults to the `step` display name. `STEPCODE_APP_NAME`
+can override the name when launched through the Step entrypoint; it does not
+select commands, providers, or storage paths. Step keeps using `.stepcode`,
+while shared runtime callers retain their existing storage defaults. Extension
+manifest keys and package import aliases remain compatible with existing plugins.
+
+The CLI sets `AI_AGENT=step`. Shell tools inherit the shell environment and any
+explicit spawn-hook changes, without injecting session, model, or reasoning
+metadata. Extensions can read that metadata from their context instead.
+
+Terminal capabilities use automatic detection and the `terminal` settings;
+`showHardwareCursor` and `terminal.clearOnShrink` default to false. There are no
+environment overrides for these settings, experimental tool sampling, startup
+timing, raw terminal write logs, or redraw logs. Provider cache retention defaults
+to `short` and remains configurable per SDK request through `cacheRetention`.
+
+The renderer accepts an explicit crash-log directory from its host. Standalone
+Step screens pass the Step agent directory; generic TUI callers default to the
+system temporary directory. Rendering equivalence tests select the uncached
+renderer through a test-process argument.
+
+### Background subagents
+
+The `[subagent]` table controls background subagent lanes:
+
+```toml
+[subagent]
+background = true                  # false runs run_in_background calls in the foreground
+background_timeout_seconds = 3600  # default per-turn wall-clock limit of a lane
+```
+
+A trusted project's `config.toml` overrides the global values.
+`background_timeout_seconds` must be an integer from 60 to 7,200; any other
+value is reported as a settings warning and ignored, so the 3,600-second default
+applies. A call's own `timeout_seconds` takes precedence. When
+`STEPCODE_CONFIG_PATH` selects a StepCode JSON config, the same settings live
+under `subagent.background` and `subagent.backgroundTimeoutSeconds`.
+`STEP_DISABLE_SUBAGENT_BACKGROUND=1` disables background lanes regardless of the
+file. Print and JSON runs never start lanes. See the [orchestration
+lifecycle](orchestration-lifecycle.md#background-subagent-lanes) for lane
+behavior.
+
+### Plan file storage
+
+Native Markdown plans default to
+`<cwd>/.stepcode/plans/session-<session-id>.md`. Headless clients can keep
+these runtime files outside the project Git worktree by setting
+`STEP_CODING_AGENT_PLAN_DIR` before starting Step, for example:
+
+```sh
+export STEP_CODING_AGENT_PLAN_DIR="$HOME/.cache/step/plans"
+```
+
+The selected directory directly contains `session-<session-id>.md`. Absolute
+paths and `~/` paths are accepted; relative paths resolve from the session's
+project working directory. Surrounding whitespace is trimmed, and unset or
+blank values preserve the project-local default in every mode. The override
+is explicit and also applies to interactive launches when set. It does not
+create a directory or file until the proposal is written through the normal
+file tools, with their existing permissions. An unwritable location produces
+the normal file-tool error; it does not fall back to writing in the project.
+
+The session saves its selected plan path. Resume, branch navigation, and
+re-entering plan mode keep that saved path even if the environment changes;
+a fresh session selects the current setting. Existing plans are not moved,
+deleted, or rewritten by this option. Keep external storage available for as
+long as the session needs its plan; retention and cleanup belong to the host.
+
+This setting affects only generated plan paths. Agent/session storage options
+do not select it, and project `.stepcode/config.toml`, skills, task checklists,
+and user-created or tracked files keep their existing behavior. Git ignore
+files and [completion checks](completion-check.md) are unchanged. Choose a
+directory outside the worktree when the goal is to avoid untracked plan files.
+
+## First-run theme prompt
+
+The first interactive launch asks which theme reads best in the terminal, after
+the startup login and the MCP import offer. Like that offer, it runs before the
+main UI is built and owns the screen while it does, so the logo and the input
+box are not painted and then replaced a frame later. Moving through the list
+applies the highlighted theme immediately, and a small sample below the list
+shows the syntax and diff colors. The chosen setting is written before the UI is
+built, so the session opens in the theme just chosen.
+
+Escape answers too: it takes the product default (`step-blue`, a single bright-blue
+palette) and writes that. The picker lists it first as `step-blue (default)`.
+The violet palettes remain available as `step-violet` and `step-violet-light`.
+So the `theme` key
+in the global `config.toml` is the whole record — there is no separate "we asked
+you" flag, because every way out of the screen leaves a theme behind. A config
+that already has a `theme`, written here or through `/settings` or by hand, skips
+the prompt; deleting that line asks again. `/theme` changes the theme later, and
+launches that already carry work (an initial prompt, a resumed session) skip the
+prompt entirely.
+
+## MCP startup in the terminal
+
+Interactive Step sessions start MCP discovery and connections in the background.
+The editor and `/mcp` do not wait for every server to finish initializing.
+`/mcp` reports `connecting` until a server's tools are registered, then `connected`
+with its tool count, or `failed` when initialization fails. Each server publishes
+independently, so a slow server does not delay a ready server's tools.
+
+When startup fails with HTTP 401 or an SDK authentication error, the warning
+includes `step mcp login <name>`. Run that command to authenticate, then restart
+Step to reconnect the server. The warning preserves the original error details.
+
+Each server publishes its whole catalog in one registry refresh, after yielding to
+terminal input, so publication cost does not grow with the number of tools. Tools
+becoming available after a model request has started are available to subsequent
+requests. Print and RPC sessions still wait for the initial tool catalog before
+accepting work.
+Closing or replacing a session cancels pending MCP connections and prevents their
+late tools or warnings from reaching the new session.
+
+The macOS/Linux installer and `step update` run `step mcp prepare` after
+installing the new binary. This prepares the built-in StepPage executable before
+the installer finishes. StepPage requires Node.js 20 or newer on PATH; Step itself
+does not require a separately installed Node.js. Download or prerequisite failures
+show a warning and leave Step usable.
+
+Before connecting `steppage__steppage`, Step verifies `steppage-mcp --version`
+and repairs a missing or broken managed executable. Existing preinstallation
+markers do not suppress this repair. Healthy executables in `~/.local/bin` can
+be used even when the current shell's PATH lacks that directory. Failed setup is
+retried on the next session; `step mcp prepare` also retries without requiring
+sign-in. The server name combines the plugin ID and its server name with `__`.
+Automatic StepPage installation is supported on macOS/Linux, including WSL.
+
+Preparation preserves credentials, custom server commands, global overrides,
+disabled servers, and intentionally uninstalled plugins. A global declaration
+that still uses the default `steppage-mcp` command without arguments shares the
+built-in executable repair; its environment and other settings remain unchanged.
+Global configuration takes precedence over user plugins, which take precedence
+over trusted project plugins. An explicit disable prevents a lower-priority copy
+from starting. Standalone interactive
+startup also repairs the managed Step PATH block for users upgraded by an older
+updater. The installer checks the shell profile even when the current terminal
+already has Step on PATH. Set `STEP_NO_MODIFY_PATH=1` to manage PATH yourself.

@@ -1,0 +1,566 @@
+/** Step-only slash command adapters built on Pi's public extension actions. */
+
+import type { Message } from "@step-harness/providers";
+import type { ExtensionAPI, ExtensionCommandContext, RegisteredCommand } from "../core/extensions/types.ts";
+import { convertToLlm } from "../core/messages.ts";
+import { sessionEntryToContextMessages } from "../core/session-manager.ts";
+import {
+	assistantText,
+	BTW_CANCELLED,
+	BTW_NO_ANSWER,
+	BtwHistory,
+	type BtwPanel,
+	type BtwPanelOutcome,
+	createBtwPanel,
+} from "../render/btw-panel.ts";
+import { getAvailableThemes } from "../theme/theme.ts";
+import { copyToClipboard } from "../utils/clipboard.ts";
+import {
+	type FeedbackSubmitResult,
+	formatFeedbackBundleFailureDetails,
+	formatFeedbackBundleSkipMessage,
+	formatFeedbackPendingDetails,
+	formatFeedbackSubmittedMessage,
+	submitFeedback,
+} from "./feedback/command.ts";
+import { confirmFeedbackSubmission } from "./feedback/consent.ts";
+import { resolveFeedbackEndpoint } from "./feedback/endpoints.ts";
+import { prepareFeedbackEvidence } from "./feedback/evidence.ts";
+import { resolveFeedbackSettings } from "./feedback/settings.ts";
+import {
+	FEEDBACK_CATEGORIES,
+	FEEDBACK_CATEGORY_CLI_SPELLINGS,
+	FEEDBACK_CATEGORY_PRESENTATION,
+	type FeedbackIdentity,
+} from "./feedback/types.ts";
+import { normalizeFeedbackCategory } from "./feedback/validate.ts";
+import { formatStepMcpStatuses } from "./mcp.ts";
+import { registerStepPluginCommand } from "./plugins.ts";
+import { resolveStepStorageRoot } from "./storage-root.ts";
+import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
+import { registerStepUsageCommands, type StepUsageHost } from "./usage/commands.ts";
+
+/**
+ * Register Step's product command spellings that have a direct Pi action.
+ *
+ * The handlers intentionally stay at the public extension boundary. In
+ * particular, they do not call InteractiveMode methods or maintain a second
+ * session/theme state machine. Pi remains responsible for session replacement,
+ * shutdown, selector presentation, persistence, and rendering.
+ */
+export function registerStepPiCommandAdapters(
+	pi: ExtensionAPI,
+	telemetry?: StepTelemetryReporter,
+	stepSettings?: () => { getStepSettings(): { feedbackEnabled?: boolean } } | undefined,
+	feedbackIdentity?: () => FeedbackIdentity,
+	usageHost?: StepUsageHost,
+	permissions: () => string = () => "Unknown",
+): void {
+	const usage = usageHost ? registerStepUsageCommands(pi, usageHost, permissions) : undefined;
+	if (usage)
+		registerTrackedCommand(
+			pi,
+			"usage",
+			{
+				description: "Show local activity or personal account quota",
+				getArgumentCompletions: (prefix) =>
+					["overview", "account", "--refresh", "account --refresh"]
+						.filter((value) => value.startsWith(prefix))
+						.map((value) => ({ value, label: value })),
+				handler: usage.usage,
+			},
+			telemetry,
+		);
+	registerStepPluginCommand(pi, { telemetry });
+	registerTrackedCommand(
+		pi,
+		"mcp",
+		{
+			description: "Show configured MCP servers and loaded tools",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(formatStepMcpStatuses(), "info");
+			},
+		},
+		telemetry,
+	);
+
+	registerTrackedCommand(
+		pi,
+		"clear",
+		{
+			description: "Start a fresh session (alias of /new)",
+			handler: async (_args, ctx) => {
+				// Do not touch `ctx` after the await: a successful replacement invalidates
+				// the old command context. Native session_start handling owns the resulting
+				// UI refresh and status projection.
+				await ctx.newSession();
+			},
+		},
+		telemetry,
+	);
+
+	registerTrackedCommand(
+		pi,
+		"theme",
+		{
+			description: "Pick or switch TUI themes",
+			getArgumentCompletions: (prefix) => {
+				const normalized = prefix.trim().toLowerCase();
+				return getAvailableThemes()
+					.filter((name) => name.toLowerCase().startsWith(normalized))
+					.map((name) => ({ value: name, label: name }));
+			},
+			handler: async (args, ctx) => {
+				await handleStepThemeCommand(args, ctx);
+			},
+		},
+		telemetry,
+	);
+
+	registerTrackedCommand(
+		pi,
+		"status",
+		{
+			description: "Show current session and model status",
+			handler: async (args, ctx) => {
+				if (usage) await usage.status(args, ctx);
+				else ctx.ui.notify(formatStepStatus(ctx), "info");
+			},
+		},
+		telemetry,
+	);
+
+	registerTrackedCommand(
+		pi,
+		"btw",
+		{
+			description: "Ask a quick side question without interrupting the main conversation",
+			handler: async (args, ctx) => {
+				await handleStepBtwCommand(args, ctx);
+			},
+		},
+		telemetry,
+	);
+
+	registerTrackedCommand(
+		pi,
+		"feedback",
+		{
+			description: "Send feedback about the current session",
+			handler: async (args, ctx) => {
+				await handleStepFeedbackCommand(args, ctx, telemetry, stepSettings, feedbackIdentity, permissions);
+			},
+		},
+		telemetry,
+	);
+}
+
+type RegisteredCommandOptions = Omit<RegisteredCommand, "name" | "sourceInfo">;
+
+/**
+ * Prior side questions, for this process only.
+ *
+ * Claude Code keeps the same store on the session object and only the next side
+ * question reads it. Module scope here because the command adapters are
+ * registered once per process and a side question is never concurrent.
+ */
+const btwHistory = new BtwHistory();
+
+const BTW_SYSTEM_REMINDER = [
+	"<system-reminder>This is a side question from the user. You must answer this question directly in a single response.",
+	"Tools are unavailable here. Do not continue, plan, or edit anything for the main task.</system-reminder>",
+].join("\n");
+
+/**
+ * `/btw <question>`: one side question that leaves the conversation untouched.
+ *
+ * Claude Code forks the message list, runs a single turn with `skipTranscript`,
+ * throws the returned messages away, and files the answer under `btwHistory`.
+ * `modelRegistry.complete()` is Step's equivalent: same provider, same
+ * credentials, no agent and no session, so there is nothing to append and
+ * nothing to rewind. A main turn in flight is untouched, because this never
+ * enters the agent loop at all.
+ */
+async function handleStepBtwCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
+	const question = args.trim();
+	if (!question) {
+		ctx.ui.notify("Usage: /btw <question>", "warning");
+		return;
+	}
+	if (!ctx.hasUI || ctx.mode !== "tui") {
+		ctx.ui.notify("/btw requires an interactive UI.", "warning");
+		return;
+	}
+	const model = ctx.model;
+	if (!model) {
+		ctx.ui.notify("/btw needs a model. Pick one with /model.", "warning");
+		return;
+	}
+
+	// Aborted when the panel closes, so esc does not leave a request in flight.
+	const controller = new AbortController();
+	const context = {
+		systemPrompt: ctx.getSystemPrompt(),
+		messages: [
+			...forkBtwMessages(ctx),
+			...btwHistory.toMessages(),
+			{
+				role: "user" as const,
+				content: [{ type: "text" as const, text: `${BTW_SYSTEM_REMINDER}\n\n${question}` }],
+				timestamp: Date.now(),
+			},
+		],
+	};
+
+	let panel: BtwPanel | undefined;
+	const answer = ctx.modelRegistry
+		.complete(model, context, { signal: controller.signal, maxTokens: 2048 })
+		.then((message) => {
+			btwHistory.append(question, message);
+			panel?.setAnswer(assistantText(message));
+			panel?.finish();
+			return message;
+		})
+		.catch(() => {
+			panel?.setAnswer(controller.signal.aborted ? BTW_CANCELLED : BTW_NO_ANSWER);
+			panel?.finish();
+			return undefined;
+		});
+
+	await ctx.ui.custom<BtwPanelOutcome>((tui, theme, _keybindings, done) => {
+		panel = createBtwPanel({
+			question,
+			theme,
+			tui,
+			history: btwHistory.list(),
+			onClose: (outcome) => {
+				panel = undefined;
+				done(outcome);
+			},
+			onCopy: (text) => {
+				void copyToClipboard(text);
+			},
+			onClearHistory: () => btwHistory.clear(),
+			onChange: () => tui.requestRender(),
+		});
+		return panel;
+	});
+
+	panel = undefined;
+	controller.abort();
+	// Settle the request so a rejection cannot surface as an unhandled rejection
+	// after the panel is gone.
+	await answer;
+}
+
+/**
+ * The conversation so far, as the side question's starting point.
+ *
+ * Claude Code's fork sanitizes by dropping a trailing incomplete assistant
+ * message. Same thing here: a final assistant message whose tool calls have no
+ * results is rejected by providers that validate message order, and a main turn
+ * still streaming is exactly when that happens.
+ */
+function forkBtwMessages(ctx: ExtensionCommandContext): Message[] {
+	const agentMessages = ctx.sessionManager.buildContextEntries().flatMap(sessionEntryToContextMessages);
+	const messages = convertToLlm(agentMessages);
+	const last = messages.at(-1);
+	if (last?.role === "assistant" && last.content.some((block) => block.type === "toolCall")) {
+		return messages.slice(0, -1);
+	}
+	return messages;
+}
+
+function registerTrackedCommand(
+	pi: ExtensionAPI,
+	name: string,
+	command: RegisteredCommandOptions,
+	telemetry?: StepTelemetryReporter,
+): void {
+	pi.registerCommand(name, {
+		...command,
+		handler: async (args, ctx) => {
+			recordSlashCommand(telemetry, name, true);
+			await command.handler(args, ctx);
+		},
+	});
+}
+
+export function recordStepSlashCommand(
+	telemetry: StepTelemetryReporter | undefined,
+	commandLine: string,
+	recognized: boolean,
+): void {
+	if (!telemetry) return;
+	const token = commandLine.trim().split(/\s+/u)[0] ?? "";
+	const command = token.startsWith("/") ? token : `/${token}`;
+	trackStepTelemetry(telemetry, "slash_command_used", {
+		command: command.slice(0, 128),
+		recognized,
+	});
+}
+
+function recordSlashCommand(telemetry: StepTelemetryReporter | undefined, name: string, recognized: boolean): void {
+	recordStepSlashCommand(telemetry, `/${name}`, recognized);
+}
+
+async function handleStepFeedbackCommand(
+	args: string,
+	ctx: ExtensionCommandContext,
+	telemetry?: StepTelemetryReporter,
+	stepSettings?: () => { getStepSettings(): { feedbackEnabled?: boolean } } | undefined,
+	feedbackIdentity?: () => FeedbackIdentity,
+	permissions?: () => string,
+): Promise<void> {
+	const feedbackSettings = resolveFeedbackSettings({
+		env: process.env,
+		settings: stepSettings?.()?.getStepSettings(),
+	});
+	if (!feedbackSettings.enabled) {
+		ctx.ui.notify(
+			feedbackSettings.reason === "env-opt-out"
+				? "Feedback is disabled by environment settings."
+				: "Feedback is disabled in Step settings.",
+			"warning",
+		);
+		return;
+	}
+	if (!ctx.hasUI) {
+		ctx.ui.notify("/feedback requires an interactive UI.", "warning");
+		return;
+	}
+	const endpoint = resolveFeedbackEndpoint(process.env);
+	if (!endpoint) {
+		ctx.ui.notify("Feedback endpoint is not configured.", "warning");
+		return;
+	}
+	const bundleEndpoint = resolveFeedbackEndpoint(process.env, true);
+	const storageRootDir = resolveStepStorageRoot(process.env);
+	const identity = feedbackIdentity?.() ?? {};
+	const shortcutComment = args.trim();
+	if (shortcutComment) {
+		// `/feedback <text>` used to send the sentence alone, which is exactly the
+		// report that cannot be investigated. It now carries the same evidence as
+		// the guided flow; only the category and the comment come from the command.
+		const readAt = new Date();
+		const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : undefined;
+		const permission = permissions?.();
+		const evidence = await prepareFeedbackEvidence({
+			storageRootDir,
+			...sessionSourceOf(ctx),
+			at: readAt,
+			// Nothing can receive the archive without a bundle endpoint; building it
+			// would read and compress up to 24 MiB and promise it on the review page.
+			withoutBundle: bundleEndpoint === undefined,
+			runtime: {
+				...permissionFacts(permission),
+				...(usage ? { contextUsed: usage.tokens, contextWindow: usage.contextWindow } : {}),
+				...(typeof ctx.getToolCatalog === "function" ? { toolCount: ctx.getToolCatalog().length } : {}),
+			},
+		});
+		const sessionBundle = evidence.bundle;
+		if (sessionBundle?.status === "skipped") {
+			ctx.ui.notify(
+				formatFeedbackBundleSkipMessage(sessionBundle),
+				sessionBundle.reason === "too-large" || sessionBundle.reason === "unsafe" ? "warning" : "info",
+			);
+		}
+		const result = await submitFeedback({
+			category: "other",
+			comment: shortcutComment,
+			...(evidence.diagnostics ? { diagnostics: evidence.diagnostics.diagnostics } : {}),
+			...(evidence.summary ? { sessionSummary: evidence.summary } : {}),
+			...(sessionBundle ? { sessionBundle } : {}),
+			storageRootDir,
+			sessionId:
+				sessionBundle?.status === "ready" ? sessionBundle.bundle.sessionId : ctx.sessionManager.getSessionId(),
+			endpoint,
+			...(bundleEndpoint ? { bundleEndpoint } : {}),
+			telemetry,
+			env: process.env,
+			surface: "tui",
+			...(identity.uid ? { uid: identity.uid } : {}),
+			...(identity.username ? { username: identity.username } : {}),
+			confirm: async (submission) =>
+				await confirmFeedbackSubmission(ctx, {
+					submission,
+					...(evidence.diagnostics ? { diagnosticsDisplayPath: evidence.diagnostics.displayPath } : {}),
+					...(sessionBundle?.status === "ready" ? { bundle: sessionBundle.bundle } : {}),
+				}),
+		});
+		notifyFeedbackResult(ctx, result);
+		return;
+	}
+
+	// Every page of this flow renders as an overlay so the transcript holds still across the
+	// whole wizard: the consent page below is one, and a page that grows the transcript instead
+	// leaves the editor above the bottom row when it is cancelled.
+	const selected = await ctx.ui.select(
+		"Feedback category",
+		FEEDBACK_CATEGORIES.map(
+			(category) =>
+				`${FEEDBACK_CATEGORY_CLI_SPELLINGS[category]}: ${FEEDBACK_CATEGORY_PRESENTATION[category].description}`,
+		),
+		{ overlay: true },
+	);
+	if (!selected) return;
+	const category = normalizeFeedbackCategory(selected.split(":", 1)[0]?.trim() ?? "");
+	if (!category) return;
+	const rawComment = await ctx.ui.input("Feedback comment", "What happened?", { overlay: true });
+	if (rawComment === undefined) return;
+	const comment = rawComment.trim();
+	const readAt = new Date();
+	// One submission carries everything: the transcript, the full output files
+	// it referenced, the log tail, and the content-free session summary. Asking
+	// the user to pick what to attach produced reports that could not be
+	// investigated; the only decision left is whether to send at all.
+	// Minimal embedders (and tests) may not implement every context accessor.
+	const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : undefined;
+	const permission = permissions?.();
+	const evidence = await prepareFeedbackEvidence({
+		storageRootDir,
+		...sessionSourceOf(ctx),
+		at: readAt,
+		withoutBundle: bundleEndpoint === undefined,
+		runtime: {
+			...permissionFacts(permission),
+			...(usage ? { contextUsed: usage.tokens, contextWindow: usage.contextWindow } : {}),
+			...(typeof ctx.getToolCatalog === "function" ? { toolCount: ctx.getToolCatalog().length } : {}),
+		},
+	});
+	const sessionBundle = evidence.bundle;
+	if (sessionBundle?.status === "skipped") {
+		ctx.ui.notify(
+			formatFeedbackBundleSkipMessage(sessionBundle),
+			sessionBundle.reason === "too-large" || sessionBundle.reason === "unsafe" ? "warning" : "info",
+		);
+	}
+	const submissionSessionId =
+		sessionBundle?.status === "ready" ? sessionBundle.bundle.sessionId : ctx.sessionManager.getSessionId();
+	const result = await submitFeedback({
+		category,
+		comment,
+		...(evidence.diagnostics ? { diagnostics: evidence.diagnostics.diagnostics } : {}),
+		...(evidence.summary ? { sessionSummary: evidence.summary } : {}),
+		...(sessionBundle ? { sessionBundle } : {}),
+		storageRootDir,
+		sessionId: submissionSessionId,
+		endpoint,
+		...(bundleEndpoint ? { bundleEndpoint } : {}),
+		telemetry,
+		env: process.env,
+		surface: "tui",
+		...(identity.uid ? { uid: identity.uid } : {}),
+		...(identity.username ? { username: identity.username } : {}),
+		confirm: async (submission) =>
+			await confirmFeedbackSubmission(ctx, {
+				submission,
+				...(evidence.diagnostics ? { diagnosticsDisplayPath: evidence.diagnostics.displayPath } : {}),
+				...(sessionBundle?.status === "ready" ? { bundle: sessionBundle.bundle } : {}),
+			}),
+	});
+	notifyFeedbackResult(ctx, result);
+}
+
+/**
+ * The permission tier as the report names it.
+ *
+ * `step.ts` hands this callback the preset's display label for the status bar;
+ * the report documents ids, and the CLI host already sends the id. Normalize
+ * here so one tier never arrives under two spellings.
+ */
+function permissionFacts(value: string | undefined): { permissionPreset?: string } {
+	const normalized = (value ?? "")
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z]+/gu, "-")
+		.replace(/^-|-$/gu, "");
+	return normalized === "" || normalized === "unknown" ? {} : { permissionPreset: normalized };
+}
+
+/**
+ * Where this session lives, for the evidence collector.
+ *
+ * `cwd` is the session's project, which under `-C/--cwd` is not the process's
+ * working directory. A session that has not written its file yet is found by
+ * id, and a guessed one only inside this project's folder.
+ *
+ * A minimal embedder may expose only the id; the bundle then resolves by id.
+ */
+function sessionSourceOf(ctx: ExtensionCommandContext): { sessionFile?: string; sessionId: string; cwd: string } {
+	const manager = ctx.sessionManager;
+	const sessionFile = typeof manager.getSessionFile === "function" ? manager.getSessionFile() : undefined;
+	return { ...(sessionFile ? { sessionFile } : {}), sessionId: manager.getSessionId(), cwd: ctx.cwd };
+}
+
+function notifyFeedbackResult(ctx: ExtensionCommandContext, result: FeedbackSubmitResult): void {
+	if (result.status === "cancelled") return;
+	if (result.status === "invalid") {
+		ctx.ui.notify(result.error, "error");
+		return;
+	}
+	if (result.outcome.status === "pending") {
+		ctx.ui.notify(`Feedback submission failed: ${formatFeedbackPendingDetails(result.outcome)}`, "warning");
+		return;
+	}
+	const bundle = result.outcome.bundle;
+	ctx.ui.notify(
+		`${formatFeedbackSubmittedMessage(result.submission.feedbackId)}${
+			bundle?.status === "pending"
+				? ` The session archive was not uploaded: ${formatFeedbackBundleFailureDetails(bundle)}`
+				: ""
+		}`,
+		"info",
+	);
+}
+
+async function handleStepThemeCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
+	if (!ctx.hasUI) {
+		ctx.ui.notify("/theme requires an interactive UI.", "warning");
+		return;
+	}
+
+	let requested = args.trim();
+	if (!requested) {
+		const themes = ctx.ui
+			.getAllThemes()
+			.map((entry) => entry.name)
+			.filter((name) => name.trim().length > 0);
+		if (themes.length === 0) {
+			ctx.ui.notify("No themes are available.", "warning");
+			return;
+		}
+
+		requested = (await ctx.ui.select("Theme", themes))?.trim() ?? "";
+		if (!requested) return;
+	}
+
+	const result = ctx.ui.setTheme(requested);
+	if (result.success) {
+		ctx.ui.notify(`Theme: ${requested}`, "info");
+		return;
+	}
+	ctx.ui.notify(result.error ? `Failed to set theme: ${result.error}` : `Unknown theme "${requested}".`, "warning");
+}
+
+/** Format a secret-free status snapshot from Pi's public command context. */
+export function formatStepStatus(ctx: ExtensionCommandContext): string {
+	const model = ctx.model;
+	const modelLabel = model ? `${model.provider}/${model.id}` : "none";
+	const thinkingLevel = ctx.thinkingLevel ?? (model?.reasoning ? "unknown" : "off");
+	const usage = ctx.getContextUsage();
+	const contextLabel = usage
+		? `${usage.tokens === null ? "?" : usage.tokens.toLocaleString()}/${usage.contextWindow.toLocaleString()} tokens${
+				usage.percent === null ? "" : ` (${usage.percent.toFixed(1)}%)`
+			}`
+		: "unavailable";
+
+	return [
+		`Session: ${ctx.sessionManager.getSessionId()}`,
+		`Workspace: ${ctx.cwd}`,
+		`State: ${ctx.isIdle() ? "idle" : "busy"}`,
+		`Model: ${modelLabel}`,
+		`Thinking: ${thinkingLevel}`,
+		`Context: ${contextLabel}`,
+	].join("\n");
+}

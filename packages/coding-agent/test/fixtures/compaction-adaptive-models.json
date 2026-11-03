@@ -1,0 +1,17 @@
+{
+  "providers": {
+    "openai": {
+      "baseUrl": "https://compact-study.invalid/v1",
+      "api": "openai-completions",
+      "models": [
+        {
+          "id": "harbor-adaptive-fixture",
+          "name": "harbor-adaptive-fixture",
+          "api": "openai-completions",
+          "maxTokens": 65536,
+          "contextWindow": 1048576
+        }
+      ]
+    }
+  }
+}

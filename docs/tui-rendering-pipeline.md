@@ -1,0 +1,293 @@
+# TUI 渲染管线
+
+`packages/tui`（`@step-harness/pi-tui`）是零 AI 依赖的纯终端渲染库。本文梳理从终端字节进来到像素落地的完整管线：终端协商 → 输入拆分与分发 → 组件树渲染 → 差分写回。文档基于源码逐段核对，所有断言标注文件与行号。
+
+## 总览
+
+```
+终端字节 ──► ProcessTerminal ──► StdinBuffer ──► TuiBase.handleTerminalInput
+ (raw)       (Kitty 协商/粘贴)    (拆序列/粘帖)    (查询响应消费 → inputListeners
+                                                    → 焦点组件 handleInput)
+                                                          │
+                                             requestImmediateRender()
+                                                          ▼
+                        ┌─────────────────── TuiBase 调度（16ms 节流）───────────────────┐
+                        │  doRender()                                                  │
+                        │   regular: Container.render → overlays → 行归一化 → 差分写盘   │
+                        │   fullscreen: renderLayoutFrame → 搜索/选择/闪烁合成 → 行级差分 │
+                        └──────────────────────────────────────────────────────────────┘
+```
+
+两种屏幕模式（`TuiMode`，`tui.ts:387`）：
+
+- `regular`（`TuiMainScreen`，`tui-main-screen.ts:140`）：内容写进主屏与 scrollback，滚动由终端自己管。
+- `fullscreen`（`TuiAltScreen`，`tui-alt-screen.ts:169`）：进入 alt screen（`\x1b[?1049h`），应用自持视口：滚动、鼠标选择、搜索、滚动条都由 TUI 管。
+
+两者共用 `TuiBase`（`tui.ts:434`）：输入分发、渲染调度、overlay 栈、焦点管理、终端查询（OSC 11 背景色、颜色方案、cell 尺寸）。
+
+## 文件地图
+
+| 文件 | 职责 |
+| --- | --- |
+| `terminal.ts` | `Terminal` 接口与 `ProcessTerminal`：raw mode、bracketed paste、Kitty 键盘协议协商、尺寸/光标/清屏/进度（OSC 9;4）原语 |
+| `stdin-buffer.ts` | 把成批 stdin 数据拆成单条按键序列；识别 bracketed paste 并发出 `paste` 事件 |
+| `keys.ts` | 按键序列解析与匹配（`matchesKey`、`isKeyRelease`、Kitty printable 解码） |
+| `keybindings.ts` | 键位表（`TUI_KEYBINDINGS`）与 `KeybindingsManager`：用户覆盖、冲突检测、解析结果 |
+| `tui.ts` | `Component` 契约、`Container`（带脏前缀缓存）、`TuiBase`（输入分发、渲染调度、overlay 栈、焦点）、`compositeTuiLine` |
+| `tui-main-screen.ts` | `regular` 模式差分渲染器与 `BoundedTerminalWriter` |
+| `tui-alt-screen.ts` | `fullscreen` 模式：alt screen 生命周期、鼠标/选择/搜索/滚动、Kitty 图像放置 |
+| `layout.ts` / `layout-node.ts` | 全屏布局：`LayoutBox` 树（rect/clip）、scroll view 状态、stack 尺寸分配、滚动条绘制与合成 |
+| `components/editor.ts` | 编辑器组件：`handleInput` 的键位分发、粘贴组装、撤销、自动补全 |
+| `utils.ts` | 宽度计算（`visibleWidth`）、列切片、ANSI 归一化（`normalizeTerminalOutput`） |
+| `terminal-image.ts` | 终端图像能力探测、Kitty/iTerm2 编码、图像行识别与裁剪 |
+
+产品侧接线在 `apps/cli/src/ui/`：`interactive-mode.ts`（组合根）、`runtime/input-dispatch.ts`（键位动作注册与提交路由）、`runtime/session-events.ts`（会话事件 → 组件树）、`runtime/redraw.ts`（渲染门面）。
+
+## 1. 终端协商与输出原语
+
+`ProcessTerminal.start`（`terminal.ts:161`）按顺序做：
+
+1. 保存并进入 raw mode，stdin 切 utf8 编码（`terminal.ts:166-171`）。
+2. 开启 bracketed paste：`\x1b[?2004h`（`terminal.ts:174`），粘贴内容由终端包成 `\x1b[200~ … \x1b[201~`。
+3. 挂 stdout `resize` 监听（`terminal.ts:177`）；非 Windows 上补发 `SIGWINCH` 刷新可能过期的尺寸（挂起/恢复期间信号会丢，`terminal.ts:181-183`）。
+4. Windows 上给 stdin 句柄加 `ENABLE_VIRTUAL_TERMINAL_INPUT`，否则 Shift+Tab 会退化成 Tab（`terminal.ts:366-388`）。
+5. 发起 Kitty 键盘协议探测：请求 flags `7`（1 消歧 + 2 事件类型 + 4 备用键名）并跟一条 DA 哨兵（`terminal.ts:15-17`）。响应 `\x1b[?<flags>u` 且非 0 → 启用 Kitty；先收到 DA → 回退 modifyOtherKeys `\x1b[>4;2m`（`terminal.ts:255-277`）。跨事件拆分的响应由 150ms 片段超时拼回（`terminal.ts:16`、`322-328`）。
+
+退出时反向恢复：关进度、关 bracketed paste、`\x1b[<u` 关 Kitty、关 modifyOtherKeys、销毁 StdinBuffer、暂停 stdin（防退出后残留 Ctrl+D 打到父 shell）、恢复 raw（`terminal.ts:428-474`）。`drainInput` 在退出前排空残留按键，避免 Kitty release 事件泄漏到 SSH 父 shell（`terminal.ts:390-426`）。
+
+`write()` 只是 `process.stdout.write`，没有任何落盘旁路（`terminal.ts:457-459`）。尺寸回落链是 `stdout.columns → env.COLUMNS → 80`（`terminal.ts:461-463`）。
+
+## 2. 输入拆分与分发
+
+### 2.1 StdinBuffer：批数据 → 单条序列
+
+`StdinBuffer.process`（`stdin-buffer.ts:296`）维护一个字符串缓冲：
+
+- 遇到 `\x1b[200~` 进入 paste 模式，直到 `\x1b[201~` 发出 `paste` 事件（`stdin-buffer.ts:324-377`）。
+- 否则用 `extractCompleteSequences` 切出完整序列，剩余部分挂超时：裸 `ESC` 用 escape 超时，其余用序列超时（`stdin-buffer.ts:380-396`）。
+- escape 超时默认 10ms，`SSH_CONNECTION`/`SSH_TTY` 下 100ms，无覆盖开关（`resolveEscapeTimeoutMs`，`terminal.ts:103-116`）——高延迟链路上 ESC 前缀的 Alt 组合需要更长的重组窗口。
+- Kitty 协议下"重复上报的可打印字符"会被抑制：已消费的码点再次单独到达时丢弃（`stdin-buffer.ts:399-408`）。
+
+`ProcessTerminal.setupStdinBuffer` 把序列流接成：协商响应优先消费 → 其余通过 `forwardInputSequence` 送到 `onInput`（即 `TuiBase.handleTerminalInput`）；`paste` 事件重新包上 bracketed paste 标记再送入，编辑器侧无需区分两条路径（`terminal.ts:204-232`）。
+
+### 2.2 TuiBase.handleTerminalInput：固定的处理顺序
+
+`tui.ts:929-1005`，顺序即优先级：
+
+1. OSC 11 背景色响应 → 结算 `queryTerminalBackgroundColor` 的等待（`tui.ts:1007-1029`）。
+2. 终端颜色方案报告（`\x1b[?997;1n` / `\x1b[?997;2n`，`terminal-colors.ts:29`）→ 广播给 `onTerminalColorSchemeChange` 监听者（`tui.ts:1031-1041`）。通知需显式开启：`\x1b[?2031h/l`（`tui.ts:810-812`、`835-843`）。
+3. `inputListeners` 链：全屏模式的视口输入拦截（滚动、搜索、鼠标、滚动条）就注册在这里，可 `consume` 整条输入或改写后继续（`tui.ts:937-952`）。
+4. cell 尺寸响应（`CSI 16 t` 查询 → `CSI 6;h;w t`）→ `setCellDimensions` + 全树 `invalidate` + `requestRender`（`tui.ts:1043-1061`）。
+5. 全局调试键 `shift+ctrl+d` → `onDebug`（`tui.ts:960-963`）。
+6. overlay 焦点有效性修正：聚焦的 overlay 因尺寸变化或 `visible()` 变为不可见时，改指最上层可见 overlay 或回退到进入前的焦点（`tui.ts:965-991`）。
+7. 交给焦点组件 `handleInput(data)`；Kitty release 事件默认过滤，组件声明 `wantsKeyRelease` 才放行（`tui.ts:993-1000`）。
+8. 输入处理后立刻 `requestImmediateRender()`——按键是延迟敏感路径，节流定时器在 Windows 上会吃掉整帧（`tui.ts:1001-1004`）。
+
+### 2.3 键位解析：序列 → 动作
+
+组件内部不做裸字节比较，全部走键位表：
+
+- `matchesKey(data, keyId)`（`keys.ts`）把 CSI/SS3/Kitty 序列与 `"ctrl+x"`、`"shift+enter"` 这类 KeyId 匹配。
+- `KeybindingsManager`（`keybindings.ts:236`）合并 `TUI_KEYBINDINGS` 默认表（`keybindings.ts:72-215`）与用户覆盖，重建出 `keysById` 并检测同一按键被多个动作声明的冲突（`keybindings.ts:248-273`）；`matches(data, id)` 查表匹配（`keybindings.ts:275-281`）。`getKeybindings()` 是进程级单例（`keybindings.ts:314-324`）。
+- 编辑器 `Editor.handleInput`（`components/editor.ts:619`）：jump 模式（等待跳转目标字符）→ bracketed paste 组装（`\x1b[200~` 分片跨事件累积，`editor.ts:643-667`）→ `ctrl+c` 交回上层（`editor.ts:669-672`）→ 键位分发到撤销、自动补全、编辑动作。
+- 应用级动作（`app.*`）由产品层定义：`packages/coding-agent/src/core/keybindings.ts` 声明动作，`apps/cli/src/ui/runtime/input-dispatch.ts` 的 `wireKeyHandlers` 用 `ctx.defaultEditor.onAction("app.xxx", …)` 注册处理器，例如 `app.redraw`（手动重绘，`input-dispatch.ts:200`）。键位可通过配置覆盖，`app.redraw` 与 `app.model.select` 的默认值在 `interactive-mode.ts:230-231` 兜底。
+
+## 3. 渲染调度
+
+`TuiBase` 只暴露三个入口，语义完全不同：
+
+- `requestRender()`（`tui.ts:875`）：`process.nextTick` 里 `scheduleRender`，按 `MIN_RENDER_INTERVAL_MS = 16`（`tui.ts:446`）节流，合并同帧内的多次请求。流式输出、事件驱动的组件树变更都走这条。
+- `requestImmediateRender()`（`tui.ts:886`）：输入路径专用，nextTick 里立即 `doRender()` 并取消已排队的节流帧——用户按键必须抢占待发的定时器帧。
+- `renderNow(force)`（`tui.ts:867`）：同步刷新。`force=true` 先 `resetRenderState()` 丢弃上一帧缓存，即 `app.redraw`（Ctrl+L）的"差分渲染器复位 + 全量重绘"恢复路径。
+
+`doRender()` 在 `start()`/`stop()` 生命周期钩子之间运行（`beforeTerminalStart`/`afterTerminalStart`/`beforeTerminalStop`/`afterTerminalStop`，`tui.ts:479-485`），全屏模式的 alt screen 进出就挂在这些钩子上。
+
+## 4. 组件契约与脏前缀缓存
+
+组件接口只有四个方法（`tui.ts:23-58`）：`render(width) → string[]`、可选 `renderDirtyStart`（上次输出中"可能变化"的起始行）、可选 `handleInput(data)`、`invalidate()`。
+
+`Container.render`（`tui.ts:274-346`）是差分渲染的第一级优化，目标是"长 transcript 的稳定前缀不进入每帧工作"：
+
+- 缓存 `{ lines, width, childRefs, childStarts }`；宽度相同且子组件数量不变时进入增量路径。
+- 逐个调用子组件 `render`，谁返回的数组实例和上次不同，谁就是第一个脏子组件。
+- 脏子组件自己声明的 `renderDirtyStart` 决定前缀复用深度；不声明则视为从第 0 行起全脏（`tui.ts:302`）。该索引会被夹到"子组件上一帧行数"之内，防止子组件变长后前缀伸进后续组件的缓存行（`tui.ts:295-302`）。
+- 全部子组件返回同一实例 → 整帧复用，`renderDirtyStart = lines.length`（`tui.ts:306-309`）。
+
+容器层之上没有脏标记：组件靠"返回同一个数组实例"表达"我没变"，靠 `invalidate()` 丢弃自己的缓存。产品侧大量使用后者（主题切换、语法高亮加载完成时全树 `invalidate`）。
+
+### 4.1 块级数学 tokenizer 的扫描成本
+
+`Markdown` 为块级数学（`$$…$$`、`\[…\]`）注册了一个 Marked block 扩展（`LATEX_MARKDOWN_EXTENSIONS` 的 `latexBlock`）。Marked 只在**即将进入 paragraph / text 之前**才收集 block 扩展的 `start()`：space、code、heading、hr、blockquote、list、html、def、table、lheading 命中时根本不会调用它。调用时传入的是 `src.slice(1)`，即**尚未消费的剩余源文本**。所以一次全文正则的代价是 `O(段落数 × 剩余长度)`，而不是 `O(块数 × 长度)`；标题、围栏、表格、分隔线不触发。
+
+多数文档根本不含块级数学，所以该判据先做子串检查（`includes("$$")` / `includes("\\[")`），只有可能匹配时才跑正则。语义不变：正则能匹配的字符串必然包含这两个子串之一，短路不会漏判；子串检查的误判（例如围栏代码里的 `\[`）只是多跑一次正则。落点是 `components/markdown-stream.ts` 的 `findBlockMathStart`，tokenizer 的 `start()` 与流式渲染的 hazard 扫描共用它，因此"两处字面量必须同步"这个静默失败点不存在。
+
+注意这**不是**把扫描消掉：短路后每个段落边界仍会扫一遍剩余文本，只是常数更小。本机 146 KB 混合消息、120 列、120 B/delta 的流式模拟里，这项短路把累计耗时从 12 340 ms 降到 9 845 ms（约 1.3 倍）。回归门禁用确定性的正则调用计数（`test/markdown-block-math.test.ts`），不依赖实际耗时。
+
+### 4.2 认证前缀：流式增量渲染
+
+流式回复每个 delta 都调用一次 `Markdown.setText`。整篇重 lex、重渲染、重换行让累计成本按消息长度的平方增长，所以 `Markdown` 保留"已经确定终结"的块的行，只重算可变尾部（`renderContent` / `renderFrom`）。这不是"留最后一块"的启发式：只有能证明"从这里以全新 Lexer 重启，与渲染全文等价"的位置才会被冻结。
+
+保留的状态（`packages/tui/src/components/markdown.ts`）：
+
+- `stableSourceEnd`：已认证前缀的长度（归一化后的 UTF-16 偏移；tab 展开是逐字符替换，前缀关系保持）。
+- `stablePaddedLines`：前缀的最终行（已加上左右 margin、背景、右侧补白），直接参与拼接。
+- `stableNoWrap`：前缀里围栏代码行的 pre-wrap 文本。换行阶段的 no-wrap 判定按**行文本**而不是来源，所以这些行必须继续参与后续帧的判定。
+- `stableWrappedProseRows`：前缀里被**软换行**过的散文行文本。它是"未来影响过去"的唯一入口，见下。
+- `guard`：前缀留给尾部的解析事实——块级数学是否出现、是否有未闭合的行首 `[`、inline `<a …>` 与 `<pre|code|kbd|script>` 的嵌套深度。
+- `previousSource` / `layoutWidth`：判断这一帧是不是同一份文档的追加，以及宽度是否变化。
+
+认证条件（`findCertifiedCut`）：候选必须紧跟一个**顶层 `space` token**（Marked 会把单个换行折进前一个 token，所以顶层 `space` 一定覆盖一个真实空行），且它后面的 token 是"见证块"——列 0 开始、首物理行已结束的 paragraph 或 heading。list、blockquote、table、围栏、缩进代码都不能当见证：它们可以跨空行继续吞入，把候选点之前的块重新解释（list 合并与序号重排、table 加行改列宽、`    a\n\n    b` 仍是同一个缩进代码块）。返回最靠右的候选；没有候选就不推进，尾部仍由 canonical Lexer 完整解释并显示所有不完整行。
+
+必须整篇重算的情形分三类，混为一谈会把"有未闭合围栏"实现成"每帧全文渲染"，直接吃掉代码占比高的收益：
+
+- **粘性（直到文本被替换）**：任何行首块级数学 opener（pending latex token 会重剪它前面的段落）、任意 reference definition（`tokens.links` 非空，定义对所有块可见）。
+- **本帧重算一次**：宽度、padding、主题或 `invalidate()` 变化；文本被替换而不是追加；`message_end` 的流式/终态切换。
+- **只重算尾部**：没有新的证书、未闭合的 label 或 inline 标签、持续的 list/table/缩进代码/quote、open 或 EOF 临时围栏、token raw 无法精确重建（Marked 会规范化部分行尾空白，此时本帧不推进偏移，但不必把整份文档标记为粘性）。
+
+`nowrapLines` 的语义没有改：它仍然是文档级的行文本集合，围栏代码行让**同文本**的散文行变成硬裁剪。增量路径用两件事保持等价：尾部渲染前用 `stableNoWrap` 播种，尾部散文行因此照旧被裁剪；而尾部新出现的代码行一旦与 `stableWrappedProseRows` 撞文本，就说明已冻结的散文行本该被裁剪，这一帧整篇重渲（`collidesWithStableRows`）。被裁剪过的行不进 `stableWrappedProseRows`——集合只会增长，裁剪是不可逆的。
+
+`renderDirtyStart` 报告"相对上一帧输出可能变化的最早行"，复用前缀时等于 `paddingY + 上一帧的前缀行数`，整篇重算时是 0（上下 padding 行内容相同，但换主题时它们的底色也会变，不能假定可复用），交回 `Container.render` 做前缀复用。返回的数组每帧都是新数组，已发出的数组不会被就地修改。
+
+正确性门禁在 `test/markdown-stream-prefix.test.ts`：每个前缀、多种宽度，与"新建实例"的冷渲染逐字节比较，覆盖 35 份针对上述构造的对抗 fixture、仓库文档抽样、以及 200 份固定种子的块结构组合。`test/markdown-stream-work.test.ts` 断言工作量而不是耗时：60 KB 混合文档流式渲染只把约两倍文档长度的源码交给 lexer，文档翻倍时 lex/渲染/换行的计数不超过 2.5 倍；块级数学、reference definition、无空行段落、代码行撞文本这些情形分别断言"从不复用前缀"且输出仍与冷渲染一致。
+
+实测（本机，120 列，120 B/delta，累计耗时含每帧完整管线）：
+
+| 场景 | 现状（每帧新建实例） | 增量渲染 |
+| --- | --- | --- |
+| 60 KB 散文 | 1 437 ms | 18 ms（约 79 倍） |
+| 60 KB 表格 | 2 095 ms | 52 ms（约 40 倍） |
+| 60 KB 50% 代码 | 462 ms | 13 ms（约 35 倍） |
+| 60 KB 单个超长段落（无可认证点） | 403 ms | 411 ms（无收益，输出正确） |
+| 146 KB 混合 | 12 340 ms | 275 ms（约 45 倍） |
+
+调用方必须复用同一个 `Markdown` 实例，否则实例级状态随组件一起消失；`AssistantMessageComponent` 因此按内容种类保留实例并只调 `setText`（`markdownSlots`）。每帧仍要做一次指针复制拼出扁平数组，以及主屏/全屏自己的差分；这两项是独立成本，不随前缀复用消失。Step 呈现的包装层（`step-message.ts` 的 `renderNativeRun`：`hideCompleteFences`、空行折叠、`trimOuterRows`）同样每帧扫一遍全部 native 行，那部分成本不受这里影响，需要单独处理。
+
+`invalidate()` 同时清掉 `defaultStylePrefix`。它是从主题派生的 ANSI 前缀，会在每个"在样式内结束"的行内片段之后重新拼一次；主题切换若只清缓存而留着它，旧主题的转义就会拼进新输出——当新主题不再应用该样式时（例如关掉粗体）会直接显示错。第 8 节的 `setIncrementalRenderDisabled(true)` 对这里同样生效：置位后渲染整篇且不保留前缀（`renderContent` 开头），否则那个"强制全量路径做字节级等价校验"的开关在 Markdown 内部形同虚设。
+
+**语法高亮按主题实例 + 语法版本 + `(lang, source)` 记忆化**（`cachedHighlight`，`packages/coding-agent/src/theme/theme.ts`）。渲染器把主题当纯函数用，自己无法去重，所以只要一帧里重渲了某个已完成代码块，高亮就整块重跑：认证前缀之外的路径（块级数学、reference definition）每帧重渲整篇，而认证路径的可变尾块里若含围栏也会每帧重渲。实测 40 KB、120 列、120 B/delta，用产品主题和真实 highlight.js：块级数学文档 1 154 ms → 211 ms（5.5 倍），reference definition 1 206 ms → 237 ms（5.1 倍），含一个围栏的散文 29 ms → 9 ms（3.2 倍）；**纯散文只有 1.15 倍**——不含围栏的文档本来就不调用高亮，缓存对它无用，这不是本改动的收益来源。
+
+三个键成分都不能省：
+
+- **主题实例**：导出的 `theme` 是 Proxy、身份不变，直接用它做键会把上一个主题的颜色永久留给下一个；键取 `setGlobalTheme` 存进 `Symbol.for` 槽的真实实例。这个识别只覆盖本模块的 Proxy，跨模块实例传入的 Proxy 会被当作普通对象——仓库内没有这种调用。
+- **语法版本**（`highlightGrammarRevision`）：`highlight.js` 的子语言解析走同一个注册表，同一段 `javascript` 里的 HTML 模板只有 XML 语法加载完成后才会上色，所以 `(lang, source)` 不足以标识结果。启动时 `loadAllHighlightLanguages()` 完成后版本自增，旧键自动失效。
+- **language + source**：同一段文本按 TypeScript 和按 JSON 高亮结果不同。
+
+其它约束：
+
+- **只在第二次请求时写入**。仍在流式增长的围栏每个 delta 都是一个新键，且这些前缀之后不会再被请求；把它们存下来会用一个代码块的几百个中间态占满预算（实测单个 56 KB 围栏 33 MiB）并把真正可复用的已完成块挤出去。已完成块会重复请求同一键，因此第二次命中才落盘。
+- **按 payload 预算淘汰**（4 MiB/主题，FIFO）而不是条目数；单条源码超过 64 Ki（UTF-16 code unit，不是字节）不保留，避免 read/write 工具把整文件钉在缓存里。
+- **永远返回副本**：`core/tools/write.ts` 会在流式写入时持有并修改返回数组。
+- 两个入口（`highlightCode` 与 markdown 主题的 `highlightCode`）共用一份缓存，因此失败兜底也统一成 `fg("mdCodeBlock", …)`；否则同一键的结果取决于谁先跑。
+
+## 5. 主屏差分渲染（regular）
+
+`TuiMainScreen.doRender`（`tui-main-screen.ts:329-750`）每帧的完整顺序：
+
+1. 读取 `terminal.columns/rows`，判定宽/高变化与 overlay 开合（`tui-main-screen.ts:331-340`）。overlay 状态变化意味着上一帧镜像的是合成后的画面，前缀不可跨过这次转换复用（`resetFrom = 0`）。
+2. `Container.render(width)` 得到新行（`tui-main-screen.ts:353`）；`renderDirtyStart` 经 `setIncrementalRenderDisabled()` 可强制为 0（`tui.ts:227-233`）。
+3. 有 overlay 时先 `compositeOverlays`（`tui.ts:1202-1261`）：按 anchor/margin/百分比解析位置，把各 overlay 的行按列合成进基线，必要时补空行使 overlay 有屏幕相对坐标。
+4. 定位光标标记 `CURSOR_MARKER`（`\x1b_pi:c\x07`，`tui.ts:90`）：焦点组件在光标处发出这个 APC 序列，渲染器找到后把它从行里剥掉，再用它定位硬件光标（IME 候选窗定位），`findCursorPosition`（`tui-main-screen.ts:250-260`）。
+5. 行归一化 `applyLineResetsFrom`（`tui-main-screen.ts:224-247`）：从 `resetFrom` 起的行做 ANSI 归一化并追加 `SEGMENT_RESET`（`\x1b[0m\x1b]8;;\x07`，`tui.ts:353`），防止样式跨行泄漏；`resetFrom` 之前的行直接引用上一帧。首帧、宽高变化、overlay 切换都会把 `resetFrom` 压到 0。
+6. 全量重绘判定（`fullRender(clear)`，`tui-main-screen.ts:386-428`）：首帧不擦屏直接写；宽度变化必擦（换行位置全变）；高度变化必擦（Termux 软键盘场景例外，否则每次键盘弹出都重放整段历史，`tui-main-screen.ts:456-460`）；内容收缩超过历史最高水位且无 overlay 时擦除空行（`clearOnShrink`，`tui.ts:513-515`、`tui-main-screen.ts:465-469`）。擦屏序列是 `\x1b[2J\x1b[H\x1b[3J`（含 scrollback）。
+7. 差分区间扫描（`tui-main-screen.ts:473-498`）：从 `resetFrom` 扫到两帧最大行数，记 `firstChanged/lastChanged`；纯追加时区间锁在旧长度处（`appendStart` 快速路径）。区间经过 Kitty 图像块时向外扩展，避免从图像块中间重画（`tui-main-screen.ts:284-305`）。
+8. 视口夹取（`tui-main-screen.ts:568-589`）：`firstChanged` 落在上一帧视口之上且文档长度没变——只有 scrollback 副本过期，屏幕上行没动——只重绘可见部分；任何长度变化都可能让行在视口下位移，仍走全量重绘。
+9. 写入（`tui-main-screen.ts:593-680`）：`\x1b[?2026h` 开同步输出 → 视口滚动对齐（必要时 `\r\n` 推进滚动）→ CUU/CUD 移到首变行 → `\r` → 逐行 `\x1b[2K` + 行内容 → 尾部清理旧多出的行 → `\x1b[?2026l`。只写首变行到末变行，单行变化（spinner）不会闪烁全屏。
+10. 硬保险（`tui-main-screen.ts:651-678`）：任何渲染行 `visibleWidth > width` 直接把全部行写进 `tui-crash.log`，清理终端状态后抛错——指向"组件没截断"这个根因。
+11. 更新镜像：`previousLines`、`hardwareCursorRow`、`previousViewportTop`、`previousKittyImageIds`、宽高（`tui-main-screen.ts:737-749`），并按需移动硬件光标（`positionHardwareCursor`，`tui-main-screen.ts:757-788`）。
+
+输出统一经过 `BoundedTerminalWriter`（`tui-main-screen.ts:24-80`）：按 1MiB 分块刷盘，超长串按代理对边界切开，避免整帧拼成一个超过 V8 字符串上限的大串。
+
+`stop()` 的收尾（`tui-main-screen.ts:194-202`）：把光标推到内容末尾再换行，退出后主屏 scrollback 不残留半行。
+
+## 6. 全屏渲染（fullscreen）
+
+`TuiAltScreen` 的渲染分两层：先算布局，再行级差分。
+
+### 6.1 布局：LayoutBox 树
+
+`renderLayoutFrame(root, width, height, requestRender)`（`layout.ts:353-382`）产出一棵 `LayoutBox` 树：每个盒子带 `rect`（x/y/宽/高）、`clip`（与父裁剪区的交集）、可选 `lines`/`scrollView`/`scrollContentLines`（`layout.ts:17-28`）。`layoutComponent`（`layout.ts:100-241`）按节点类型展开：
+
+- 叶子组件：按宽度渲染，行数即高度；超出的部分可带 `lineOffset`（光标行优先留在视口内，`layout.ts:113-118`）。
+- scroll view：内容按 `scrollTop` 偏移布置，`updateLayout` 维护滚动状态并可能回调 `requestRender`（`layout.ts:130-162`）；`primary` 或首个 scroll view 成为主视口。
+- VStack/HStack：按 `basis`/`grow`/`shrink`/`minSize`/`gap` 分配尺寸（`layout.ts:166-240`，`components/stack.ts` 的 `allocateStackSizes`），HStack 支持 stretch/center/end 对齐。
+
+`paintBox`（`layout.ts:304-351`）把树画进 `height` 行 × `width` 列的屏幕缓冲：剥离 OSC133 区段标记、图像按可见行数裁剪、部分覆盖用 `compositeTuiLine`（`tui.ts:356-385`）按列合成、满宽未触行直接引用加速；滚动条几何由 `getScrollbarGeometry`（`layout.ts:266-291`）算出 thumb 位置后逐格上色。全屏布局根由产品层提供（`interactive-mode.ts:1109-1126`）：transcript 滚动视图（grow）+ 底部 dock（待发消息、状态行、控件、编辑器、footer 的 VStack）。
+
+### 6.2 合成与差分
+
+`doRender`（`tui-alt-screen.ts:1310-1377`）：
+
+1. `renderLayoutFrame` 得到屏幕行（未设 `layoutRoot` 时回退到隐式的主滚动视图，`tui-alt-screen.ts:1314`）。
+2. 依次合成：搜索高亮（`applySearchHighlights`）→ overlay（`compositeOverlays`）→ 文本选择（`applySelection`）→ 瞬时消息闪烁（`compositeFlashes`）。
+3. 行归一化 + 超宽行按列截断（`tui-alt-screen.ts:1327-1330`）。
+4. 差分：首帧、宽高变化、或变化行涉及图像时全量重写（`\x1b[2J`，`tui-alt-screen.ts:1332-1356`）；否则逐行比较，只写变化行 `\x1b[{row+1};1H\x1b[2K<line>`（`tui-alt-screen.ts:1359-1362`）。
+5. 光标：找到标记就绝对定位并显示/隐藏，否则隐藏（`tui-alt-screen.ts:1364-1369`）。
+
+整帧包在 `\x1b[?2026h/l` 同步输出里，终端一次性呈现，避免半帧撕裂。Kitty 图像通过 `uploadedKittyImages` 缓存去重，iTerm2 路径在进入前临时屏蔽图像能力再重渲染（`tui-alt-screen.ts:281-299`、`364` 起）。
+
+### 6.3 视口输入拦截
+
+构造函数里注册 `handleViewportInput` 到 `inputListeners`（`tui-alt-screen.ts:231`、`566-670`），处理顺序：焦点进出事件（`\x1b[I/O`，清选择）→ 滚轮 → SGR 鼠标（右键粘贴、滚动条拖拽与悬停、文本选择与双击/三击、自动滚动）→ 键位：搜索（`ctrl+shift+f` 等）与翻页（pageUp/Down、半页、单行、上/下 prompt、home/end）。overlay 聚焦时让位（`shouldDeferViewportInputToOverlay`，`tui-alt-screen.ts:562-564`）。
+
+alt screen 进入时（`tui-alt-screen.ts:316-318`）：`\x1b[?1049h` + 关 autowrap + 开鼠标追踪（tmux/screen 降级为 button-motion，`tui-alt-screen.ts:308-315`）+ 清屏回 home。退出时（`afterTerminalStop`，`tui-alt-screen.ts:335-358`）：默认把整份文档重放回主屏继续用 scrollback；`preserveScreen` 只退 alt screen 不动内容。
+
+## 7. 产品侧接线（apps/cli）
+
+渲染库只提供机制；"什么事件、什么数据、变成什么组件"由产品层决定，边界遵守 AGENTS.md 的所有权规则（组件编排属 `coding-agent`/宿主，差分渲染原语属 `@step-harness/pi-tui` 包，产品层不重写渲染循环）。
+
+### 7.1 组合根
+
+`createInteractiveTui`（`interactive-mode.ts:429-450`）按 `tuiMode` 选 `TuiMainScreen` 或 `TuiAltScreen`，全屏模式注入主题化的搜索样式、浏览器打开、剪贴板复制等回调。`init()`（`interactive-mode.ts:1076-1155`）组装组件树并挂载：
+
+- `documentContainer` = header +（条件）welcome + loadedResources + chat（`interactive-mode.ts:721-744`）。
+- regular 模式把 7 个顶层容器（document、待发消息、状态行、上/下控件、编辑器、footer）直接挂到 TUI（`interactive-mode.ts:1127-1135`）。
+- fullscreen 模式改用布局根：transcript 滚动视图（grow）+ dock（`interactive-mode.ts:1102-1126`）。
+- 挂载后 `setFocus(editor)`，`ui.start()`，再 `applyFromSettings()` 上主题（`interactive-mode.ts:1138-1157`）。
+
+选择器与自定义面板有两种挂载方式。`/settings` 通过 `showSelector` 替换 `editorContainer` 内的编辑器；`/usage` 与 `/status` 使用 `ctx.ui.custom` 默认的 inline 模式，采用相同的输入区域和终端全宽，底栏保留在面板下方。关闭时恢复编辑器、未提交草稿与键盘焦点；异步更新和关闭回调随面板释放。
+
+只有显式选择 overlay 的对话框才通过 `ui.showOverlay(component, options)` 叠加到现有内容上。overlay 的焦点恢复（被 overlay 内部组件抢走再还回）由 `TuiBase` 的状态机保证（`tui.ts:525-588`）；普通命令面板不应为了展示内容而默认居中覆盖聊天记录。
+
+### 7.2 事件 → 组件树 → 重绘
+
+`session-events.ts` 订阅 agent 会话事件（约 24 个 case），每个 case 做三件事：改组件树（新建/更新/移除视图组件）、改状态（footer、状态行、进度），最后 `ctx.redraw.requestRender()`（`session-events.ts:56` 起；`footer.invalidate()` 是每个事件的第一条动作，保证 footer 数据缓存最先失效）。流式输出时 `message_update` 高频触发 `updateContent` + `requestRender`，靠 16ms 节流与差分渲染吸收。
+
+`runtime/redraw.ts` 是唯一的重绘门面：`requestRender`（节流）、`forceRender`（`requestRender(true)`，SIGCONT/外编返回/热重载框）、`renderNow`（同步刷新，启动时用），外加 spinner 动画时钟（回调同样走这个门面）。它不实现第二套脏区模型，也不复刻节流逻辑。
+
+### 7.3 键位动作
+
+`runtime/input-dispatch.ts` 的 `wireKeyHandlers` 在编辑器交换之前注册（交换会复制 onEscape/onCtrlD/onPasteImage/canDequeue 等回调，晚注册会漏，`input-dispatch.ts:17-20`）。应用级动作（提交路由、slash 命令门、bash `!`/`!!`、队列 steer/follow-up）都在这里；`app.redraw` 绑定 Ctrl+L 的 `ui.renderNow(true)` 是终端花屏后的用户侧恢复手段。
+
+### 7.4 模式切换
+
+`switchTuiMode`（`interactive-mode.ts:1018-1074`）：`stop({ preserveScreen: true })` 停旧渲染器 → 捕获主屏渲染镜像（`captureRenderState`/`restoreRenderState`，`tui-main-screen.ts:155-182`，差分前缀状态随 TUI 实例迁移）→ 新建目标 TUI 复用同一个 `terminal` → 重挂同一批组件 → 还原焦点/clearOnShrink/onDebug → `invalidate`（iTerm2 图像能力下让 start 钩子自己失效）→ 重启并 rebind 主题与扩展输入监听。有 overlay 时拒绝切换（`interactive-mode.ts:1021`）。
+
+### 7.5 主题与外部状态
+
+主题文件变化（`interactive-mode.ts:1248-1253`）：`ui.invalidate()` + `requestRender()`——`invalidate` 丢弃容器与组件的渲染缓存，主题色在下一帧的归一化行里生效。语法高亮全部加载完成后同样失效重绘（`interactive-mode.ts:1265-1269`）。git 分支变化只触发 `requestRender`（footer 数据提供者推送，`interactive-mode.ts:1256-1258`）。
+
+## 8. 渲染开关与调试
+
+本节的开关都**不是环境变量**。早期版本把它们记作 `PI_TUI_*` / `PI_DEBUG_*` 环境变量，源码中并无任何对应的读取逻辑（`packages/tui/src` 内没有读取过 `PI_` 前缀的环境变量）。实际入口如下：
+
+| 开关 | 入口 | 作用 |
+| --- | --- | --- |
+| 增量渲染 | `setIncrementalRenderDisabled(true)`（`tui.ts:227-229`，进程内全局） | 每帧全量渲染，用于渲染等价测试 |
+| 硬件光标 | `showHardwareCursor` 设置项 → `ui.setShowHardwareCursor()`（`tui.ts:506-511`） | 显示终端光标，便于 IME（默认隐藏） |
+| 收缩清行 | `terminal.clearOnShrink` 设置项 → `ui.setClearOnShrink()`（`tui.ts:524-527`） | 内容收缩时是否清空多余行（默认 false，开启可能闪烁） |
+| ESC 超时 | 无开关，按传输自动判定（`terminal.ts:103-116`） | 非 SSH 10ms；检测到 `SSH_CONNECTION`/`SSH_TTY` 时 100ms |
+
+唯一的落盘诊断是崩溃现场：任何渲染行 `visibleWidth > width` 时，全部行写入 `<logDirectory>/tui-crash.log`（`tui-main-screen.ts:628-639`）。`logDirectory` 由 `TUI` 构造参数传入，缺省是 `os.tmpdir()` 下按需创建的 `tui-*` 私有临时目录（`tui.ts:479-484`）。
+
+## 9. 测试与验证
+
+- `packages/tui/test` 用 `node:test`：差分行为（`container-render-cache.test.ts`、`main-screen-offscreen-change.test.ts`）、overlay 定位（`overlay-*.test.ts`）、布局（`layout.test.ts`）、输入（`stdin-buffer.test.ts`、`keys.test.ts`、`keybindings.test.ts`、`input.test.ts`）、宽度回归（`bug-regression-isimageline-startswith-bug.test.ts`、`tab-width.test.ts` 等）。
+- 渲染等价性：`setIncrementalRenderDisabled(true)` 强制全量路径，与增量路径逐字节对比——增量复用一旦算错前缀就会在这里现形。
+- 产品侧：`apps/cli/test` 的 TUI 快照测试（如 `tui-acceptance-snapshot.test.ts`）锁住视图渲染输出。
+
+## 10. 归属与约束
+
+- 差分渲染、输入分发、布局合成只存在于 `packages/tui`；`apps/cli` 不 fork、不重写。
+- `packages/tui` 保持零 AI 依赖（`docs/step-harness-architecture-redesign.md` 的 `check-tui-no-ai` 检查）。
+- 组件不得输出超过传入宽度的行——主屏渲染器会抛错并把现场写进 `tui-crash.log`；测量用 `visibleWidth()`，截断用 `truncateToWidth()`。
+- 跨进程渲染契约（远端会话）在 `packages/protocol`；本文只覆盖本地进程内的 TUI 渲染。

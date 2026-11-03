@@ -1,0 +1,358 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionContext } from "../src/core/extensions/types.ts";
+import type { BashOperations } from "../src/core/tools/bash.ts";
+import { createStepToolProfile, type StepThenRunDetails } from "../src/step/tool-profile.ts";
+import { initTheme, theme } from "../src/theme/theme.ts";
+
+type Tool = ReturnType<typeof createStepToolProfile>[number];
+type Result = Awaited<ReturnType<Tool["execute"]>>;
+
+function text(result: Result): string {
+	return result.content
+		.filter((part) => part.type === "text")
+		.map((part) => part.text)
+		.join("\n");
+}
+
+function commandDetails(result: Result): StepThenRunDetails {
+	return (result.details as { thenRun: StepThenRunDetails }).thenRun;
+}
+
+describe("then_run uses run_command execution", () => {
+	let directory: string;
+	const logs = new Set<string>();
+
+	beforeEach(async () => {
+		directory = await mkdtemp(join(tmpdir(), "step-then-run-parity-"));
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await rm(directory, { recursive: true, force: true });
+		await Promise.all([...logs].map((path) => rm(path, { force: true })));
+		logs.clear();
+	});
+
+	function profile(operations?: BashOperations) {
+		const tools = createStepToolProfile(directory, {
+			agentDir: join(directory, "agent"),
+			...(operations ? { bash: { operations } } : {}),
+		});
+		return {
+			run: tools.find((tool) => tool.name === "run_command")!,
+			write: tools.find((tool) => tool.name === "write_file")!,
+			edit: tools.find((tool) => tool.name === "edit_file")!,
+		};
+	}
+
+	it.each([
+		{ label: "default", milliseconds: undefined, seconds: 120 },
+		{ label: "host timeout", milliseconds: 180_500, seconds: 180.5 },
+	])("shares the $label with both write and edit", async ({ milliseconds, seconds }) => {
+		const exec = vi.fn<BashOperations["exec"]>(async (_command, _cwd, { onData }) => {
+			onData(Buffer.from("checked\n"));
+			return { exitCode: 0 };
+		});
+		const { run, write, edit } = profile({ exec });
+		const runSpy = vi.spyOn(run, "execute");
+		const context =
+			milliseconds === undefined
+				? (undefined as never)
+				: ({ cwd: directory, commandTimeoutMs: milliseconds } as unknown as ExtensionContext);
+		await run.execute("standalone", { command: "check" }, undefined, undefined, context);
+		await write.execute(
+			"write",
+			{ path: "sample.txt", content: "before\n", then_run: "check" },
+			undefined,
+			undefined,
+			context,
+		);
+		await edit.execute(
+			"edit",
+			{ path: "sample.txt", search: "before", replace: "after", then_run: "check" },
+			undefined,
+			undefined,
+			context,
+		);
+
+		expect(exec.mock.calls.map((call) => call[2].timeout)).toEqual([seconds, seconds, seconds]);
+		expect(runSpy).toHaveBeenCalledTimes(3);
+		expect(runSpy.mock.calls.slice(1).map((call) => call[1])).toEqual([{ command: "check" }, { command: "check" }]);
+		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("after\n");
+	});
+
+	it("keeps commands in the initial directory when editing a nested file", async () => {
+		const exec = vi.fn<BashOperations["exec"]>(async () => ({ exitCode: 0 }));
+		const { run, write } = profile({ exec });
+		await mkdir(join(directory, "nested"));
+		await mkdir(join(directory, "host"));
+		const context = { cwd: join(directory, "host"), commandTimeoutMs: 45_000 } as unknown as ExtensionContext;
+		await run.execute("standalone", { command: "check" }, undefined, undefined, context);
+		await write.execute(
+			"write",
+			{ path: join(directory, "nested", "sample.txt"), content: "ok\n", then_run: "check" },
+			undefined,
+			undefined,
+			context,
+		);
+		expect(exec.mock.calls.map((call) => call[1])).toEqual([directory, directory]);
+		expect(exec.mock.calls.map((call) => call[2].timeout)).toEqual([45, 45]);
+	});
+
+	it.each([
+		{ chars: 35_000, exitCode: 0 },
+		{ chars: 35_000, exitCode: 7 },
+		{ chars: 70_000, exitCode: 0 },
+		{ chars: 70_000, exitCode: 7 },
+	])("retains the complete $chars-character output after exit $exitCode", async ({ chars, exitCode }) => {
+		const { write } = profile();
+		const command = `printf '%0${chars}d' 0; exit ${exitCode}`;
+		const result = await write.execute(
+			"write",
+			{ path: "sample.txt", content: "applied\n", then_run: command },
+			undefined,
+			undefined,
+			undefined as never,
+		);
+		const output = text(result);
+		const referencedPath = /\[Full output: ([^\]\n]+)\]/u.exec(output)?.[1];
+		if (referencedPath) logs.add(referencedPath);
+		const details = commandDetails(result);
+		if (details.fullOutputPath) logs.add(details.fullOutputPath);
+
+		expect(details).toMatchObject({ exitCode, timedOut: false, stepTruncated: true });
+		expect(details.fullOutputPath).toBeTruthy();
+		expect(referencedPath).toBe(details.fullOutputPath);
+		expect(await readFile(details.fullOutputPath!, "utf8")).toBe("0".repeat(chars));
+		if (exitCode === 0) {
+			expect(output).not.toContain("Command exited with code");
+		} else {
+			expect(output).toContain(`Command exited with code ${exitCode}`);
+		}
+		expect(output).not.toContain("call run_command again");
+		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("applied\n");
+		expect(result).not.toHaveProperty("isError", true);
+	});
+
+	it("applies the host output cap without dropping the log or rerunning the command", async () => {
+		const { write } = profile();
+		const context = { cwd: directory, commandOutputLimit: 100 } as unknown as ExtensionContext;
+		const command = "printf x >> executed.txt; printf '%035000d' 0";
+		const result = await write.execute(
+			"write",
+			{ path: "sample.txt", content: "applied\n", then_run: command },
+			undefined,
+			undefined,
+			context,
+		);
+		const details = commandDetails(result);
+		if (details.fullOutputPath) logs.add(details.fullOutputPath);
+		const referencedPath = /\[Full output: ([^\]\n]+)\]/u.exec(text(result))?.[1];
+		if (referencedPath) logs.add(referencedPath);
+
+		expect(details.fullOutputPath).toBeTruthy();
+		expect(await readFile(details.fullOutputPath!, "utf8")).toBe("0".repeat(35_000));
+		expect(text(result)).toContain(details.fullOutputPath);
+		expect(text(result).length).toBeLessThan(600);
+		expect(await readFile(join(directory, "executed.txt"), "utf8")).toBe("x");
+	});
+
+	it("preserves the edit and command status when a check fails", async () => {
+		const { edit } = profile();
+		await writeFile(join(directory, "sample.txt"), "before\n");
+		const result = await edit.execute(
+			"edit",
+			{ path: "sample.txt", search: "before", replace: "after", then_run: "printf failed; exit 3" },
+			undefined,
+			undefined,
+			undefined as never,
+		);
+		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("after\n");
+		expect(commandDetails(result)).toMatchObject({
+			command: "printf failed; exit 3",
+			exitCode: 3,
+			timedOut: false,
+			stepTruncated: false,
+			execution: {
+				status: "exited",
+				exitCode: 3,
+				timedOut: false,
+				aborted: false,
+				signal: null,
+				timeoutSeconds: 120,
+			},
+		});
+		expect(text(result)).toMatch(/Command exited with code 3$/u);
+		expect(result).not.toHaveProperty("isError", true);
+	});
+
+	it("keeps an execution deadline distinct from caller cancellation", async () => {
+		const exec = vi.fn<BashOperations["exec"]>(async () => ({ exitCode: null, signal: "SIGTERM", timedOut: true }));
+		const { write } = profile({ exec });
+		const context = { cwd: directory, commandTimeoutMs: 1_000 } as unknown as ExtensionContext;
+		const result = await write.execute(
+			"write",
+			{ path: "sample.txt", content: "applied\n", then_run: "check" },
+			undefined,
+			undefined,
+			context,
+		);
+		expect(commandDetails(result)).toMatchObject({ exitCode: null, timedOut: true });
+		expect(result).not.toHaveProperty("isError", true);
+		expect(text(result)).toContain("Command timed out after 1 seconds");
+		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("applied\n");
+	});
+
+	it("keeps the signal visible in an expanded embedded command result", async () => {
+		initTheme("dark", false);
+		const { write } = profile({
+			exec: async (_command, _cwd, { onData }) => {
+				onData(Buffer.from("fixture output"));
+				return { exitCode: null, signal: "SIGTERM" };
+			},
+		});
+		const args = { path: "sample.txt", content: "applied\n", then_run: "check" };
+		const result = await write.execute("write-signal", args, undefined, undefined, undefined as never);
+		const rendered = write.renderResult!(result, { expanded: true, isPartial: false }, theme, {
+			args,
+			toolCallId: "write-signal",
+			invalidate() {},
+			lastComponent: undefined,
+			state: {},
+			cwd: directory,
+			executionStarted: true,
+			argsComplete: true,
+			isPartial: false,
+			expanded: true,
+			showImages: false,
+			isError: false,
+		} as never)
+			.render(200)
+			.join("\n");
+		expect(rendered).toContain("fixture output");
+		expect(rendered).toContain("SIGTERM");
+		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("applied\n");
+	});
+
+	it("propagates caller cancellation with the mutation receipt and performs no retry", async () => {
+		const controller = new AbortController();
+		const exec = vi.fn<BashOperations["exec"]>(async (_command, _cwd, { onData }) => {
+			onData(Buffer.from("partial output\n"));
+			controller.abort();
+			throw new Error("aborted");
+		});
+		const { write } = profile({ exec });
+		await expect(
+			write.execute(
+				"write",
+				{ path: "sample.txt", content: "applied\n", then_run: "check" },
+				controller.signal,
+				undefined,
+				undefined as never,
+			),
+		).rejects.toThrow(/Wrote 8 chars[\s\S]*then_run: \$ check[\s\S]*Command aborted/u);
+		expect(exec).toHaveBeenCalledTimes(1);
+		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("applied\n");
+	});
+
+	it("still shows the edit diff after the caller cancels the check", async () => {
+		initTheme("dark", false);
+		const controller = new AbortController();
+		const exec = vi.fn<BashOperations["exec"]>(async () => {
+			controller.abort();
+			throw new Error("aborted");
+		});
+		const { edit } = profile({ exec });
+		await writeFile(join(directory, "sample.txt"), "before\n");
+		const args = { path: "sample.txt", search: "before", replace: "after", then_run: "check" };
+		const failure = await edit.execute("edit-cancelled", args, controller.signal, undefined, undefined as never).then(
+			() => undefined,
+			(error: { result?: { details?: { diff?: unknown; patch?: unknown }; isError?: boolean }; name?: string }) =>
+				error,
+		);
+		// The edit landed before the check was cancelled, so the failed call still
+		// carries the receipt its renderer reads.
+		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("after\n");
+		expect(failure?.name).toBe("ToolExecutionError");
+		expect(failure?.result?.isError).toBe(true);
+		expect(failure?.result?.details?.diff).toBe("-1 before\n+1 after");
+		expect(failure?.result?.details?.patch).toEqual(expect.stringContaining("\n-before\n+after"));
+
+		// Rendering the failed call must not hide that change: the args-based preview
+		// cannot apply after the write, so only the recorded diff can show it.
+		const state: { callComponent?: { render(width: number): string[] } } = {};
+		const context = {
+			args,
+			toolCallId: "edit-cancelled",
+			state,
+			cwd: directory,
+			executionStarted: true,
+			argsComplete: true,
+			isPartial: false,
+			expanded: true,
+			showImages: false,
+			invalidate() {},
+		};
+		edit.renderCall!(args, theme, { ...context, lastComponent: undefined, isError: false } as never);
+		edit.renderResult!(failure!.result as never, { expanded: true, isPartial: false }, theme, {
+			...context,
+			lastComponent: undefined,
+			isError: true,
+		} as never);
+
+		const rendered = state.callComponent?.render(200).join("\n") ?? "";
+		// Both sides of the recorded diff, which no other part of the card produces.
+		expect(rendered).toContain("-1 before");
+		expect(rendered).toContain("+1 after");
+	});
+
+	it("retains an applied mutation while reporting a real check executor fault", async () => {
+		const exec = vi.fn<BashOperations["exec"]>(async () => {
+			throw new Error("executor unavailable");
+		});
+		const { write } = profile({ exec });
+		const result = await write.execute(
+			"write-check-fault",
+			{ path: "sample.txt", content: "applied\n", then_run: "check" },
+			undefined,
+			undefined,
+			undefined as never,
+		);
+		// The file mutation succeeded, so the call is not an error; the failed
+		// check is recorded inside its own details.
+		expect(result).not.toHaveProperty("isError", true);
+		expect(result.details).toMatchObject({ changed: true, thenRun: { exitCode: null, timedOut: false } });
+		// The failure is described by the declared execution facts and status, not
+		// by a separate free-text field.
+		expect(result.details.thenRun).toMatchObject({ execution: { status: "unknown" } });
+		expect(result.details.thenRun).not.toHaveProperty("invocationError");
+		expect(text(result)).toContain("executor unavailable");
+		expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("applied\n");
+		expect(exec).toHaveBeenCalledTimes(1);
+	});
+
+	it("skips empty checks, but executes a check after a no-op edit", async () => {
+		const exec = vi.fn<BashOperations["exec"]>(async () => ({ exitCode: 0 }));
+		const { run, write } = profile({ exec });
+		const runSpy = vi.spyOn(run, "execute");
+		await write.execute(
+			"first",
+			{ path: "sample.txt", content: "same\n", then_run: "  " },
+			undefined,
+			undefined,
+			undefined as never,
+		);
+		await write.execute(
+			"noop",
+			{ path: "sample.txt", content: "same\n", then_run: "check" },
+			undefined,
+			undefined,
+			undefined as never,
+		);
+		expect(exec).toHaveBeenCalledTimes(1);
+		expect(runSpy).toHaveBeenCalledTimes(1);
+	});
+});
