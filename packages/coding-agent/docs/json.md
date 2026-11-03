@@ -76,10 +76,17 @@ over messages reports the boundary instead of repeating them.
   `{ messageRole, toolResultCount }` and `{ willRetry, messageCount }`: what only
   the boundary says is where it fell, not what it contained.
 
-`messageCount` is the length of that run's `messages` array, not a checksum: the
-loop can emit more `message_end` events than it lists (a resampled tool-call
-leak, a throwing `shouldStopAfterTurn`), so do not use it to detect a truncated
-run. A message that never got its `message_end` is the reliable signal.
+`messageCount` is the length of that run's `messages` array, not a checksum: a
+throwing `shouldStopAfterTurn` can make the loop emit more `message_end` events
+than it lists, so do not use it to detect a truncated run. A message that never
+got its `message_end` is the reliable signal.
+
+An assistant turn that carries nothing a client can act on is described twice,
+for two different readers. Its `message_end` keeps the provider's `stopReason`
+and adds `incomplete`; the settled run adds `failure` to `agent_settled`, which
+is the record's answer to "did this run produce anything". That covers a repeated
+empty turn, and an empty turn that also overflowed the context window when
+compaction could not complete or is disabled.
 
 What the record still repeats, deliberately:
 

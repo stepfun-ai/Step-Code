@@ -359,12 +359,47 @@ describe("runPrintMode same-session completion check", () => {
 		},
 	);
 
-	it("leaves default-off behavior unchanged without Git or a final answer", async () => {
+	it("uses the generic recovery when completion checking is not enabled", async () => {
 		const { harness, run } = await setup({}, false);
-		harness.setResponses([fauxAssistantMessage(fauxThinking("thinking only")), fauxAssistantMessage("unused")]);
+		harness.setResponses([
+			fauxAssistantMessage(fauxThinking("thinking only")),
+			fauxAssistantMessage("recovered without completion check"),
+		]);
 		expect(await run({ completionCheck: undefined })).toBe(0);
-		expect(harness.faux.state.callCount).toBe(1);
+		expect(harness.faux.state.callCount).toBe(2);
+		expect(stdout).toBe("recovered without completion check\n");
 		expect(console.error).not.toHaveBeenCalled();
+	});
+
+	it("exits 1 when the model repeats an incomplete turn", async () => {
+		const { harness, run } = await setup({}, false);
+		harness.setResponses([
+			fauxAssistantMessage(fauxThinking("thinking only")),
+			fauxAssistantMessage(fauxThinking("thinking only again")),
+		]);
+		expect(await run({ completionCheck: undefined })).toBe(1);
+		expect(harness.faux.state.callCount).toBe(2);
+		expect(stdout).toBe("");
+		// The message keeps its provider stop reason; the exit code comes from the
+		// structural classification, so the diagnostic stays the only wording.
+		const assistants = harness.session.messages.filter((message) => message.role === "assistant");
+		expect(assistants.at(-1)).toMatchObject({ stopReason: "stop", incomplete: "no_visible_output" });
+		expect(console.error).toHaveBeenCalledWith("The model returned no visible answer or executable tool call.");
+	});
+
+	it("reports a repeated incomplete turn as exit 1 in JSON mode too", async () => {
+		const { harness, run } = await setup({}, false);
+		harness.setResponses([
+			fauxAssistantMessage(fauxThinking("thinking only")),
+			fauxAssistantMessage(fauxThinking("thinking only again")),
+		]);
+		expect(await run({ mode: "json", completionCheck: undefined })).toBe(1);
+		expect(harness.faux.state.callCount).toBe(2);
+		// The record carries the classification and the settled failure, so a caller
+		// reading the event stream sees why the run ended without an answer.
+		expect(stdout).toContain('"incomplete":"no_visible_output"');
+		expect(stdout).toContain('"kind":"incomplete_turn"');
+		expect(stdout).not.toContain('"type":"completion_check"');
 	});
 
 	it("fails non-Git preflight before binding extensions or calling the model and cleans up", async () => {
