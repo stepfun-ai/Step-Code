@@ -349,7 +349,11 @@ function updateStatus(
 	if (enabled && planFilePath) publishedPlanPaths.set(ctx.sessionManager, planFilePath);
 	else publishedPlanPaths.delete(ctx.sessionManager);
 	if (enabled) {
-		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", `Planning (${planSource ?? "unknown"})`));
+		const label = `Planning (${planSource ?? "unknown"})`;
+		// Styling is a presentation nicety: a host without a terminal theme must
+		// still get the chip, not a crash inside its status update.
+		const theme = ctx.ui.theme;
+		ctx.ui.setStatus("plan-mode", theme ? theme.fg("warning", label) : label);
 	} else {
 		ctx.ui.setStatus("plan-mode", undefined);
 	}
@@ -480,9 +484,12 @@ export const createStepPlanExtension =
 			enable();
 			recordPlanEnter(options.telemetry, planSource);
 			updateStatus(ctx, enabled, planSource, planFilePath);
+			// Presentation state, not a transcript answer: a host that draws notices as
+			// rows would otherwise add one every time the mode is turned on.
 			ctx.ui.notify(
 				`Plan mode enabled. Draft your proposal at ${planFilePath}; file-editing tools are limited to this path. Commands still use normal permissions.`,
 				"info",
+				{ transient: true },
 			);
 		};
 		/**
@@ -644,6 +651,7 @@ export const createStepPlanExtension =
 						ctx.ui.notify(
 							"That is not a proposal hash. Use `/plan approve`, `/plan approve <hash>`, or `/plan <task>` to plan something else.",
 							"warning",
+							{ transient: true },
 						);
 						return;
 					}
@@ -656,11 +664,13 @@ export const createStepPlanExtension =
 					// arrives after a newer submission must not approve that one — the
 					// file being current says nothing about which proposal was on screen.
 					if (pendingProposal === undefined) {
-						ctx.ui.notify("No plan is waiting for approval.", "warning");
+						ctx.ui.notify("No plan is waiting for approval.", "warning", { transient: true });
 						return;
 					}
 					if (namedProposal !== undefined && namedProposal !== pendingProposal) {
-						ctx.ui.notify("That proposal is no longer waiting for approval.", "warning");
+						ctx.ui.notify("That proposal is no longer waiting for approval.", "warning", {
+							transient: true,
+						});
 						return;
 					}
 					// The approval belongs to the snapshot the user read. A file edited
@@ -679,6 +689,7 @@ export const createStepPlanExtension =
 						ctx.ui.notify(
 							"The plan changed since it was submitted; ask for a new review, or use `/plan off` to leave plan mode.",
 							"warning",
+							{ transient: true },
 						);
 						return;
 					}

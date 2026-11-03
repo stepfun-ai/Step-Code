@@ -33,7 +33,7 @@ interface Harness {
 	commands: Map<string, { handler: (args: string, ctx: ExtensionContext) => unknown }>;
 	handlerEvents: () => string[];
 	appended: Array<{ customType: string; data: unknown }>;
-	notifications: Array<{ message: string; type?: string }>;
+	notifications: Array<{ message: string; type?: string; options?: { transient?: boolean } }>;
 	userMessages: Array<Parameters<ExtensionAPI["sendUserMessage"]>>;
 	/** Hidden custom messages, so a test can assert an instruction is not in the user's bubble. */
 	customMessages: Array<Parameters<ExtensionAPI["sendMessage"]>>;
@@ -107,7 +107,7 @@ function createHarness(
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => unknown }>();
 	const handlers = new Map<string, Array<(event: never, ctx: ExtensionContext) => unknown>>();
 	const appended: Array<{ customType: string; data: unknown }> = [];
-	const notifications: Array<{ message: string; type?: string }> = [];
+	const notifications: Array<{ message: string; type?: string; options?: { transient?: boolean } }> = [];
 	const userMessages: Array<Parameters<ExtensionAPI["sendUserMessage"]>> = [];
 	const customMessages: Array<Parameters<ExtensionAPI["sendMessage"]>> = [];
 	const statuses = new Map<string, string | undefined>();
@@ -165,8 +165,8 @@ function createHarness(
 			// the end-to-end behavior is covered by test/suite/plan-approval-gate.test.ts.
 			registerAutomaticTurnGuard: () => () => {},
 			ui: {
-				notify: (message: string, type?: string) => {
-					notifications.push({ message, type });
+				notify: (message: string, type?: string, options?: { transient?: boolean }) => {
+					notifications.push({ message, type, options });
 				},
 				select: options.select ?? (async () => undefined),
 				editor: options.editor ?? (async () => undefined),
@@ -2523,6 +2523,53 @@ test("leaving plan mode while idle does not abort anything", async () => {
 	await harness.commands.get("plan")!.handler("", context);
 	await harness.commands.get("plan")!.handler("off", context);
 	expect(abort).not.toHaveBeenCalled();
+});
+
+test("the status chip does not require a theme from the host", async () => {
+	// A host that renders text rather than a terminal may answer `undefined`; styling
+	// is a nicety, and a crash inside the status update loses the whole command.
+	const harness = createHarness({ cwd: makeWorkspace() });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx({ ui: { ...(harness.ctx().ui as object), theme: undefined } });
+
+	await expect(harness.commands.get("plan")!.handler("", context)).resolves.toBeUndefined();
+	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
+});
+
+test("entering plan mode announces it without adding a transcript row", async () => {
+	// The host draws plan mode from session state; a durable notice would be a row
+	// nobody typed into the conversation. Leaving says nothing at all: the chip
+	// closing and the composer reopening are the report.
+	const harness = createHarness({ cwd: makeWorkspace() });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+	await harness.commands.get("plan")!.handler("", context);
+	await harness.commands.get("plan")!.handler("", context);
+
+	const notices = harness.notifications.filter((notice) => /Plan mode (enabled|disabled)/.test(notice.message));
+	expect(notices).toHaveLength(1);
+	expect(notices[0]?.options?.transient).toBe(true);
+});
+
+test("plan mode denies a mutation even when the branch carries no plan entry", async () => {
+	// The guard reads the branch so it can run before the plan extension has
+	// replayed `session_start`. That must not turn a failed persist — or an
+	// embedder whose `appendEntry` stores nothing — into an open door.
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx();
+	// Nothing reaches the branch: plan mode exists only in the live session.
+	harness.api.appendEntry = () => {};
+	await harness.commands.get("plan")!.handler("add a readme", context);
+	expect(harness.appended.filter((entry) => entry.customType === "step-plan")).toHaveLength(0);
+
+	await expect(
+		harness.emit(
+			{ type: "tool_call", toolName: "write_file", toolCallId: "lost-entry", input: { path: "src/app.ts" } },
+			context,
+		),
+	).resolves.toMatchObject({ block: true, reason: expect.stringContaining("Only the plan file may be written") });
 });
 
 test("a failed enter persist leaves plan mode off", async () => {

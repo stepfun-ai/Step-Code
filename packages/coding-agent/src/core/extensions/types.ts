@@ -154,6 +154,13 @@ export interface ExtensionNotifyOptions {
 	 * entered. Modes without a transcript ignore it.
 	 */
 	echoesInput?: boolean;
+	/**
+	 * The message only restates state the host already renders from the session
+	 * (plan mode on/off, the permission tier). A host with a transcript shows it
+	 * briefly and keeps it out of the conversation: it is an announcement, not an
+	 * answer to something the user typed.
+	 */
+	transient?: boolean;
 }
 
 /** Raw terminal input listener for extensions. */
