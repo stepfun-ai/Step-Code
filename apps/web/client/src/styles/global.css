@@ -462,6 +462,13 @@ select {
   position: relative;
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  /*
+   * One definite row the height of the window. Without it the row was an
+   * implicit `auto` track sized from its content, and while a reply streamed
+   * beside an open inspector every layout measured both columns' full content
+   * to size it: over a core of renderer time with the Context panel open.
+   */
+  grid-template-rows: minmax(0, 1fr);
   width: 100vw;
   height: 100vh;
   background: var(--workbench);

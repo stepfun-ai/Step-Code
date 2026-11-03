@@ -10,7 +10,7 @@ import {
 	toggleRightPanelExpanded,
 } from "../../state/right-panel";
 import { getState, type RightPanelId, setUi, useAppStore } from "../../state/store";
-import type { SessionInspector } from "../../state/types";
+import type { SessionInspector, TimelineItem } from "../../state/types";
 import { Icon, IconButton, type IconName, Menu, MenuItem, Popover, ResizeHandle, Tooltip } from "../../ui";
 import { BrowserPanel } from "../browser";
 import { ChildAgentView } from "../conversation";
@@ -102,6 +102,8 @@ export function RightToolRail() {
 	);
 }
 
+const NO_ITEMS: readonly TimelineItem[] = [];
+
 export function RightPanel() {
 	const t = useT();
 	const panel = useAppStore(activeRightPanel);
@@ -117,7 +119,9 @@ export function RightPanel() {
 	const activitySeen = useRef<{ sessionId?: string; turn?: string }>({});
 	const childParentId = useAppStore((state) => state.ui.childView?.parentId);
 	const status = useAppStore((state) => state.current?.status);
-	const items = useAppStore((state) => state.timelineItems);
+	// Only the subagent panel reads the transcript. Subscribing to it otherwise
+	// re-rendered every panel (the hidden ones included) for each streamed frame.
+	const items = useAppStore((state) => (activeRightPanel(state) === "subagent" ? state.timelineItems : NO_ITEMS));
 	const [result, setResult] = useState<{ id: string; data?: SessionInspector; error?: string }>();
 	const [revision, setRevision] = useState(0);
 	const widthOpen = useAppStore((state) => state.ui.rightPanelMenu);
@@ -260,7 +264,9 @@ export function RightPanel() {
 				<SummaryBoard key={`summary-${currentId ?? ""}`} data={data} />
 			</div>
 			<div className="right-panel-scroll" hidden={panel !== "context"}>
-				<ContextPanel key={`context-${currentId ?? ""}`} data={data} />
+				{/* The panel stays mounted and toggles `hidden` like every panel here; its message list is
+				 * built only while it shows. Hidden, it re-rendered every row with each inspector poll. */}
+				{panel === "context" ? <ContextPanel key={`context-${currentId ?? ""}`} data={data} /> : null}
 			</div>
 			<PreviewPanel embedded />
 			<ChildAgentView embedded />

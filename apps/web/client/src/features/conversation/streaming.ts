@@ -13,6 +13,12 @@ import { useEffect, useRef, useState } from "react";
 const CATCH_UP_MS = 240;
 /** Slowest pace, in characters per millisecond, so a short tail does not crawl. */
 const MIN_RATE = 0.06;
+/**
+ * Shortest time between two revealed steps (about 30 a second). Each step
+ * re-parses and re-lays out the whole Markdown message, so following a 120 Hz
+ * display frame by frame cost four times the work for no visible difference.
+ */
+export const REVEAL_STEP_MS = 33;
 
 function cutAt(text: string, length: number): string {
 	// Do not split a surrogate pair.
@@ -22,22 +28,36 @@ function cutAt(text: string, length: number): string {
 
 /**
  * `target` revealed progressively while `live`; the whole text otherwise.
- * Text that is replaced rather than extended is shown at once.
+ * Text that is replaced rather than extended is shown at once. A view that
+ * mounts in the middle of a stream (a thought opened while it runs) passes
+ * `shownAtMount`: what had arrived by then shows at once, and only what
+ * arrives later is revealed.
  */
-export function useSmoothText(target: string, live: boolean): string {
-	const [shown, setShown] = useState(live ? "" : target);
+export function useSmoothText(target: string, live: boolean, shownAtMount = ""): string {
+	const [shown, setShown] = useState(live ? shownAtMount : target);
 	const shownRef = useRef(shown);
 	shownRef.current = shown;
+	// The step clock outlives each target: new text arriving more often than a
+	// step would otherwise restart the wait every time and never reveal anything.
+	const lastStep = useRef(0);
 	useEffect(() => {
 		if (!live || !target.startsWith(shownRef.current)) {
 			setShown(target);
 			return;
 		}
 		let frame = 0;
-		let last = performance.now();
+		// After a pause, the first step counts from one step ago, not from the pause's
+		// start: the reveal resumes at its usual pace instead of jumping ahead.
+		lastStep.current = Math.max(lastStep.current, performance.now() - REVEAL_STEP_MS);
 		const step = (now: number) => {
-			const elapsed = Math.min(64, now - last);
-			last = now;
+			const since = now - lastStep.current;
+			// Frames in between only wait; the pace below is per elapsed time, so it is unchanged.
+			if (since < REVEAL_STEP_MS) {
+				frame = requestAnimationFrame(step);
+				return;
+			}
+			const elapsed = Math.min(64, since);
+			lastStep.current = now;
 			const current = shownRef.current;
 			const backlog = target.length - current.length;
 			if (backlog <= 0) return;
