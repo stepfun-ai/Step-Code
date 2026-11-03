@@ -4,12 +4,15 @@ import { copyText } from "../../state/session";
 import { thinkingElapsed } from "../../state/thinking-timing";
 import type { ThinkingTimelineItem } from "../../state/types";
 import { Icon, MarkdownView } from "../../ui";
-import { useSmoothText, useTypewriter } from "./streaming";
-import { thinkingPreview } from "./thinking-preview";
+import { useSmoothText } from "./streaming";
 
 const copyCode = (code: string) => copyText(code, null);
 
-/** Folded by default inside the Simple process group; only an actual live block animates. */
+/**
+ * Folded by default inside the Simple process group; only an actual live block animates.
+ * The folded header carries no excerpt of the reasoning: a fast model rewrote that line
+ * several times a second, and the text read as flicker rather than progress.
+ */
 export const ThinkingDisclosure = memo(function ThinkingDisclosure({
 	item,
 	active = false,
@@ -23,9 +26,6 @@ export const ThinkingDisclosure = memo(function ThinkingDisclosure({
 	const t = useT();
 	const running = active && item.running;
 	const [expanded, setExpanded] = useState(false);
-	// The reader may linger over the preview line: hold it while the pointer or the
-	// keyboard focus is on the row, so a sentence can be finished without it moving.
-	const [held, setHeld] = useState(false);
 	const wasRunning = useRef(running);
 	const id = useId();
 	const text = useSmoothText(item.content, running);
@@ -35,10 +35,6 @@ export const ThinkingDisclosure = memo(function ThinkingDisclosure({
 		wasRunning.current = running;
 	}, [running]);
 	const label = t(running ? "thinkingIndicator" : "thinkingLabel");
-	// A sentence-aligned window that only grows at its tail, revealed at a reading
-	// pace, instead of the trailing-character slice that used to sweep the line.
-	const preview = running ? thinkingPreview(item.content) : undefined;
-	const previewText = useTypewriter(preview?.text ?? "", Boolean(preview), preview?.key, held);
 	return (
 		<section className="thinking" data-entry-id={item.entryId} data-running={running} data-expanded={expanded}>
 			<button
@@ -50,10 +46,6 @@ export const ThinkingDisclosure = memo(function ThinkingDisclosure({
 					setExpanded(!expanded);
 					onExpandedChange?.(!expanded);
 				}}
-				onPointerEnter={() => setHeld(true)}
-				onPointerLeave={() => setHeld(false)}
-				onFocus={() => setHeld(true)}
-				onBlur={() => setHeld(false)}
 			>
 				<Icon name="brain" size="xs" />
 				<span className="tool-verb">
@@ -62,7 +54,6 @@ export const ThinkingDisclosure = memo(function ThinkingDisclosure({
 				</span>
 				<ThinkingElapsed timing={item.timing} active={running} />
 				<Icon name="disclosure" size="xs" className="thinking-chevron" />
-				{!expanded && preview ? <span className="thinking-preview">{previewText}</span> : null}
 			</button>
 			<div
 				id={id}

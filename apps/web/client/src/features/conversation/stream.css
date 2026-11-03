@@ -528,14 +528,6 @@
 .thinking-summary:hover {
 	color: var(--ink);
 }
-.thinking-preview {
-	min-width: 0;
-	overflow: hidden;
-	color: var(--ink-3);
-	font-size: 12px;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
 .thinking-elapsed {
 	flex: none;
 	color: var(--ink-3);
