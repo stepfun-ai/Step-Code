@@ -244,10 +244,9 @@ When to add or change one:
 - The streaming message's rows live in `liveItems`, not `timelineItems`, so a streamed frame re-renders only them;
   they join the transcript at the message's end. Readers of whole turns (changes, footers, deliveries, the right
   panel) read `timelineItems`.
-- Working-state indicators (shimmer labels, pending tool rows) animate only `opacity` or `transform`: a
-  `background-position` sweep under clipped text repaints every frame. A decorative cue that does repaint (the staged
-  mode's border sweep) plays a bounded number of times and then rests static; looping, it cost about a third of a core
-  while the page sat idle.
+- The working-state sweep from a label's first character to its last (`ShimmerText`, `.tool-pending`) is a product
+  decision: do not swap it for another effect to save CPU. A decorative cue that repaints on an idle page (the staged
+  mode's border sweep) plays a bounded number of times and then rests static; looping, it cost about a third of a core.
 - Anything a reloaded page must show again belongs in the session snapshot (e.g. `pendingApprovals`), not only in
   an SSE event.
 - The kernel persists an assistant message only on `message_end`, so a turn that is still streaming lives nowhere but

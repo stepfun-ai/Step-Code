@@ -2,30 +2,29 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
-/*
- * Working-state motion is drawn by the compositor. A `background-position`
- * sweep under clipped text repainted the label on every display frame; the
- * staged mode's border sweep looped forever on an idle page.
- */
-
-/** A stylesheet's rules without its comments, which may name the techniques they replaced. */
+/** A stylesheet's rules without its comments. */
 const css = async (path: string) =>
 	(await readFile(new URL(`../client/src/${path}`, import.meta.url), "utf8")).replace(/\/\*[\s\S]*?\*\//gu, "");
 
-test("working-state motion is composited: no background-position sweeps on text, no endless border sweep", async () => {
+test("working-state labels keep their sweep from the first character to the last", async () => {
 	const shimmer = await css("ui/ShimmerText/ShimmerText.module.css");
-	assert.equal(/background-position/u.test(shimmer), false);
-	assert.match(shimmer, /animation:\s*breathe/u);
-	const breathe = /@keyframes breathe \{([\s\S]*?)\n\}/u.exec(shimmer)?.[1] ?? "";
-	assert.deepEqual([...new Set(breathe.match(/[a-z-]+(?=:)/gu))], ["opacity"]);
+	assert.match(shimmer, /animation:\s*sweep 2s linear infinite/u);
+	assert.match(shimmer, /background-clip:\s*text/u);
+	assert.match(shimmer, /background-size:\s*300% 100%/u);
+	const sweep = /@keyframes sweep \{([\s\S]*?)\n\}/u.exec(shimmer)?.[1] ?? "";
+	assert.match(sweep, /from \{\s*background-position:\s*100% 0;\s*\}\s*to \{\s*background-position:\s*0 0;/u);
+
 	const stream = await css("features/conversation/stream.css");
 	const pending = /\.tool-pending::before \{([^}]*)\}/u.exec(stream)?.[1] ?? "";
-	assert.match(pending, /animation:\s*tool-glow/u);
-	assert.equal(/background-clip/u.test(pending), false);
-	const glow = /@keyframes tool-glow \{([\s\S]*?)\n\}/u.exec(stream)?.[1] ?? "";
-	assert.deepEqual([...new Set(glow.match(/[a-z-]+(?=:)/gu))], ["opacity"]);
+	assert.match(pending, /animation:\s*tool-shimmer 1\.9s linear infinite/u);
+	assert.match(pending, /background-clip:\s*text/u);
+	assert.match(pending, /background-size:\s*260% 100%/u);
+	assert.match(stream, /@keyframes tool-shimmer \{/u);
+});
+
+test("the staged mode's border sweep plays twice, then rests", async () => {
 	const composer = await css("features/composer/composer.css");
 	const sweep = /\.composer-card\[data-mode\]::before \{([^}]*)\}/u.exec(composer)?.[1] ?? "";
-	assert.match(sweep, /animation:\s*mode-border-sweep 3s linear 2;/u, "the mode border plays twice, then rests");
+	assert.match(sweep, /animation:\s*mode-border-sweep 3s linear 2;/u);
 	assert.equal(/infinite/u.test(sweep), false);
 });

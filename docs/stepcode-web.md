@@ -1310,15 +1310,13 @@ folded group. This grouping changes no session entries or model context.
 
 Thinking retains its folded disclosure with a Brain icon. Only the  
 currently streaming thinking block has the tool-style running label and its
-glow; the folded row carries no excerpt of the reasoning. A folded thought
+shimmer; the folded row carries no excerpt of the reasoning. A folded thought
 renders no Markdown at all: its body mounts when opened (showing what has
 arrived, then revealing the rest at about 30 steps a second) and unmounts
 after it closes. Text/tool output, message completion or a settled
 session stops the running state and folds an open live thought. A settled  
-thought can be reopened manually. Reduced-motion skips folding/glow effects.
-Working-state motion (the running label's glow, the waiting indicator's
-breathing) animates opacity only, so the compositor runs it without
-repainting; the staged mode's border sweep plays twice and then rests.
+thought can be reopened manually. Reduced-motion skips folding/shimmer effects.
+The staged mode's border sweep plays twice and then rests.
 The host observes each block's structured thinking start/delta/end events.  
 The label shows elapsed seconds, ticks once per second only while\
 that block is active, and freezes before prose or tool arguments start.  

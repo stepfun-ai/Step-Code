@@ -1,22 +1,30 @@
 /*
- * A soft breathing of the muted label. Only opacity moves, so the compositor
- * runs it on its own layer: the earlier highlight band was a background-position
- * sweep under clipped text, which repainted the text on every display frame
- * (about a seventh of a core while a turn waited for its first token).
+ * The gradient is three times the text width with the band in its middle, so
+ * moving the background from 100% to 0% sweeps the band left to right over the
+ * middle half of each cycle and leaves a short pause before the next sweep.
  */
-@keyframes breathe {
-	0%,
-	100% {
-		opacity: 1;
+@keyframes sweep {
+	from {
+		background-position: 100% 0;
 	}
 
-	50% {
-		opacity: 0.45;
+	to {
+		background-position: 0 0;
 	}
 }
 
 .root {
 	display: inline-block;
-	color: var(--ink-2);
-	animation: breathe 2s ease-in-out infinite;
+	background: linear-gradient(
+		90deg,
+		var(--ink-2) 0%,
+		var(--ink-2) 42%,
+		var(--line-strong) 50%,
+		var(--ink-2) 58%,
+		var(--ink-2) 100%
+	);
+	background-size: 300% 100%;
+	background-clip: text;
+	color: transparent;
+	animation: sweep 2s linear infinite;
 }
