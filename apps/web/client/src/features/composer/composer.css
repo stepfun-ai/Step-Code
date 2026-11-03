@@ -1229,8 +1229,10 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 	border-color: color-mix(in srgb, var(--mode-accent) 70%, var(--focus-border));
 }
 /*
- * 流光描边：一圈模式色高光沿卡片边框循环掠过（mask 只留 1px 边框环，不遮内
- * 容、不挡点击）。prefers-reduced-motion 时被全局规则停用，只剩静态描边。
+ * 流光描边：选中模式时，一圈模式色高光沿卡片边框掠过两次后停下，只留静态描边
+ * （mask 只留 1px 边框环，不遮内容、不挡点击）。它移动的是 background-position，
+ * 每帧都要重绘整张卡片；无限循环时，仅仅选着一个模式空闲放着就占掉近三分之一个
+ * 核，所以只作为进入模式的提示播放。prefers-reduced-motion 时被全局规则停用。
  */
 .composer-card[data-mode]::before {
 	content: "";
@@ -1253,7 +1255,8 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 		linear-gradient(#fff 0 0) content-box,
 		linear-gradient(#fff 0 0);
 	mask-composite: exclude;
-	animation: mode-border-sweep 3s linear infinite;
+	/* Both ends of the sweep put the band outside the ring, so the card rests with a plain border. */
+	animation: mode-border-sweep 3s linear 2;
 	pointer-events: none;
 }
 @keyframes mode-border-sweep {

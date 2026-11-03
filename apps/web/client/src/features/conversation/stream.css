@@ -719,7 +719,12 @@
 	color: var(--ink-3);
 	pointer-events: none;
 }
-/* The base label stays readable; only this decorative copy sweeps over it. */
+/*
+ * The base label stays readable; only this decorative copy, in full ink, glows
+ * over it and fades again. It animates opacity alone, which the compositor runs
+ * without repainting: a background-position sweep under clipped text repainted
+ * every pending row on every display frame.
+ */
 .tool-pending {
 	position: absolute;
 	inset: 0;
@@ -730,11 +735,9 @@
 .tool-pending::before {
 	display: block;
 	content: attr(data-label);
-	background: linear-gradient(100deg, transparent 35%, var(--ink) 50%, transparent 65%);
-	background-clip: text;
-	background-size: 260% 100%;
-	color: transparent;
-	animation: tool-shimmer 1.9s linear infinite;
+	color: var(--ink);
+	opacity: 0;
+	animation: tool-glow 1.9s ease-in-out infinite;
 	animation-play-state: paused;
 }
 .tool-row.pending .tool-pending {
@@ -743,12 +746,13 @@
 .tool-row.pending .tool-pending::before {
 	animation-play-state: running;
 }
-@keyframes tool-shimmer {
-	from {
-		background-position: 100% 0;
+@keyframes tool-glow {
+	0%,
+	100% {
+		opacity: 0;
 	}
-	to {
-		background-position: 0% 0;
+	50% {
+		opacity: 1;
 	}
 }
 @media (prefers-reduced-motion: reduce) {
