@@ -197,6 +197,49 @@ and a live thought after the reader stopped that turn. Each stream connection
 starts a new order — its opening snapshot is authoritative — so a reconnected
 page, a restarted Host and a host that predates revisions all still render.
 
+### How the transcript reaches the page
+
+A session's stream carries its transcript; snapshot reads do not repeat it.
+After every non-delta event the Host publishes, as an `entries` SSE event, the
+branch entries recorded since its previous one, projected like the snapshot's.
+The kernel appends a finished message after notifying its listeners, so the
+Host checks on a microtask, once however many events arrived. When the branch no
+longer extends what was published (tree navigation, a rewind, a rebind to
+another file) the event carries `reset: true` and the whole branch. An earlier
+assistant message whose thinking timing was saved after it is sent again.
+
+Stream events still ask for a snapshot (for retry state, the title, goal and
+plan state), but through one throttled schedule per connection: one read in
+flight at a time, at most one per 400 ms, and each read names the last entry
+the page holds (`GET /api/v1/sessions/{id}?after=<entryId>`), so the answer
+carries only what follows it. A page that no longer holds that entry reads the
+whole session again.
+
+Streaming deltas are coalesced per connection (`apps/web/src/sse-writer.ts`): at
+most one `message_update` per 40 ms, the newest, and the newest
+`tool_execution_update` per running call, each flushed before any other event
+so the order the kernel published is kept. A `message_update` carries its
+message once (no `partial` copy, no tool-call `partialArgs`). The page opens
+its stream with `?delta=1`, so a text, thinking or top-level string argument
+that only grew since the connection's previous update carries just its new
+tail (`appendedTo`, `appendedArguments`), and rebuilds the full message
+(`client/src/state/live-message.ts`); a subscriber without the flag, such as a
+tab still running an older bundle, gets whole messages. The first update of a
+connection and of each message is complete. On a long reply
+this took the stream from about 5.4 MB/s to about 12 KB/s.
+
+Tool-result images (a `read_file` of a screenshot) are model input the page does
+not draw. Snapshots, `entries` and agent events carry them as
+`{ type: "image", mimeType, omitted: true }` placeholders, and
+`GET /api/v1/sessions/{id}/entries/{entryId}/images/{index}` serves one when a
+viewer needs it. The transcript file keeps the data.
+
+On the page, the streaming message's rows (`liveItems`) are kept apart from the
+recorded transcript (`timelineItems`), so a streamed frame re-renders only those
+rows; they join the transcript at the message's end, and the `entries` event
+that follows replaces them with the recorded entry. Rebuilt rows reuse every
+unchanged row object, so memoised rows do not redraw.
+
 ### Restarting with a turn in flight
 
 The kernel writes an assistant message on `message_end`, so a turn that is only
@@ -242,9 +285,10 @@ the whole conversation vanished with the process.
 An `exit_plan_mode` result without a host dialog is a decision waiting for the  
 user. The client turns the tool's persisted `details` into `#planReviewCard`: the  
 proposal, "view full plan", and three buttons — request changes, exit, approve. The card is projected from the tool  
-result in the session entries, not only from the live stream event, because every  
-finished message refreshes the snapshot; a card that existed only on the stream  
-disappeared before anyone could answer it, and a reopened session showed none.
+result in the session entries, not only from the live stream event, because the
+recorded entry replaces the live row as soon as the message is recorded; a card
+that existed only on the stream disappeared before anyone could answer it, and a
+reopened session showed none.
 
 - **Request changes** sends the notes through `/plan`. The pending snapshot is
   cleared and the notes are the whole message: plan mode already tells the model
@@ -966,6 +1010,10 @@ Terminal toggle right after Context. The toggle is not a rail panel: it opens th
 the conversation, so it stays available beside any inspector. Summary is excluded from the  
 Escape chain while a turn is running or waiting, so Escape stops the turn as it does with no  
 inspector open.  
+Every panel stays mounted and toggles `hidden`, but the Context panel builds its message
+list only while it is shown: hidden, it re-rendered every row on each inspector poll. Its
+row previews are computed once per recorded entry, and the app grid has a single definite
+row, so a layout no longer sizes it from the content of both columns.
 Summary replaces the original floating task/subagent banner, rather than  
 coexisting with it. Summary is an independent content-height surface, not the  
 full-height inspector used by other rail entries. The compact board is 320px  
@@ -1261,10 +1309,16 @@ remain outside process folds. Search can reveal recorded thinking inside a
 folded group. This grouping changes no session entries or model context.
 
 Thinking retains its folded disclosure with a Brain icon. Only the  
-currently streaming thinking block has the tool-style running label, shimmer  
-and a short content preview. Text/tool output, message completion or a settled  
+currently streaming thinking block has the tool-style running label and its
+glow; the folded row carries no excerpt of the reasoning. A folded thought
+renders no Markdown at all: its body mounts when opened (showing what has
+arrived, then revealing the rest at about 30 steps a second) and unmounts
+after it closes. Text/tool output, message completion or a settled
 session stops the running state and folds an open live thought. A settled  
-thought can be reopened manually. Reduced-motion skips folding/shimmer effects.  
+thought can be reopened manually. Reduced-motion skips folding/glow effects.
+Working-state motion (the running label's glow, the waiting indicator's
+breathing) animates opacity only, so the compositor runs it without
+repainting; the staged mode's border sweep plays twice and then rests.
 The host observes each block's structured thinking start/delta/end events.  
 The label shows elapsed seconds, ticks once per second only while\
 that block is active, and freezes before prose or tool arguments start.  

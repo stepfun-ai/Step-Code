@@ -230,6 +230,24 @@ When to add or change one:
   snapshot older than the newest revision the page has applied, so a read answered late cannot repaint a stopped turn
   as running (or restore its stop control); each stream connection starts a new order, and its opening snapshot is
   authoritative. Never apply an HTTP snapshot without that gate.
+- The stream carries the transcript; snapshots do not repeat it. After any non-delta event the host publishes the
+  branch entries recorded since its last `entries` event (`queueJournalPublication`; `reset` when the branch no longer
+  extends what was published), and the page appends them (`applyRecordedEntries`). Snapshot reads a stream event asks
+  for go through the connection's throttled schedule (`refreshSchedule`, one read in flight, at most one per 400 ms)
+  and name the last held entry (`?after=`). Do not add per-event `refreshCurrent()` calls.
+- Each SSE connection coalesces `message_update` (one per 40 ms, newest wins) and `tool_execution_update` (newest per
+  call), flushed before any other event (`src/sse-writer.ts`). Frames drop `assistantMessageEvent.partial` and
+  `partialArgs`. On a connection opened with `?delta=1` (the page's own), a grown text, thinking or string argument
+  carries only its tail (`appendedTo`, `appendedArguments`); `state/live-message.ts` rebuilds them. Page code reads
+  the rebuilt message, never those fields; other subscribers get whole messages. Tool-result images are placeholders on the wire and in snapshots, served by
+  `/entries/{entryId}/images/{index}`.
+- The streaming message's rows live in `liveItems`, not `timelineItems`, so a streamed frame re-renders only them;
+  they join the transcript at the message's end. Readers of whole turns (changes, footers, deliveries, the right
+  panel) read `timelineItems`.
+- Working-state indicators (shimmer labels, pending tool rows) animate only `opacity` or `transform`: a
+  `background-position` sweep under clipped text repaints every frame. A decorative cue that does repaint (the staged
+  mode's border sweep) plays a bounded number of times and then rests static; looping, it cost about a third of a core
+  while the page sat idle.
 - Anything a reloaded page must show again belongs in the session snapshot (e.g. `pendingApprovals`), not only in
   an SSE event.
 - The kernel persists an assistant message only on `message_end`, so a turn that is still streaming lives nowhere but
