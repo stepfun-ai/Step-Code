@@ -31,6 +31,9 @@ describe("issue #7829 invalid settings warning", () => {
 				redraw: { requestRender: vi.fn() },
 				version: "test",
 				showWarning: (InteractiveMode.prototype as unknown as { showWarning(message: string): void }).showWarning,
+				// The Pi presentation (no tuiStyle here) keeps ambient warnings in the transcript.
+				recordWarning: (InteractiveMode.prototype as unknown as { recordWarning(message: string): void })
+					.recordWarning,
 				session: harness.session,
 				checkForPackageUpdates: vi.fn().mockResolvedValue([]),
 				checkTmuxKeyboardSetup: vi.fn().mockResolvedValue(undefined),

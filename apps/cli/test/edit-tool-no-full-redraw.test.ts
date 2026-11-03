@@ -198,6 +198,59 @@ describe("edit tool TUI rendering", () => {
 		expect(rendered).toContain("line 150 changed");
 	});
 
+	it("keeps the applied change on a Step card whose call failed after writing", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-edit-failed-"));
+		tempDirs.push(dir);
+		const filePath = join(dir, "cancelled-check.txt");
+		await writeFile(filePath, "before\n", "utf8");
+
+		const terminal = new FakeTerminal();
+		const tui: TUI = new TuiMainScreen(terminal);
+		const component = new ToolExecutionComponent(
+			"edit",
+			"tool-call-failed",
+			{ path: filePath, edits: [{ oldText: "before", newText: "after" }] },
+			{ presentation: "step" },
+			createEditToolDefinition(process.cwd()),
+			tui,
+			process.cwd(),
+		);
+		tui.addChild(component);
+		tui.start();
+		await waitForRender();
+
+		// The edit landed, then the check the call ran alongside was cancelled: the
+		// recorded change is real, the call is not. Recomputed from the args against
+		// the file it already changed, the preview finds no match and reports an error
+		// of its own, which is not what the call did.
+		await writeFile(filePath, "after\n", "utf8");
+		component.setArgsComplete();
+		tui.requestRender();
+		await waitForRender();
+		await waitForRender();
+		// The args-based preview, computed against the file the call already changed.
+		expect(component.render(200).join("\n")).toContain("Could not find");
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "Successfully replaced 1 occurrence(s) in cancelled-check.txt.\n\nthen_run: $ check\nCommand aborted" }],
+				details: { diff: "-1 before\n+1 after\n", patch: "--- cancelled-check.txt\n+++ cancelled-check.txt\n@@ -1,1 +1,1 @@\n-before\n+after\n", firstChangedLine: 1 },
+				isError: true,
+			},
+			false,
+		);
+		tui.requestRender();
+		await waitForRender();
+		await waitForRender();
+
+		const rendered = component.render(200).join("\n");
+		// The diff comes from the result, so it replaces the stale preview error.
+		expect(rendered).toContain("-1 before");
+		expect(rendered).toContain("+1 after");
+		expect(rendered).not.toContain("Could not find");
+		// The call still reads as failed.
+		expect(rendered).toContain("Command aborted");
+	});
+
 	it("shows a preflight error without rendering a diff when the edits do not apply", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-edit-preflight-"));
 		tempDirs.push(dir);
@@ -231,5 +284,45 @@ describe("edit tool TUI rendering", () => {
 		);
 		expect(rendered).not.toContain("+1 ");
 		expect(rendered).not.toContain("-1 ");
+	});
+
+	it("shows no diff for a failed call that recorded nothing", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-edit-nodetail-"));
+		tempDirs.push(dir);
+		const filePath = join(dir, "unchanged.txt");
+		await writeFile(filePath, "line 0\n", "utf8");
+
+		const terminal = new FakeTerminal();
+		const tui: TUI = new TuiMainScreen(terminal);
+		const component = new ToolExecutionComponent(
+			"edit",
+			"tool-call-nodetail",
+			{ path: filePath, edits: [{ oldText: "does not exist", newText: "replacement" }] },
+			{ presentation: "step" },
+			createEditToolDefinition(process.cwd()),
+			tui,
+			process.cwd(),
+		);
+		tui.addChild(component);
+		tui.start();
+		await waitForRender();
+		component.setArgsComplete();
+		tui.requestRender();
+		await waitForRender();
+
+		// The renderer reads a result's diff whatever the call's own status is, so a
+		// failure that carries no change record must not invent one.
+		component.updateResult(
+			{ content: [{ type: "text", text: "No matches for search string in unchanged.txt" }], details: {}, isError: true },
+			false,
+		);
+		tui.requestRender();
+		await waitForRender();
+		await waitForRender();
+
+		const rendered = component.render(200).join("\n");
+		expect(rendered).toContain("No matches");
+		expect(rendered).not.toContain("-1 line 0");
+		expect(rendered).not.toContain("+1 ");
 	});
 });

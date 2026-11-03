@@ -45,11 +45,10 @@ function exitPlanModeDefinition(): ToolDefinition<any, any, any> {
 	} as unknown as ExtensionAPI;
 	registerPlanModeTools(api, {
 		isPlanModeActive: () => true,
-		enteredByUser: () => false,
 		exitPlanMode: () => {},
 		resolvePlanFilePath: () => "/tmp/plan.md",
 		recordPendingProposal: () => {},
-		pendingProposalHash: () => undefined,
+		handOffProposal: () => {},
 		clearPendingProposal: () => {},
 	} satisfies StepPlanModeController);
 	return tools.get("exit_plan_mode") as ToolDefinition<any, any, any>;

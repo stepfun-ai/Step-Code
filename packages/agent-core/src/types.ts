@@ -46,6 +46,9 @@ export type ToolExecutionMode = "sequential" | "parallel";
  *
  * - "all": drain and inject every queued message at that point.
  * - "one-at-a-time": drain and inject only the oldest queued message, leaving the rest queued for later drain points.
+ *
+ * A delivery filter can withhold messages: "oldest" then means the oldest one it
+ * allows, and withheld messages stay queued in their original order.
  */
 export type QueueMode = "all" | "one-at-a-time";
 
