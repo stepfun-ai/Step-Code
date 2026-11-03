@@ -101,6 +101,35 @@ export async function selectPolicy(preset: string): Promise<void> {
 }
 
 /**
+ * Answer the plan card with one of the kernel's own verbs.
+ *
+ * A decision cannot wait behind the turn it is meant to answer, and the host queue
+ * is held while a proposal is open, so a queued answer would never be dispatched.
+ * It goes straight to the kernel, which runs a command even while a turn is
+ * active. Only the card uses this: an ordinary `/plan <task>` typed into the
+ * composer keeps the normal queue semantics.
+ */
+export async function sendPlanDecision(text: string): Promise<boolean> {
+	const current = getState().current;
+	if (!current) return false;
+	try {
+		await api(`/api/v1/sessions/${current.id}/messages`, {
+			method: "POST",
+			body: JSON.stringify({ text, attachments: [], files: [] }),
+		});
+		// The card stays actionable until the snapshot says the proposal is answered,
+		// so pull the state the decision settled on. The decision itself is already
+		// made: a failed poll must not report it as failed, and an unawaited rejection
+		// would surface as an unhandled one.
+		void refreshCurrent().catch(() => {});
+		return true;
+	} catch (error) {
+		showError(errorMessage(error));
+		return false;
+	}
+}
+
+/**
  * Leave plan mode now, without composing a message.
  *
  * `/plan off` is a kernel command, so the host applies it immediately even while

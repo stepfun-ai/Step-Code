@@ -8,13 +8,17 @@
  *
  * - "request changes" sends the notes through `/plan`, which keeps planning and
  *   produces a new proposal to review;
- * - "approve and run" sends `/plan approve`, which leaves plan mode and starts
- *   the implementation turn as one decision.
+ * - "approve and run" sends `/plan approve <hash>`, naming the snapshot this card
+ *   shows, which leaves plan mode and starts the implementation turn as one
+ *   decision.
  *
- * Both are ordinary user messages: the decision lands in the transcript, starts
- * one turn, and needs no special execution channel. The state projection marks
- * only the newest undecided proposal actionable; older cards stay inert (see
- * `settlePlanReviews`).
+ * Both are the kernel's own commands, so they run even while a turn is active: a
+ * decision cannot wait behind the turn it is meant to answer. The card remains
+ * actionable until the session stops reporting its proposal as waiting, so a
+ * decision the kernel refused is never hidden.
+ *
+ * The state projection marks only the newest undecided proposal actionable; older
+ * cards stay inert (see `settlePlanReviews`).
  */
 
 import { useState } from "react";
@@ -22,21 +26,22 @@ import { useT } from "../../i18n";
 import { useAppStore } from "../../state/store";
 import type { PlanReview } from "../../state/types";
 import { Icon } from "../../ui";
-import { leavePlanMode, sendMessage } from "../composer/actions";
+import { leavePlanMode, sendPlanDecision } from "../composer/actions";
 import { openFile } from "../files/actions";
 
 export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 	const t = useT();
 	const [notes, setNotes] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
-	const [settled, setSettled] = useState(false);
 
 	const send = async (text: string): Promise<void> => {
 		if (busy || !text.trim()) return;
 		setBusy(true);
 		try {
-			// One decision per card: the proposal it answered is no longer current.
-			if (await sendMessage(text)) setSettled(true);
+			// The card stays actionable until the session says it is not: a decision
+			// the kernel refused (the plan file changed under the proposal) must leave
+			// the answer on screen, not hide it behind a card that thinks it is done.
+			await sendPlanDecision(text);
 		} finally {
 			setBusy(false);
 		}
@@ -47,7 +52,7 @@ export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 	// proposal can carry byte-identical text, so comparing hashes here would make
 	// every earlier round with the same text actionable too. Both places that draw
 	// the card agree because they read the same projection.
-	const actionable = review.pending && !settled;
+	const actionable = review.pending;
 	// The plan file lives inside the session's workspace, so the preview can read
 	// it by its workspace-relative path.
 	const previewCwd = useAppStore((state) => state.current?.cwd ?? "");
@@ -110,7 +115,9 @@ export function PlanReviewCard({ review }: { readonly review: PlanReview }) {
 								className="plan-review-button approve"
 								id={id("planApprove", actionable)}
 								disabled={busy}
-								onClick={() => void send("/plan approve")}
+								// Name the snapshot this card shows: a decision that arrives after a
+								// newer submission must not approve that one.
+								onClick={() => void send(`/plan approve ${review.planHash}`)}
 							>
 								{t("planApprove")}
 							</button>
