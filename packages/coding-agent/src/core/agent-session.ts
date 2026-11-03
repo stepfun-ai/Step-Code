@@ -1379,6 +1379,8 @@ export class AgentSession {
 	private _runFailure: AgentRunFailure | undefined = undefined;
 	/** Last automatic-compaction failure detail, used to explain a failed incomplete-turn recovery. */
 	private _lastAutoCompactionFailure: string | undefined = undefined;
+	/** Session entry the last assistant message was persisted as, for pairing a recovery. */
+	private _lastAssistantEntryId: string | undefined = undefined;
 	/** Recovery prompt selected at the end of a turn and waiting for its continuation to start. */
 	private _pendingIncompleteTurnRecovery: CustomMessage | undefined = undefined;
 
@@ -1440,6 +1442,8 @@ export class AgentSession {
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
 				const entryId = this.sessionManager.appendMessage(event.message);
+				// The entry id lets a later recovery message name the turn it answers.
+				if (event.message.role === "assistant") this._lastAssistantEntryId = entryId;
 				if (event.message.role === "assistant" && this._extensionRunner?.hasHandlers("usage_recorded")) {
 					const provenance = readRequestUsage(event.message);
 					if (provenance) await this._extensionRunner.emit({ type: "usage_recorded", entryId, provenance });
@@ -2148,6 +2152,7 @@ export class AgentSession {
 			// of a run they ended themselves would turn their pause into a failure.
 			if (runAbortController.signal.aborted) this._runFailure = undefined;
 			this._pendingIncompleteTurnRecovery = undefined;
+			this._lastAssistantEntryId = undefined;
 			this._incompleteTurnStreak = 0;
 			this._checkedInitialRequest = undefined;
 			this._systemPromptOverride = undefined;
@@ -2261,7 +2266,10 @@ export class AgentSession {
 			// here; a compaction may still have run above, which only helps the next
 			// prompt fit.
 			if (this._runFailure) return false;
-			this._pendingIncompleteTurnRecovery = createIncompleteTurnRecoveryMessage(incompleteReason);
+			this._pendingIncompleteTurnRecovery = createIncompleteTurnRecoveryMessage(
+				incompleteReason,
+				this._lastAssistantEntryId,
+			);
 			return true;
 		}
 

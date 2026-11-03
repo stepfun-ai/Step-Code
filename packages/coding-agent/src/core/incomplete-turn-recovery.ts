@@ -28,12 +28,24 @@ const RECOVERY_PROMPTS: Record<IncompleteTurnReason, string> = {
 	].join("\n"),
 };
 
-export function createIncompleteTurnRecoveryMessage(reason: IncompleteTurnReason): CustomMessage {
+/**
+ * The hidden follow-up that asks the model to continue an empty turn.
+ *
+ * `recoversEntryId` names the session entry this message was sent for, so a reader
+ * can pair the two by identity instead of guessing from their position: a session
+ * writes other entries in between (usage provenance, a compaction, a model or
+ * thinking-level change). It is metadata, never sent to the model.
+ */
+export function createIncompleteTurnRecoveryMessage(
+	reason: IncompleteTurnReason,
+	recoversEntryId?: string,
+): CustomMessage {
 	return {
 		role: "custom",
 		customType: INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
 		content: RECOVERY_PROMPTS[reason],
 		display: false,
+		...(recoversEntryId ? { details: { recoversEntryId } } : {}),
 		timestamp: Date.now(),
 	};
 }

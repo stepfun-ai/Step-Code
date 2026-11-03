@@ -856,6 +856,23 @@ describe("incomplete assistant turn recovery", () => {
 		]);
 	});
 
+	it("names the turn it answers, so a reader can pair them without their positions", async () => {
+		const harness = await createHarness({ sessionPersistence: true });
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage(fauxThinking("first attempt")), fauxAssistantMessage("Recovered.")]);
+
+		await harness.session.prompt("Inspect the workspace");
+
+		const branch = harness.sessionManager.getBranch();
+		const empty = branch.find(
+			(entry) => entry.type === "message" && entry.message.role === "assistant" && entry.message.incomplete,
+		);
+		const recovery = branch.find(
+			(entry) => entry.type === "custom_message" && entry.customType === INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
+		);
+		expect(recovery).toMatchObject({ details: { recoversEntryId: empty?.id } });
+	});
+
 	it("does not recover a provider error", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
