@@ -3623,7 +3623,8 @@ test("stopping a long streaming turn settles it and a late snapshot cannot resta
     const realFetch = window.fetch;
     window.fetch = (input, init) => {
       const url = String(typeof input === "string" ? input : input.url);
-      const read = /\\/api\\/v1\\/sessions\\/[^/?]+$/.test(url);
+      // A refresh names the last entry it holds (\`?after=<id>\`); it is the same snapshot read.
+      const read = /\\/api\\/v1\\/sessions\\/[^/?]+(?:\\?.*)?$/.test(url);
       if (!read || (init && init.method && init.method !== "GET") || !gate.holding) return realFetch(input, init);
       const issuedAt = Math.round(performance.now());
       return realFetch(input, init).then(async (response) => {

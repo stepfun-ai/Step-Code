@@ -91,9 +91,25 @@ const STICK_THRESHOLD = 48;
  */
 export function ConversationStream() {
 	const t = useT();
+	const timeline = useAppStore((state) => state.timelineItems);
 	// A pending approval is the page's one decision, drawn by `DecisionPanel` above
 	// the composer; the transcript would otherwise show the same question twice.
-	const items = useAppStore((state) => state.timelineItems.filter((item) => item.kind !== "approval"));
+	const history = useMemo(() => timeline.filter((item) => item.kind !== "approval"), [timeline]);
+	/*
+	 * The rows of the reply streaming right now change every frame; the recorded
+	 * transcript does not. Everything derived from whole turns (changes, footers,
+	 * deliveries) reads `history`, so a streamed frame regroups and redraws only
+	 * the trailing rows. Live rows end an unsettled turn, which has no footer or
+	 * delivery yet, so leaving them out of those derivations changes nothing.
+	 */
+	const live = useAppStore((state) => state.liveItems);
+	const items = useMemo(() => {
+		if (!live.length) return history;
+		// A call is a live row while its arguments stream; the transcript never holds it twice. An
+		// earlier message's live rows that no recorded entry replaced give way to the new one's.
+		const ids = new Set(live.map((item) => item.itemId));
+		return [...history.filter((item) => !ids.has(item.itemId) && !item.itemId.startsWith("message-live")), ...live];
+	}, [history, live]);
 	const pendingTurn = useAppStore((state) => state.pendingTurn);
 	// Sent with "立即" or Cmd/Ctrl+Enter: the kernel reads them after the current tool call; shown already.
 	const steering = useAppStore((state) => state.current?.steeringMessages ?? NO_STEERING);
@@ -122,29 +138,29 @@ export function ConversationStream() {
 		() => notices.filter((notice) => notice.sessionId === sessionId),
 		[notices, sessionId],
 	);
-	const turns = useMemo(() => collectTurnChanges(items, cwd), [items, cwd]);
+	const turns = useMemo(() => collectTurnChanges(history, cwd), [history, cwd]);
 	const footerAfter = useMemo(
-		() => new Map(collectTurnFooters(items, status, pendingTurn !== null).map((turn) => [turn.lastIndex, turn])),
-		[items, status, pendingTurn],
+		() => new Map(collectTurnFooters(history, status, pendingTurn !== null).map((turn) => [turn.lastIndex, turn])),
+		[history, status, pendingTurn],
 	);
 	const timestampOnly = useMemo(() => {
 		const actionTurns = new Set([...footerAfter.values()].map((turn) => turn.turnId));
 		return new Set(
-			collectTurnFooters(items, status, pendingTurn !== null, true)
+			collectTurnFooters(history, status, pendingTurn !== null, true)
 				.filter((turn) => !actionTurns.has(turn.turnId))
 				.map((turn) => turn.messages.at(-1)),
 		);
-	}, [items, status, pendingTurn, footerAfter]);
+	}, [history, status, pendingTurn, footerAfter]);
 	// Each delivery carries its own turn's change, so its card opens that turn's diff, not the file as it is now.
 	const artifactsAfter = useMemo(() => {
 		const changesByTurn = new Map(turns.map((turn) => [turn.turnId, turn]));
 		return new Map(
 			[...footerAfter].map(([index, footer]) => [
 				index,
-				withTurnChanges(turnArtifacts(items, footer, cwd), changesByTurn.get(footer.turnId), cwd),
+				withTurnChanges(turnArtifacts(history, footer, cwd), changesByTurn.get(footer.turnId), cwd),
 			]),
 		);
-	}, [footerAfter, items, cwd, turns]);
+	}, [footerAfter, history, cwd, turns]);
 	/*
 	 * Each turn's deliverables attach to the bubble that closed it, as the
 	 * answer handing its files over, instead of a strip after the whole turn.
@@ -152,14 +168,14 @@ export function ConversationStream() {
 	const attachmentsFor = useMemo(() => {
 		const perMessage = new Map<MessageTimelineItem, readonly TurnArtifact[]>();
 		let closing: MessageTimelineItem | null = null;
-		items.forEach((item, index) => {
+		history.forEach((item, index) => {
 			if (item.kind === "message" && item.role === "user") closing = null;
 			if (item.kind === "message" && item.role === "assistant") closing = item;
 			const artifacts = footerAfter.get(index) ? artifactsAfter.get(index) : undefined;
 			if (artifacts?.length && closing) perMessage.set(closing, artifacts);
 		});
 		return perMessage;
-	}, [footerAfter, artifactsAfter, items]);
+	}, [footerAfter, artifactsAfter, history]);
 
 	// A new session or a sent message: follow the bottom again.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the session id and the pending messages are the triggers.
@@ -167,16 +183,16 @@ export function ConversationStream() {
 		stick.current = true;
 		scrollToEnd(streamRef.current);
 	}, [sessionId, pendingTurn, steering.length]);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: items and locale change the content height.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the locale changes the content height.
 	useLayoutEffect(() => {
 		if (stick.current) scrollToEnd(streamRef.current);
-	}, [items, locale]);
+	}, [locale]);
 	// A search hit: once its session's timeline is drawn, centre the entry and stop following the end.
 	// The reveal is cleared only after the lookup. Clearing it first and giving up
 	// when the row is absent left the reader at the newest message with no
 	// explanation, which reads as "the jump went to the end".
 	useLayoutEffect(() => {
-		if (!reveal || reveal.sessionId !== sessionId || !items.length) return;
+		if (!reveal || reveal.sessionId !== sessionId || !history.length) return;
 		const target = innerRef.current?.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(reveal.entryId)}"]`);
 		setUi({ revealEntry: null });
 		if (!target) {
@@ -190,8 +206,12 @@ export function ConversationStream() {
 		}
 		stick.current = false;
 		target.scrollIntoView({ block: reveal.block ?? "center", behavior: reveal.behavior });
-	}, [reveal, sessionId, items, t]);
-	// The live reply grows between store updates (smooth reveal), so watch the size too.
+	}, [reveal, sessionId, history, t]);
+	/*
+	 * New output follows the bottom by its size, not by each store update: the
+	 * observer runs after the browser's own layout, where reading the height
+	 * costs nothing, instead of forcing a layout inside every streamed frame.
+	 */
 	useEffect(() => {
 		const inner = innerRef.current;
 		if (!inner) return;

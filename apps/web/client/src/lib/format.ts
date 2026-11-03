@@ -6,12 +6,27 @@
 
 import type { ToolArgs } from "../state/types";
 
-/** Collapse whitespace and cut to `limit` characters with an ellipsis (legacy `compact`). */
+/**
+ * Collapse whitespace and cut to `limit` characters with an ellipsis (legacy `compact`).
+ *
+ * Only a prefix of the text can reach the cut, so only a prefix is normalised:
+ * a tool's whole output used to be run through the whitespace pass to keep its
+ * first line, on every rebuild of the transcript. The prefix grows until it
+ * decides the result, which is the same as normalising everything.
+ */
 export function compact(value: unknown, limit = 120): string {
-	const text = String(value ?? "")
-		.replace(/\s+/g, " ")
-		.trim();
-	return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+	const raw = String(value ?? "");
+	let end = Math.min(raw.length, limit * 2 + 16);
+	for (;;) {
+		// Collapsing a prefix yields a prefix of the collapsed whole.
+		const head = raw.slice(0, end).replace(/\s+/g, " ").trimStart();
+		if (end >= raw.length) {
+			const text = head.trimEnd();
+			return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+		}
+		if (head.trimEnd().length > limit) return `${head.slice(0, limit - 1)}…`;
+		end = Math.min(raw.length, end * 2);
+	}
 }
 
 /** Fields that name a structured argument for a reader, in preference order. */

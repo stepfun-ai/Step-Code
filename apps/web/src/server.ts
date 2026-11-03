@@ -94,6 +94,7 @@ import {
 	updateMarketplace,
 } from "./settings.ts";
 import { SitePreviewServer } from "./site-preview.ts";
+import { SseSessionWriter } from "./sse-writer.ts";
 import { WebTerminals } from "./terminal.ts";
 import { terminalRoute } from "./terminal-routes.ts";
 import { TurnRevertError } from "./turn-changes.ts";
@@ -1159,7 +1160,25 @@ const server = createServer(async (request, response) => {
 				return json(response, 200, { ok: true });
 			}
 			const session = await store.getOrOpen(parts[3]);
-			if (parts.length === 4 && method === "GET") return json(response, 200, session.snapshot());
+			if (parts.length === 4 && method === "GET") {
+				// `after`: the last entry the page holds, so a refresh carries only what follows it.
+				return json(response, 200, session.snapshot(url.searchParams.get("after") || undefined));
+			}
+			if (parts[4] === "entries" && parts[6] === "images" && parts.length === 8 && method === "GET") {
+				// Snapshots and events carry tool-result images as placeholders; the page reads one here when it shows it.
+				const index = Number(parts[7]);
+				const image = /^\d+$/u.test(parts[7]) ? session.entryImage(decodeURIComponent(parts[5]), index) : undefined;
+				if (!image || !/^image\/[\w.+-]+$/u.test(image.mimeType)) return error(response, 404, "Image not found");
+				const bytes = Buffer.from(image.data, "base64");
+				response.writeHead(200, {
+					"content-type": image.mimeType,
+					"content-length": String(bytes.length),
+					"cache-control": "no-store",
+					"x-content-type-options": "nosniff",
+				});
+				response.end(bytes);
+				return;
+			}
 			if (parts.length === 5 && parts[4] === "inspector" && method === "GET")
 				return json(response, 200, session.inspector());
 			if (parts[4] === "children" && method === "GET") {
@@ -1189,16 +1208,24 @@ const server = createServer(async (request, response) => {
 					connection: "keep-alive",
 				});
 				response.write(`event: snapshot\ndata: ${JSON.stringify(session.snapshot())}\n\n`);
-				const unsubscribe = session.subscribe((event) => {
-					const eventName = event.type === "error" ? "web_error" : event.type;
-					response.write(`event: ${eventName}\ndata: ${JSON.stringify(event)}\n\n`);
-				});
+				// `delta=1`: the page rebuilds streamed text from appended tails (`client/src/state/live-message.ts`).
+				const writer = new SseSessionWriter(
+					(eventName, data) => {
+						response.write(`event: ${eventName}\ndata: ${data}\n\n`);
+					},
+					{ tails: url.searchParams.get("delta") === "1" },
+				);
+				const unsubscribe = session.subscribe((event) => writer.publish(event));
 				// Following the stream is looking at the session: its outcome is seen.
 				const unwatch = session.watch();
 				// A closed session (e.g. rebuilt after sign-in) sends nothing more; end
 				// the stream so the page's EventSource reconnects to its replacement.
-				const stopOnClose = session.onClose(() => response.end());
+				const stopOnClose = session.onClose(() => {
+					writer.flush();
+					response.end();
+				});
 				response.on("close", () => {
+					writer.close();
 					unsubscribe();
 					unwatch();
 					stopOnClose();

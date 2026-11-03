@@ -25,7 +25,9 @@ import {
 	retainComposerDraftWork,
 	sessionComposerDraft,
 } from "./composer-drafts";
+import { LiveMessageAssembler } from "./live-message";
 import { observePerformance } from "./performance";
+import { coalesced, type Throttle, throttled } from "./refresh-schedule";
 import { arrangementChanged, pruneSessionPreferences, writeSessionPreferences } from "./session-order";
 import { type AppState, getState, mapWith, setState, setUi, type ToastState } from "./store";
 import {
@@ -39,6 +41,7 @@ import {
 import { restoreTagGroups, updateTagGroups } from "./tag-group-persistence";
 import { pruneTagGroups, withoutSessionTag } from "./tag-groups";
 import { readThinkingTimings } from "./thinking-timing";
+import { completeSnapshot, mergeEntries, reuseTimelineItems } from "./timeline-reuse";
 import type {
 	AccountReport,
 	ApprovalRequest,
@@ -853,6 +856,33 @@ function approvalItems(snapshot: SessionSnapshot): TimelineItem[] {
 }
 
 /**
+ * The transcript rows for `entries` (the recorded branch) in `session`'s state:
+ * the projection, the live subagent lanes and completed answers over it, and the
+ * approvals still waiting at the end.
+ */
+function transcriptItems(
+	session: SessionSnapshot,
+	entries: readonly SessionEntry[] | undefined,
+	approvals: readonly TimelineItem[],
+): readonly TimelineItem[] {
+	return [
+		...withSubagentLaneState(
+			// Only a proposal this page can answer is actionable: a handoff that
+			// already left the mode has no card here, and marking it pending
+			// would both hide it from the transcript and block the composer.
+			timelineFromEntries(
+				entries,
+				session.retry,
+				session.planMode?.enabled === true ? session.pendingPlanHash : undefined,
+			),
+			session.subagentLanes,
+			entries,
+		),
+		...approvals,
+	];
+}
+
+/**
  * Make `snapshot` the current session (legacy `renderSnapshot`, 2992-3011).
  * Everything the legacy function painted is derived from these fields.
  * `adoptDraft` marks the session a draft just became: what the draft opened in
@@ -899,25 +929,20 @@ export function renderSnapshot(
 	const inputPatch = composerDraftPatch(
 		sessionComposerDraft(snapshot.id, options.adoptDraft ? getState().composerDraftId : undefined),
 	);
+	// Another session, or this page's own stream starting over: its buffered and
+	// streaming rows belong to a stream that is gone. A new connection starts its
+	// frames complete, so only then does the assembler start over too.
+	const restart = options.fromStream || previousSessionId !== snapshot.id;
+	if (restart) discardLiveFrames();
+	if (options.fromStream) liveMessage.reset();
 	setState((state) => {
 		const live = state.current?.id === snapshot.id ? state.current : undefined;
 		const timelineItems = holdStream
 			? state.timelineItems
-			: [
-					...withSubagentLaneState(
-						// Only a proposal this page can answer is actionable: a handoff that
-						// already left the mode has no card here, and marking it pending
-						// would both hide it from the transcript and block the composer.
-						timelineFromEntries(
-							snapshot.entries,
-							snapshot.retry,
-							snapshot.planMode?.enabled === true ? snapshot.pendingPlanHash : undefined,
-						),
-						snapshot.subagentLanes,
-						snapshot.entries,
-					),
-					...approvalItems(snapshot),
-				];
+			: reuseTimelineItems(
+					live ? state.timelineItems : [],
+					transcriptItems(snapshot, snapshot.entries, approvalItems(snapshot)),
+				);
 		const pendingTurn = holdStream
 			? state.pendingTurn
 			: state.pendingTurn && countUserMessages(timelineItems) > state.pendingTurn.userCount
@@ -934,11 +959,14 @@ export function renderSnapshot(
 						queuedMessages: live.queuedMessages,
 						steeringMessages: live.steeringMessages,
 						subagentLanes: live.subagentLanes,
+						// The transcript is the stream's too: its `entries` events are newer than this answer.
+						entries: live.entries,
 					}
 				: snapshot;
 		return {
 			...inputPatch,
 			current,
+			...(restart ? { liveItems: [] } : {}),
 			performanceRun: !holdStream && state.current?.id !== snapshot.id ? null : state.performanceRun,
 			policiesCache: snapshot.policies ?? state.policiesCache,
 			draftCwd: snapshot.cwd,
@@ -992,12 +1020,18 @@ export function applyQueueState(sessionId: string, queue: QueueState): void {
 /* ── Live stream ─────────────────────────────────────────────────────────── */
 
 let stream: EventSource | null = null;
+/** Rebuilds the streaming message from the current connection's shortened frames (`live-message.ts`). */
+const liveMessage = new LiveMessageAssembler();
 
 /** Close the current session's event stream, if any. */
 export function closeStream(): void {
 	stream?.close();
 	stream = null;
-	setState({ performanceRun: null, compacting: false });
+	discardLiveFrames();
+	liveMessage.reset();
+	refreshSchedule.cancel();
+	refreshSchedule = streamRefresh();
+	setState({ performanceRun: null, compacting: false, liveItems: [] });
 	liveApprovals.clear();
 	liveClarifications.clear();
 	resolvedClarifications.clear();
@@ -1007,7 +1041,12 @@ export function closeStream(): void {
 interface AgentStreamEvent {
 	readonly entry?: unknown;
 	readonly type: string;
-	readonly message?: { readonly role?: string; readonly content?: unknown; readonly usage?: unknown };
+	readonly message?: {
+		readonly role?: string;
+		readonly content?: unknown;
+		readonly usage?: unknown;
+		readonly timestamp?: unknown;
+	};
 	readonly toolCallId?: string;
 	readonly toolName?: string;
 	readonly args?: unknown;
@@ -1028,11 +1067,10 @@ function noteRevision(id: string, revision: number | undefined): void {
 
 function updateTimeline(update: (items: readonly TimelineItem[]) => readonly TimelineItem[]): void {
 	setState((state) => {
-		const timelineItems = withSubagentLaneState(
-			update(state.timelineItems),
-			state.current?.subagentLanes,
-			state.current?.entries,
-		);
+		const updated = update(state.timelineItems);
+		// Unchanged rows publish nothing, so no reader of the transcript re-renders for them.
+		if (updated === state.timelineItems) return {};
+		const timelineItems = withSubagentLaneState(updated, state.current?.subagentLanes, state.current?.entries);
 		return {
 			timelineItems,
 			pendingPlanReview: pendingPlanReviewFrom(timelineItems, state.current),
@@ -1074,6 +1112,44 @@ export function applyCompletedSubagentEntry(sessionId: string, value: unknown): 
 	});
 }
 
+/**
+ * Entries the host recorded since its previous `entries` event (runtime.ts
+ * `queueJournalPublication`), applied in stream order: the transcript grows
+ * without re-reading the session. `reset` carries the whole branch instead,
+ * when it no longer extends what was published (a rewind, another file).
+ */
+export function applyRecordedEntries(
+	sessionId: string,
+	incoming: readonly SessionEntry[],
+	options: { readonly reset?: boolean } = {},
+): void {
+	setState((state) => {
+		const current = state.current;
+		if (current?.id !== sessionId) return {};
+		const entries = options.reset ? incoming : mergeEntries(current.entries ?? [], incoming);
+		if (entries === current.entries) return {};
+		const next = { ...current, entries };
+		// Approval rows belong to approval events and snapshots: recomputing them from the
+		// snapshot this page last read would bring back one that was decided since.
+		const approvals = state.timelineItems.filter((item) => item.kind === "approval");
+		const rebuilt = transcriptItems(next, entries, approvals);
+		// The prompt's own row stays until its recorded message arrives.
+		const promptRow = incoming.some((entry) => entry.type === "message" && entry.message?.role === "user")
+			? undefined
+			: state.timelineItems.find((item) => item.itemId === "message-user-live");
+		const timelineItems = reuseTimelineItems(state.timelineItems, promptRow ? [...rebuilt, promptRow] : rebuilt);
+		return {
+			current: next,
+			timelineItems,
+			pendingPlanReview: pendingPlanReviewFrom(timelineItems, next),
+			pendingTurn:
+				state.pendingTurn && countUserMessages(timelineItems) > state.pendingTurn.userCount
+					? null
+					: state.pendingTurn,
+		};
+	});
+}
+
 /** Replace the row with the same id in place, or append it. */
 function upsertItem(items: readonly TimelineItem[], item: TimelineItem): readonly TimelineItem[] {
 	const index = items.findIndex((candidate) => candidate.itemId === item.itemId);
@@ -1104,9 +1180,24 @@ export function liveMessageTimeline(
 	thinkingIndex?: number,
 	thinkingTimings?: ThinkingTimings,
 ): readonly TimelineItem[] {
+	const rows = liveMessageRows(items, content, thinkingIndex, thinkingTimings);
+	const ids = new Set(rows.map((row) => row.itemId));
+	return [...items.filter((item) => !item.itemId.startsWith("message-live") && !ids.has(item.itemId)), ...rows];
+}
+
+/**
+ * The rows of the streaming message alone, in content order. `items` is the
+ * transcript they follow: a call whose execution already started keeps the row
+ * its tool events own, and a call still streaming keeps what they added.
+ */
+export function liveMessageRows(
+	items: readonly TimelineItem[],
+	content: unknown,
+	thinkingIndex?: number,
+	thinkingTimings?: ThinkingTimings,
+): readonly TimelineItem[] {
 	const blocks = assistantBlocks(content);
-	const callIds = new Set(blocks.filter((block) => block.type === "toolCall").map((block) => `tool-${block.id}`));
-	const next = items.filter((item) => !item.itemId.startsWith("message-live") && !callIds.has(item.itemId));
+	const next: TimelineItem[] = [];
 	let hasText = false;
 	for (const call of blocks) {
 		if (call.type === "thinking") {
@@ -1159,39 +1250,146 @@ export function liveMessageTimeline(
 	return next;
 }
 
-/** message_update fires per token; render at most once per frame. */
+/**
+ * The streaming message's latest content, drawn at most once per frame into
+ * `liveItems` only: the recorded transcript (`timelineItems`) and everything
+ * derived from it stay untouched while a reply streams.
+ */
 let pendingLiveContent: {
 	readonly content: unknown;
 	readonly thinkingIndex?: number;
 	readonly thinkingTimings?: ThinkingTimings;
 } | null = null;
+/** Latest partial result per running call (`tool_execution_update`), applied once per frame. */
+const pendingToolUpdates = new Map<string, AgentStreamEvent>();
 let liveFrame = 0;
 
-function scheduleLiveMessage(content: unknown, thinkingIndex?: number, thinkingTimings?: ThinkingTimings): void {
-	pendingLiveContent = { content, thinkingIndex, thinkingTimings };
+function scheduleLiveFrame(): void {
 	if (liveFrame) return;
 	liveFrame = requestAnimationFrame(() => {
 		liveFrame = 0;
-		const pending = pendingLiveContent;
-		pendingLiveContent = null;
-		if (pending)
-			updateTimeline((items) =>
-				liveMessageTimeline(items, pending.content, pending.thinkingIndex, pending.thinkingTimings),
-			);
+		applyLiveFrame();
 	});
 }
 
-/** Apply a buffered message_update now, so later events land after it. */
-function flushLiveMessage(): void {
-	if (liveFrame) cancelAnimationFrame(liveFrame);
-	liveFrame = 0;
+function scheduleLiveMessage(content: unknown, thinkingIndex?: number, thinkingTimings?: ThinkingTimings): void {
+	pendingLiveContent = { content, thinkingIndex, thinkingTimings };
+	scheduleLiveFrame();
+}
+
+function scheduleToolUpdate(event: AgentStreamEvent): void {
+	// The newest partial result carries all output so far, so it replaces any that waited.
+	pendingToolUpdates.delete(String(event.toolCallId));
+	pendingToolUpdates.set(String(event.toolCallId), event);
+	scheduleLiveFrame();
+}
+
+function applyLiveFrame(): void {
 	const pending = pendingLiveContent;
 	pendingLiveContent = null;
 	if (pending)
-		updateTimeline((items) =>
-			liveMessageTimeline(items, pending.content, pending.thinkingIndex, pending.thinkingTimings),
-		);
+		setState((state) => ({
+			liveItems: liveMessageRows(
+				state.timelineItems,
+				pending.content,
+				pending.thinkingIndex,
+				pending.thinkingTimings,
+			),
+		}));
+	const updates = [...pendingToolUpdates.values()];
+	pendingToolUpdates.clear();
+	for (const update of updates) applyToolUpdate(update);
 }
+
+/** Apply buffered stream frames now, so later events land after them. */
+function flushLiveMessage(): void {
+	if (liveFrame) cancelAnimationFrame(liveFrame);
+	liveFrame = 0;
+	applyLiveFrame();
+}
+
+/** Drop buffered frames of a stream that is gone (another session, a new connection). */
+function discardLiveFrames(): void {
+	if (liveFrame) cancelAnimationFrame(liveFrame);
+	liveFrame = 0;
+	pendingLiveContent = null;
+	pendingToolUpdates.clear();
+}
+
+/**
+ * The streamed message ended: its rows join the transcript as they are, until
+ * the `entries` event that follows replaces them with the recorded entry.
+ */
+function commitLiveMessage(): void {
+	setState((state) => {
+		if (!state.liveItems.length) return {};
+		const ids = new Set(state.liveItems.map((item) => item.itemId));
+		// A previous message's rows that no recorded entry replaced give way, as they did while streaming.
+		const kept = state.timelineItems.filter(
+			(item) => !item.itemId.startsWith("message-live") && !ids.has(item.itemId),
+		);
+		const timelineItems = withSubagentLaneState(
+			[...kept, ...state.liveItems],
+			state.current?.subagentLanes,
+			state.current?.entries,
+		);
+		return {
+			liveItems: [],
+			timelineItems,
+			pendingPlanReview: pendingPlanReviewFrom(timelineItems, state.current),
+		};
+	});
+}
+
+function applyToolUpdate(agentEvent: AgentStreamEvent): void {
+	const output = contentText(agentEvent.partialResult?.content);
+	updateToolItem(agentEvent.toolCallId, (item) => ({
+		...item,
+		outputSummary: compact(output),
+		outputDetail: clipDetail(output),
+		// A running subagent call already knows its children's session ids.
+		...childAgents(item.toolName, agentEvent.partialResult?.details),
+		...(item.toolName === "subagent"
+			? {
+					subagentTasks: subagentTasks(
+						undefined,
+						agentEvent.partialResult?.details,
+						"pending",
+						item.subagentTasks,
+					),
+				}
+			: {}),
+	}));
+}
+
+/** Thinking rows of the streaming message, in the live rows or already committed to the transcript. */
+function updateLiveThinking(update: (item: TimelineItem & { kind: "thinking" }) => TimelineItem): void {
+	const apply = (items: readonly TimelineItem[]) => {
+		let changed = false;
+		const next = items.map((item) => {
+			if (item.kind !== "thinking") return item;
+			const updated = update(item);
+			changed ||= updated !== item;
+			return updated;
+		});
+		return changed ? next : items;
+	};
+	setState((state) => ({ liveItems: apply(state.liveItems) }));
+	updateTimeline(apply);
+}
+
+/**
+ * Refreshes asked for by stream events: at most one snapshot and one session
+ * list read per `REFRESH_INTERVAL_MS`, never two at a time. The transcript
+ * itself arrives through `entries` events; these reads catch up on the rest
+ * (retry state, the title, goal and plan state). Each stream connection owns
+ * its schedule, so a new session's first refresh never waits on the last one's.
+ */
+const REFRESH_INTERVAL_MS = 400;
+function streamRefresh(): Throttle {
+	return throttled(() => Promise.all([refreshCurrent(), refreshSessions()]).then(() => {}), REFRESH_INTERVAL_MS);
+}
+let refreshSchedule: Throttle = streamRefresh();
 
 function handleAgentEvent(
 	agentEvent: AgentStreamEvent,
@@ -1231,28 +1429,31 @@ function handleAgentEvent(
 		);
 		return;
 	}
+	if (agentEvent.type === "tool_execution_update") {
+		scheduleToolUpdate(agentEvent);
+		return;
+	}
 	flushLiveMessage();
 	if (thinkingTimings) {
-		updateTimeline((items) =>
-			items.map((item) => {
-				if (item.kind !== "thinking" || !item.itemId.startsWith("message-live-thinking-")) return item;
-				const index = item.itemId.slice("message-live-thinking-".length);
-				return thinkingTimings[index] ? { ...item, timing: thinkingTimings[index] } : item;
-			}),
-		);
+		updateLiveThinking((item) => {
+			if (!item.itemId.startsWith("message-live-thinking-")) return item;
+			const timing = thinkingTimings[item.itemId.slice("message-live-thinking-".length)];
+			return timing ? { ...item, timing } : item;
+		});
 	}
 	if (
 		agentEvent.type === "message_end" ||
 		agentEvent.type === "tool_execution_start" ||
 		agentEvent.type === "agent_settled"
 	) {
-		updateTimeline((items) =>
-			items.map((item) => (item.kind === "thinking" && item.running ? { ...item, running: false } : item)),
-		);
+		updateLiveThinking((item) => (item.running ? { ...item, running: false } : item));
 	}
+	// The message the live rows belong to is over (or the run is): they join the transcript.
+	if (agentEvent.type === "message_end" || agentEvent.type === "agent_end" || agentEvent.type === "agent_settled")
+		commitLiveMessage();
 	if (agentEvent.type === "message_start" && agentEvent.message?.role === "user") {
-		// The prompt entered the loop: show it in place now; the refresh after
-		// its message_end replaces this row with the recorded entry. A prompt
+		// The prompt entered the loop: show it in place now; the `entries` event
+		// after its message_end replaces this row with the recorded entry. A prompt
 		// command shows as the line the user typed, not the template it became.
 		const content = promptCommand ?? contentText(agentEvent.message.content);
 		const images = imageSources(agentEvent.message.content);
@@ -1288,26 +1489,6 @@ function handleAgentEvent(
 					: {}),
 			}),
 		);
-	}
-	if (agentEvent.type === "tool_execution_update") {
-		const output = contentText(agentEvent.partialResult?.content);
-		updateToolItem(agentEvent.toolCallId, (item) => ({
-			...item,
-			outputSummary: compact(output),
-			outputDetail: clipDetail(output),
-			// A running subagent call already knows its children's session ids.
-			...childAgents(item.toolName, agentEvent.partialResult?.details),
-			...(item.toolName === "subagent"
-				? {
-						subagentTasks: subagentTasks(
-							undefined,
-							agentEvent.partialResult?.details,
-							"pending",
-							item.subagentTasks,
-						),
-					}
-				: {}),
-		}));
 	}
 	if (agentEvent.type === "tool_execution_end") {
 		const output = contentText(agentEvent.result?.content) || JSON.stringify(agentEvent.result ?? {});
@@ -1355,8 +1536,7 @@ function handleAgentEvent(
 		agentEvent.type === "auto_retry_start" ||
 		agentEvent.type === "auto_retry_end"
 	) {
-		void refreshCurrent().catch(() => {});
-		void refreshSessions().catch(() => {});
+		refreshSchedule.request();
 	}
 }
 
@@ -1367,7 +1547,12 @@ export function connectStream(id: string): void {
 	// A new stream is a new order: its own snapshot is the current state, and the
 	// revisions this page saw before it belong to a connection that is gone.
 	streamRevisions.delete(id);
-	const source = new EventSource(`/api/v1/sessions/${id}/events`);
+	// The host remembers what it sent per connection, so a new one starts with complete frames.
+	liveMessage.reset();
+	refreshSchedule.cancel();
+	refreshSchedule = streamRefresh();
+	// `delta=1`: streamed text arrives as appended tails, which `liveMessage` rebuilds.
+	const source = new EventSource(`/api/v1/sessions/${id}/events?delta=1`);
 	stream = source;
 	source.addEventListener("snapshot", (event) => {
 		if (stream === source) renderSnapshot(JSON.parse((event as MessageEvent).data), { fromStream: true });
@@ -1381,10 +1566,30 @@ export function connectStream(id: string): void {
 			revision?: number;
 		};
 		noteRevision(id, payload.revision);
-		if (payload.event.type === "entry_appended") applyCompletedSubagentEntry(id, payload.event.entry);
+		const agentEvent = payload.event;
+		if (agentEvent.type === "entry_appended") applyCompletedSubagentEntry(id, agentEvent.entry);
+		if (agentEvent.type === "message_start" || agentEvent.type === "message_end") liveMessage.reset();
 		const promptCommand =
 			typeof payload.promptCommand === "string" && payload.promptCommand ? payload.promptCommand : undefined;
-		handleAgentEvent(payload.event, readThinkingTimings(payload.thinkingTimings), promptCommand);
+		handleAgentEvent(
+			agentEvent.type === "message_update" && agentEvent.message
+				? { ...agentEvent, message: { ...agentEvent.message, content: liveMessage.apply(agentEvent.message) } }
+				: agentEvent,
+			readThinkingTimings(payload.thinkingTimings),
+			promptCommand,
+		);
+	});
+	source.addEventListener("entries", (event) => {
+		if (stream !== source) return;
+		const payload = JSON.parse((event as MessageEvent).data) as {
+			entries?: unknown;
+			reset?: boolean;
+			revision?: number;
+		};
+		noteRevision(id, payload.revision);
+		applyRecordedEntries(id, Array.isArray(payload.entries) ? (payload.entries as SessionEntry[]) : [], {
+			reset: payload.reset === true,
+		});
 	});
 	source.addEventListener("status", (event) => {
 		if (stream !== source) return;
@@ -1424,6 +1629,9 @@ export function connectStream(id: string): void {
 				? items
 				: [...items, { itemId: `approval-${approval.id}`, kind: "approval", approval }],
 		);
+		// The decision panel reads the snapshot's pending approvals. A read the stream asked
+		// for earlier may have been answered before this request existed; this one is not.
+		refreshSchedule.request();
 	});
 	source.addEventListener("clarification_required", (event) => {
 		const request = JSON.parse((event as MessageEvent).data).clarification as ClarificationRequest;
@@ -1609,6 +1817,11 @@ let sessionListRequest = 0;
 let sessionListApplied = 0;
 
 /** Reload the list immediately; successful recovery only gates the later group prune. */
+/**
+ * Reload the session list. Overlapping reads may answer out of order; the
+ * request counters above keep an older answer from replacing a newer one.
+ * Stream-driven reloads go through the stream's refresh schedule, one at a time.
+ */
 export async function refreshSessions(): Promise<void> {
 	const request = ++sessionListRequest;
 	const recovery = restoreTagGroups();
@@ -1821,11 +2034,27 @@ export function backgroundSessionBusy(state: Pick<AppState, "current" | "statusB
 }
 
 /** Reload the current session's snapshot (legacy `refreshCurrent`, 3117-3120). */
-export async function refreshCurrent(): Promise<void> {
+export const refreshCurrent: () => Promise<void> = coalesced(loadCurrent);
+
+/**
+ * Read the open session's snapshot. A page holding the branch asks only for
+ * what follows its last entry (`?after=`) and folds the answer into what it
+ * holds; when the branch moved under it, it reads the whole session instead.
+ */
+async function loadCurrent(): Promise<void> {
 	const current = getState().current;
 	if (!current) return;
-	const snapshot = await api<SessionSnapshot>(`/api/v1/sessions/${current.id}`);
-	if (getState().current?.id === current.id) renderSnapshot(snapshot);
+	const path = `/api/v1/sessions/${current.id}`;
+	const after = current.entries?.at(-1)?.id;
+	const answer = await api<SessionSnapshot>(after ? `${path}?after=${encodeURIComponent(after)}` : path);
+	if (getState().current?.id !== current.id) return;
+	const whole = completeSnapshot(answer, getState().current?.entries);
+	if (whole) {
+		renderSnapshot(whole);
+		return;
+	}
+	const full = await api<SessionSnapshot>(path);
+	if (getState().current?.id === current.id) renderSnapshot(full);
 }
 
 /**
@@ -1921,6 +2150,7 @@ export function startDraft(cwd: string = getState().bootstrapCwd, options: { rea
 			draftThinking: current ? "" : state.draftThinking,
 			current: null,
 			timelineItems: [],
+			liveItems: [],
 			// The new conversation has answered nothing, and the previous session's
 			// waiting proposal does not belong to it.
 			pendingPlanReview: undefined,

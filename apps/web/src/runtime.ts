@@ -88,6 +88,7 @@ import {
 	type WebFeedbackPreview,
 } from "./feedback-report.ts";
 import { projectInspectorTasks } from "./inspector.ts";
+import { JournalCursor } from "./journal-cursor.ts";
 import {
 	MessageQueue,
 	type QueuedFile,
@@ -96,6 +97,7 @@ import {
 	SteeringImages,
 	type SteeringMessageView,
 } from "./message-queue.ts";
+import { messageImages, withoutToolResultImages } from "./omitted-images.ts";
 import {
 	LivePromptCommands,
 	PROMPT_COMMAND_TYPE,
@@ -113,7 +115,13 @@ import { resolveSubagentCliPath } from "./subagent-cli.ts";
 import { retainSubagentLane } from "./subagent-lane-cache.ts";
 import { projectSubagentNotification } from "./subagent-notification.ts";
 import { TextInputBroker, type TextInputEvent, textInput } from "./text-input.ts";
-import { savedThinkingTimings, THINKING_TIMING_TYPE, ThinkingClock, type ThinkingTimings } from "./thinking-timing.ts";
+import {
+	readThinkingObservation,
+	savedThinkingTimings,
+	THINKING_TIMING_TYPE,
+	ThinkingClock,
+	type ThinkingTimings,
+} from "./thinking-timing.ts";
 import {
 	type FileAtTurn,
 	fileAtTurnEnd,
@@ -195,6 +203,17 @@ export type WebEventBody =
 	  }
 	| { type: "status"; status: WebSessionStatus; unread: boolean }
 	| ({ type: "queue" } & WebQueueState)
+	| {
+			/**
+			 * Branch entries recorded since the previous `entries` event, projected like
+			 * the snapshot's (`projectEntryRange`), so the page appends them instead of
+			 * re-reading the whole session. With `reset`, the branch no longer extends
+			 * what was published (navigation, a rewind, a rebind): `entries` is all of it.
+			 */
+			type: "entries";
+			entries: readonly Record<string, unknown>[];
+			reset?: true;
+	  }
 	| { type: "error"; message: string };
 
 /**
@@ -665,7 +684,7 @@ export function projectEntry(entry: SessionEntry): Record<string, unknown> {
 		type: entry.type,
 		timestamp: entry.timestamp,
 		...(entry.imported ? { imported: entry.imported } : {}),
-		...(entry.type === "message" ? { message: entry.message } : {}),
+		...(entry.type === "message" ? { message: withoutToolResultImages(entry.message) } : {}),
 		...(usage ? { usage } : {}),
 		...(entry.type === "custom_message" ? { content: entry.content, customType: entry.customType } : {}),
 		...(notification ? { details: notification } : {}),
@@ -763,20 +782,43 @@ export function hasInterruptedTurn(entries: readonly SessionEntry[], running: bo
  * of the whole template.
  */
 export function projectEntries(entries: readonly SessionEntry[]): Record<string, unknown>[] {
+	return projectEntryRange(entries, 0);
+}
+
+/**
+ * `projectEntries(entries)` from `start` on, for a reader that already holds the
+ * projection of `entries[0..start)`, preceded (in branch order) by every earlier
+ * entry whose projection a later one changed.
+ *
+ * Only thinking timings reach backwards. They are saved as their own entry, which
+ * normally lands just before the message it times (the kernel appends a message
+ * after its `message_end` listeners have run) but after it when the clock only
+ * settles at the end of the run. Prompt-command pairing looks only at earlier
+ * entries, so appending cannot change an entry already projected.
+ */
+export function projectEntryRange(entries: readonly SessionEntry[], start: number): Record<string, unknown>[] {
 	const timings = savedThinkingTimings(entries);
 	const promptCommands = pairPromptCommands(entries);
-	return entries.map((entry) => {
-		const thinkingTimings =
-			entry.type === "message" && entry.message.role === "assistant"
-				? timings.get(entry.message.timestamp)
-				: undefined;
+	const retimed = new Set<number>();
+	for (let index = Math.max(0, start); index < entries.length; index++) {
+		const entry = entries[index];
+		if (entry?.type !== "custom" || entry.customType !== THINKING_TIMING_TYPE) continue;
+		const observation = readThinkingObservation(entry.data);
+		if (observation) retimed.add(observation.messageTimestamp);
+	}
+	const projected: Record<string, unknown>[] = [];
+	entries.forEach((entry, index) => {
+		const assistant = entry.type === "message" && entry.message.role === "assistant";
+		if (index < start && !(assistant && retimed.has(entry.message.timestamp))) return;
+		const thinkingTimings = assistant ? timings.get(entry.message.timestamp) : undefined;
 		const promptCommand = promptCommands.get(entry.id);
-		return {
+		projected.push({
 			...projectEntry(entry),
 			...(thinkingTimings ? { thinkingTimings } : {}),
 			...(promptCommand ? { promptCommand } : {}),
-		};
+		});
 	});
+	return projected;
 }
 
 /** The summary board's goal section data, or undefined when the session has no goal to show. */
@@ -922,6 +964,10 @@ export class WebSession {
 	 * a reader that still applied it would resurrect a stopped turn's status.
 	 */
 	private revision = 0;
+	/** How far the bound branch has been published through `entries` events; reset on every bind. */
+	private journal = new JournalCursor([]);
+	/** An `entries` check is already queued for the current microtask checkpoint. */
+	private journalQueued = false;
 	/** Settles when the bound session's `session_start` handlers (MCP startup included) have finished. */
 	private extensionsReady: Promise<void> = Promise.resolve();
 	/** Startup of the bound session; replaced on fork or /new so a stale binding cannot report into it. */
@@ -1225,6 +1271,13 @@ export class WebSession {
 		}
 		this.unsubscribeSession?.();
 		this.session = session;
+		// A bound session starts published at its current leaf: a page opening it reads
+		// what is already there from the snapshot, and the stream adds what follows. A
+		// page already following this object (a rebind to another file) holds the old
+		// branch, so it gets the new one whole.
+		const branch = session.sessionManager.getBranch();
+		this.journal = new JournalCursor(branch);
+		if (this.listeners.size) this.emit({ type: "entries", reset: true, entries: projectEntries(branch) });
 		this.retry.clear();
 		void this.adoptFallbackModel(session);
 		const thinkingClock = new ThinkingClock();
@@ -1350,6 +1403,44 @@ export class WebSession {
 		this.revision += 1;
 		const stamped: WebEvent = { ...event, revision: this.revision };
 		for (const listener of this.listeners) listener(stamped);
+		// Streaming deltas record nothing; any other event may follow a write, the
+		// kernel's or this host's own (a command echo, a status change after a command).
+		if (event.type === "entries") return;
+		if (
+			event.type === "agent" &&
+			(event.event.type === "message_update" || event.event.type === "tool_execution_update")
+		)
+			return;
+		this.queueJournalPublication(this.session);
+	}
+
+	/**
+	 * Publish what the kernel recorded for an event once it is on the branch.
+	 *
+	 * `AgentSession` notifies its listeners first and appends a finished message
+	 * afterwards, synchronously, so the entry exists only after this listener
+	 * returns: the check runs on a microtask, once per checkpoint however many
+	 * events arrived. Host-written entries (command echoes, thinking timings) ride
+	 * along with the next event's check.
+	 */
+	private queueJournalPublication(session: AgentSession): void {
+		// Nothing is bound before the constructor's first `bindSession`.
+		if (!session || this.journalQueued) return;
+		this.journalQueued = true;
+		queueMicrotask(() => {
+			this.journalQueued = false;
+			// A rebind meanwhile started its own cursor at the new branch's leaf.
+			if (this.session !== session) return;
+			const branch = session.sessionManager.getBranch();
+			const start = this.journal.advance(branch);
+			if (start === undefined) return;
+			if (start === "reset") {
+				// Not an extension of what the page holds: send the branch whole, in order with everything else.
+				this.emit({ type: "entries", reset: true, entries: projectEntries(branch) });
+				return;
+			}
+			this.emit({ type: "entries", entries: projectEntryRange(branch, start) });
+		});
 	}
 
 	publishError(message: string): void {
@@ -2287,9 +2378,17 @@ export class WebSession {
 		});
 	}
 
-	snapshot(): Record<string, unknown> {
+	/**
+	 * The session as a page reads it. `after` names the last entry the caller
+	 * already holds: when it is still on the branch, only the entries after it
+	 * (and earlier ones whose projection changed, see `projectEntryRange`) are
+	 * sent, flagged by `entriesAfter`. A caller on another branch, or with no id,
+	 * gets every entry and no flag.
+	 */
+	snapshot(after?: string): Record<string, unknown> {
 		const manager = this.session.sessionManager;
 		const branch = manager.getBranch();
+		const known = after === undefined ? -1 : branch.findIndex((entry) => entry.id === after);
 		return {
 			id: this.id,
 			cwd: this.cwd,
@@ -2307,7 +2406,9 @@ export class WebSession {
 			// interrupted: its reply simply has not arrived yet.
 			interruptedTurn: hasInterruptedTurn(branch, this.isBusy()),
 			compacting: this.session.isCompacting,
-			entries: projectEntries(branch),
+			...(known < 0
+				? { entries: projectEntries(branch) }
+				: { entries: projectEntryRange(branch, known + 1), entriesAfter: after }),
 			subagentLanes: [...this.subagentLanes.values()],
 			pendingApprovals: this.broker.pendingRequests(),
 			pendingClarifications: this.clarifications.pendingRequests(),
@@ -2335,6 +2436,18 @@ export class WebSession {
 			// proposal cannot look pending and a question cannot look like consent.
 			pendingPlanHash: getStepPlanState(manager.getBranch())?.pendingProposalHash,
 		};
+	}
+
+	/**
+	 * Image `index` (counting only images, in content order) of a recorded message,
+	 * data included: the snapshot and stream carry tool-result images only as
+	 * placeholders. Any entry of the session file is accepted, not only the
+	 * current branch, because a page may still show an entry from before a rewind.
+	 */
+	entryImage(entryId: string, index: number): { readonly data: string; readonly mimeType: string } | undefined {
+		const entry = this.session.sessionManager.getEntry(entryId);
+		if (entry?.type !== "message" || !("content" in entry.message)) return undefined;
+		return messageImages(entry.message.content)[index];
 	}
 
 	sessionFile(): string | undefined {

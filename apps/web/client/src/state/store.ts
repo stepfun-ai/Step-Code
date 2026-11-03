@@ -315,7 +315,14 @@ export interface AppState {
 	 * Keyed by session so a switch never shows the previous session's fill.
 	 */
 	readonly contextFill: { readonly sessionId: string; readonly percent: number } | null;
+	/** The recorded transcript plus rows driven by discrete events; stable while a reply streams. */
 	readonly timelineItems: readonly TimelineItem[];
+	/**
+	 * Rows of the assistant message streaming right now (`liveMessageRows`), kept
+	 * apart so a frame of streamed text re-renders the live rows only, not every
+	 * reader of the transcript. They join `timelineItems` at the message's end.
+	 */
+	readonly liveItems: readonly TimelineItem[];
 	/**
 	 * The proposal waiting for the user's answer, or undefined.
 	 *
@@ -466,6 +473,7 @@ export function createInitialState(): AppState {
 		performanceRun: null,
 		contextFill: null,
 		timelineItems: [],
+		liveItems: [],
 		pendingPlanReview: undefined,
 		notices: [],
 		compacting: false,

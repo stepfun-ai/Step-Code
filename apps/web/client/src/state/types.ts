@@ -236,6 +236,12 @@ export interface SessionSnapshot extends SessionSummary {
 	readonly status: SessionStatus;
 	readonly sessionFile?: string;
 	readonly entries?: readonly SessionEntry[];
+	/**
+	 * Present on a read made with `?after=<entryId>` when that entry is still on
+	 * the branch: `entries` then holds only what follows it, plus earlier entries
+	 * whose projection changed (runtime.ts `projectEntryRange`).
+	 */
+	readonly entriesAfter?: string;
 	/** Live-only lane snapshots, replaced through SSE and never model messages. */
 	readonly subagentLanes?: readonly unknown[];
 	readonly model?: ModelRef;
