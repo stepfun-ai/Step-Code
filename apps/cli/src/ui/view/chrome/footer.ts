@@ -1,18 +1,7 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { AgentSession, ReadonlyFooterDataProvider } from "@step-harness/coding-agent";
-import { addUsageToTotals, createUsageTotals, formatKeyText, theme } from "@step-harness/coding-agent";
+import { addUsageToTotals, createUsageTotals, theme } from "@step-harness/coding-agent";
 import { type Component, sliceByColumn, truncateToWidth, visibleWidth } from "@step-harness/pi-tui";
-
-/**
- * What the footer offers for opening the warning list. On macOS, Terminal.app
- * and iTerm2 (unless Option is set to send Meta) turn Option+letter into a
- * dead key, so an `alt+<letter>` binding may never reach Step there; the slash
- * command works in every terminal and stands in when no binding is reachable.
- */
-export function warningListHint(keys: readonly string[], platform: NodeJS.Platform = process.platform): string {
-	const reachable = platform === "darwin" ? keys.filter((key) => !/^alt\+[a-z]$/iu.test(key)) : keys;
-	return reachable.length > 0 ? formatKeyText(reachable.join("/")) : "/warnings";
-}
 
 /**
  * Sanitize text for display in a single-line status.
@@ -80,8 +69,6 @@ export class FooterComponent implements Component {
 	private footerData: ReadonlyFooterDataProvider;
 	private readonly presentation: FooterPresentation;
 	private readonly permissionCycleKey: () => string | undefined;
-	private readonly warningCount: () => number;
-	private readonly warningListKey: () => string | undefined;
 
 	constructor(
 		session: AgentSession,
@@ -94,22 +81,12 @@ export class FooterComponent implements Component {
 			 * presentational and does not have to resolve keybindings itself.
 			 */
 			permissionCycleKey?: () => string | undefined;
-			/**
-			 * Number of ambient warnings the session is holding for the reader.
-			 * Step's footer shows them as an attention badge instead of transcript
-			 * rows; zero renders no badge at all.
-			 */
-			warningCount?: () => number;
-			/** Key that opens the warning list, shown beside the badge on wide terminals. */
-			warningListKey?: () => string | undefined;
 		} = {},
 	) {
 		this.session = session;
 		this.footerData = footerData;
 		this.presentation = options.presentation ?? "native";
 		this.permissionCycleKey = options.permissionCycleKey ?? (() => undefined);
-		this.warningCount = options.warningCount ?? (() => 0);
-		this.warningListKey = options.warningListKey ?? (() => undefined);
 	}
 
 	setSession(session: AgentSession): void {
@@ -414,27 +391,16 @@ export class FooterComponent implements Component {
 
 		const left = segments.join(muted(" · "));
 		const usage = this.session.getContextUsage();
-		const warnings = Math.max(0, Math.floor(this.warningCount()));
-		// Step reports ambient warnings here instead of in the transcript, so this
-		// badge is the only sign that the session recorded one. It stays until the
-		// reader clears the list, and names the key that opens it when there is room.
-		const openKey = warnings > 0 && safeWidth >= 100 ? this.warningListKey() : undefined;
-		const badge = warnings > 0 ? warning(`⚠ ${warnings}`) + (openKey ? muted(` (${openKey})`) : "") : "";
 
-		let contextLeft = "";
-		if (usage?.percent !== null && usage?.percent !== undefined) {
-			const usedPercent = Math.max(0, Math.min(100, usage.percent));
-			const contextLeftText = `${Math.round(100 - usedPercent)}% context left`;
-			// Same thresholds as the native footer: >90% used turns error, >70% warning.
-			const contextPaint = usedPercent > 90 ? error : usedPercent > 70 ? warning : muted;
-			contextLeft = contextPaint(contextLeftText);
+		if (usage?.percent === null || usage?.percent === undefined) {
+			return [truncateToWidth(left, safeWidth, "")];
 		}
 
-		const fullRight = [contextLeft, badge].filter((part) => part.length > 0).join("  ");
-		if (fullRight.length === 0) return [truncateToWidth(left, safeWidth, "")];
-		// On a line too narrow for both, the context readout yields to the badge:
-		// the readout returns once there is room, the warnings are not shown elsewhere.
-		const right = badge && visibleWidth(fullRight) >= safeWidth ? badge : fullRight;
+		const usedPercent = Math.max(0, Math.min(100, usage.percent));
+		const contextLeftText = `${Math.round(100 - usedPercent)}% context left`;
+		// Same thresholds as the native footer: >90% used turns error, >70% warning.
+		const contextPaint = usedPercent > 90 ? error : usedPercent > 70 ? warning : muted;
+		const right = contextPaint(contextLeftText);
 
 		const leftWidth = visibleWidth(left);
 		const contextWidth = visibleWidth(right);

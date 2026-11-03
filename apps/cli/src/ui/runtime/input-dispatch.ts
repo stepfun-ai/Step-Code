@@ -182,9 +182,7 @@ export function wireKeyHandlers(ctx: RuntimeContext): void {
 		// Shift+Tab for its permission preset cycle. The command is handled by
 		// the Step extension; ordinary pi sessions retain thinking-level cycling.
 		if (ctx.options.tuiStyle === "step" && ctx.session.extensionRunner.getCommand("permissions")) {
-			// The key press is the user's input: a refusal ("Full access was not
-			// enabled.") answers it inline instead of only counting in the badge.
-			void ctx.promptUserInput("/permissions --cycle");
+			void ctx.session.prompt("/permissions --cycle");
 			return;
 		}
 		ctx.cycleThinkingLevel();
@@ -217,7 +215,6 @@ export function wireKeyHandlers(ctx: RuntimeContext): void {
 		return steering.length > 0 || followUp.length > 0;
 	};
 	ctx.defaultEditor.onAction("app.message.dequeue", () => ctx.handleDequeue());
-	ctx.defaultEditor.onAction("app.warnings.open", () => ctx.showWarningList());
 	ctx.defaultEditor.onAction("app.session.new", () => ctx.handleClearCommand());
 	ctx.defaultEditor.onAction("app.session.tree", () => ctx.showTreeSelector());
 	ctx.defaultEditor.onAction("app.session.fork", () => ctx.showUserMessageSelector());
@@ -335,11 +332,6 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 			ctx.editor.setText("");
 			return;
 		}
-		if (text === "/warnings") {
-			ctx.editor.setText("");
-			ctx.showWarningList();
-			return;
-		}
 		if (text === "/fork") {
 			ctx.showUserMessageSelector();
 			ctx.editor.setText("");
@@ -442,7 +434,7 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 			if (ctx.isExtensionCommand(text)) {
 				ctx.editor.addToHistory?.(text);
 				ctx.editor.setText("");
-				await ctx.promptUserInput(text);
+				await ctx.session.prompt(text);
 			} else {
 				const { text: message, images } = await resolvePastedImages(ctx.pastedImages, text, {
 					autoResizeImages: ctx.settingsManager.getImageAutoResize(),
@@ -460,10 +452,7 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 			const { text: message, images } = await resolvePastedImages(ctx.pastedImages, text, {
 				autoResizeImages: ctx.settingsManager.getImageAutoResize(),
 			});
-			await ctx.promptUserInput(message, {
-				streamingBehavior: "steer",
-				images: images.length ? images : undefined,
-			});
+			await ctx.session.prompt(message, { streamingBehavior: "steer", images: images.length ? images : undefined });
 			ctx.updatePendingMessagesDisplay();
 			ctx.redraw.requestRender();
 			return;

@@ -28,7 +28,6 @@ import type {
 	ExtensionUIDialogOptions,
 	InteractiveModeOptions,
 	MarkdownTransformer,
-	PromptOptions,
 	SessionEntry,
 } from "@step-harness/coding-agent";
 import type { Container, EditorComponent, MarkdownTheme, TUI, TuiAltScreen, TuiMainScreen } from "@step-harness/pi-tui";
@@ -188,14 +187,6 @@ export interface RuntimeContext {
 	showStatus(message: string): void;
 	showTrustSelector(): void;
 	showWarning(warningMessage: string): void;
-	/** Open the session's collected warnings behind the footer badge. */
-	showWarningList(): void;
-	/**
-	 * Submit what the user typed. Until the kernel has accepted it (a command's
-	 * handler returned, a message passed its input hooks), warnings it publishes
-	 * are its reply and stay in the transcript instead of the badge.
-	 */
-	promptUserInput(text: string, options?: PromptOptions): Promise<void>;
 	toggleThinkingBlockVisibility(): void;
 	toggleToolOutputExpansion(): void;
 	updatePendingMessagesDisplay(): void;
