@@ -9,6 +9,7 @@ import {
 	Text,
 } from "@step-harness/pi-tui";
 import type { AssistantMessage } from "@step-harness/providers";
+import { INCOMPLETE_TURN_MESSAGES } from "@step-harness/providers";
 import { createLiveMarkdownTransform } from "./markdown-transform.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -219,6 +220,15 @@ export class AssistantMessageComponent extends Container {
 				const errorMsg = message.errorMessage || "Unknown error";
 				this.contentContainer.addChild(new Spacer(1));
 				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
+			} else if (message.incomplete && INCOMPLETE_TURN_MESSAGES[message.incomplete]) {
+				// The provider reported a normal stop while the turn carried nothing to
+				// act on. Without this line the transcript would show an empty answer.
+				// Warning, not error: the session recovers the first one, and only a
+				// repeated empty turn ends the run.
+				this.contentContainer.addChild(new Spacer(1));
+				this.contentContainer.addChild(
+					new Text(theme.fg("warning", INCOMPLETE_TURN_MESSAGES[message.incomplete]), this.outputPad, 0),
+				);
 			}
 		}
 	}

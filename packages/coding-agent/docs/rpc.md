@@ -882,7 +882,7 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 |-------|-------------|
 | `agent_start` | Agent begins processing |
 | `agent_end` | One low-level agent run completes (may still be followed by retry, compaction, or queued continuations); carries `willRetry` and a message count, not the messages |
-| `agent_settled` | Agent run is fully settled; no automatic retry, compaction retry, or queued continuation remains |
+| `agent_settled` | Agent run is fully settled; no automatic retry, compaction retry, or queued continuation remains. Carries `failure` when the run produced no usable answer |
 | `turn_start` | New turn begins |
 | `turn_end` | Turn completes; carries the message role and a tool-result count, not the messages |
 | `message_start` | Message begins |
@@ -897,7 +897,6 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 | `compaction_end` | Compaction completes |
 | `auto_retry_start` | Auto-retry begins (after transient error) |
 | `auto_retry_end` | Auto-retry completes (success or final failure) |
-| `incomplete_turn_recovery_failed` | An incomplete turn could not recover because required automatic compaction did not complete; carries the reason and error message. Not emitted when automatic compaction is disabled: that path marks the assistant message as an error, resolves normally, and still lets already-queued input run. |
 | `summarization_retry_scheduled` | Retry scheduled for a transient compaction or branch-summary summarization error |
 | `summarization_retry_attempt_start` | Retried summarization request starts |
 | `summarization_retry_finished` | Summarization retry loop completes |
@@ -925,6 +924,11 @@ throwing `shouldStopAfterTurn` can make the loop emit more `message_end` events
 than it lists. Detect a truncated run by a message that never got its
 `message_end`, not by comparing counts.
 
+One `agent_end` does not bound one prompt: an incomplete-turn recovery, a
+compaction retry, and queued continuations all emit their own. `willRetry`
+reports the provider retry that follows in this run, not those continuations;
+`agent_settled` is the boundary that says the run is over.
+
 ```json
 {
   "type": "agent_end",
@@ -937,8 +941,21 @@ than it lists. Detect a truncated run by a message that never got its
 
 Emitted after the full session-level run settles. At this point Step will not continue automatically through retry, compaction retry, or queued follow-up messages.
 
+A run that produced no usable answer carries `failure` here. It is not reported by rewriting the assistant message: an incomplete turn keeps the provider's own `stopReason`, and a client that inferred success from the transcript would be wrong. Provider errors and cancellations keep using `stopReason`.
+
 ```json
 {"type": "agent_settled"}
+```
+
+```json
+{
+  "type": "agent_settled",
+  "failure": {
+    "kind": "incomplete_turn",
+    "reason": "no_visible_output",
+    "message": "The model returned no visible answer or executable tool call."
+  }
+}
 ```
 
 ### turn_start / turn_end

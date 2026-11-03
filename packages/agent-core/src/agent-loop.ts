@@ -7,6 +7,7 @@ import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	type Context,
+	classifyIncompleteAssistantTurn,
 	classifyProviderError,
 	EventStream,
 	type ToolResultMessage,
@@ -408,6 +409,12 @@ async function streamAssistantResponse(
 				// result() here: a provider that closes or rejects immediately after
 				// emitting the terminal event may leave that promise unresolved.
 				const finalMessage = event.type === "done" ? event.message : event.error;
+				// Publish the structural fact on the message every consumer already
+				// reads, instead of letting each host re-derive it or, worse, letting a
+				// host rewrite the provider's stop reason to signal it. The loop itself
+				// ignores the field: an incomplete turn still ends normally here, and a
+				// product session decides whether to recover it.
+				finalMessage.incomplete = classifyIncompleteAssistantTurn(finalMessage);
 				if (addedPartial) {
 					context.messages[context.messages.length - 1] = finalMessage;
 				} else {

@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
+import type { AgentContext, AgentMessage, StreamFn, ThinkingLevel } from "@step-harness/agent-core";
 import {
-	type AgentContext,
-	type AgentMessage,
+	type Context,
 	isIncompleteAssistantTurn,
-	type StreamFn,
-	type ThinkingLevel,
-} from "@step-harness/agent-core";
-import type { Context, Model, SimpleStreamOptions, Usage } from "@step-harness/providers";
+	type Model,
+	type SimpleStreamOptions,
+	type Usage,
+} from "@step-harness/providers";
 import { raceWithAbortSignal } from "../../../utils/abort.ts";
 import { convertToLlm } from "../../messages.ts";
 import type { SessionManager } from "../../session-manager.ts";

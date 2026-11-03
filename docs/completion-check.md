@@ -110,8 +110,9 @@ code **0** even if Git conditions remain unsatisfied. The canonical task verifie
 owns the score; an ordinary failed task must not become an infrastructure error
 that reruns the attempt. Missing/thinking-only final output returns **2** with
 an explicit incomplete diagnostic. When either completion feature is enabled,
-print mode disables the generic incomplete-turn recovery so the checker's
-bounded follow-up budget remains the only recovery path. Existing terminal
+print mode disables the generic incomplete-turn recovery for the whole
+invocation so the checker's bounded follow-up budget remains the only recovery
+path, including a mid-run empty turn. Existing terminal
 denials and final assistant errors keep exit code **1**. A successful
 external-approval handoff produced by the latest prompt keeps exit code **0**
 even when the last message is its tool result.

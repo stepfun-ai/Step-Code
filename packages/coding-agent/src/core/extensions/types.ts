@@ -55,6 +55,7 @@ import type { KeybindingsManager } from "../keybindings.ts";
 import type { CustomMessage } from "../messages.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
+import type { AgentRunFailure } from "../run-failure.ts";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -833,9 +834,17 @@ export interface AgentEndEvent {
 	messages: AgentMessage[];
 }
 
-/** Fired after an agent run has fully settled and no automatic retry, compaction, or queued continuation will run. */
+/**
+ * Fired after an agent run has fully settled and no automatic retry, compaction,
+ * or queued continuation will run.
+ *
+ * `failure` is set when the run produced no usable answer. A provider error is
+ * already visible as the assistant message's `stopReason`; an empty turn keeps
+ * the provider's own value, so its outcome can only be read here.
+ */
 export interface AgentSettledEvent {
 	type: "agent_settled";
+	failure?: AgentRunFailure;
 }
 
 export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom";

@@ -5,6 +5,7 @@ import type { OpenAIResponsesOptions } from "./api/openai-responses.ts";
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.ts";
 import type { ProviderErrorKind } from "./utils/error-kind.ts";
 import type { AssistantMessageEventStream } from "./utils/event-stream.ts";
+import type { IncompleteTurnReason } from "./utils/incomplete-turn.ts";
 
 export type { AssistantMessageEventStream } from "./utils/event-stream.ts";
 
@@ -373,6 +374,12 @@ export interface AssistantMessage {
 	diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
 	usage: Usage;
 	stopReason: StopReason;
+	/**
+	 * Set when the finished turn carries nothing a client can act on: no visible
+	 * text and no structured tool call. The stop reason keeps the provider's own
+	 * value; consumers use this field instead of inferring an outcome from it.
+	 */
+	incomplete?: IncompleteTurnReason;
 	deferred?: DeferredHandle;
 	errorMessage?: string;
 	/**

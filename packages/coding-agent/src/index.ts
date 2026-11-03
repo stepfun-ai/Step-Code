@@ -30,6 +30,7 @@ export {
 	VERSION,
 } from "./config.ts";
 export {
+	type AgentRunFailure,
 	AgentSession,
 	type AgentSessionConfig,
 	type AgentSessionEvent,

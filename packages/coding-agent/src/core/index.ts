@@ -3,6 +3,7 @@
  */
 
 export {
+	type AgentRunFailure,
 	AgentSession,
 	type AgentSessionConfig,
 	type AgentSessionEvent,

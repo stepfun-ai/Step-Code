@@ -143,7 +143,19 @@ interface AgentSession {
 }
 ```
 
-`setIncompleteTurnRecoveryEnabled()` defaults to `true`. Print mode sets it to `false` when either completion feature (`--completion-check` or `--completion-review`) owns the bounded follow-up for missing output, so the two paths do not each make a model call. Reapply the setting after a runtime replaces the active session.
+`setIncompleteTurnRecoveryEnabled()` defaults to `true`. Setting it to `false` suppresses the generic recovery and the run-level `failure` it would report; the `incomplete` classification is still recorded on every assistant message, so the host that owns completion decides the outcome itself. Print mode sets it to `false` when either completion feature (`--completion-check` or `--completion-review`) owns the bounded follow-up for missing output, so the two paths do not each make a model call. For the whole invocation, not just its end: a mid-run empty turn also waits for the checker. Reapply the setting after a runtime replaces the active session.
+
+A run that ends without a usable answer reports it on `agent_settled`, not by rewriting the assistant message:
+
+```typescript
+session.subscribe((event) => {
+  if (event.type !== "agent_settled") return;
+  // { kind: "incomplete_turn", reason: "no_visible_output", message: "…" }
+  if (event.failure) reportRunFailure(event.failure);
+});
+```
+
+Provider errors and cancellations are still visible on the assistant message's `stopReason`. For an incomplete turn the stop reason stays the provider's own value, so a host must not infer success from it: read `event.failure`, or `assistantTerminalFailure(message)` from `@step-harness/providers` for a message that has not settled yet.
 
 Session replacement APIs such as new-session, resume, fork, and import live on `AgentSessionRuntime`, not on `AgentSession`.
 
@@ -338,6 +350,11 @@ session.subscribe((event) => {
     case "agent_end":
       // Agent finished (event.messages contains new messages)
       break;
+    case "agent_settled":
+      // Fully settled: no retry, compaction retry, or queued continuation left.
+      // `failure` is set when the run produced no usable answer.
+      if (event.failure) reportRunFailure(event.failure);
+      break;
     
     // Turn lifecycle (one LLM response + tool calls)
     case "turn_start":
@@ -358,9 +375,6 @@ session.subscribe((event) => {
     case "summarization_retry_scheduled":
     case "summarization_retry_attempt_start":
     case "summarization_retry_finished":
-      break;
-    case "incomplete_turn_recovery_failed":
-      // A post-acceptance recovery failure; reported as an event, not a second prompt response.
       break;
   }
 });

@@ -89,6 +89,10 @@ interface AssistantMessage {
   usage: Usage;
   stopReason: "stop" | "length" | "toolUse" | "error" | "aborted";
   errorMessage?: string;
+  // Present when the turn carried nothing a client could act on; the stop reason
+  // keeps the provider's own value. See "Incomplete turns" below.
+  incomplete?: "no_visible_output" | "missing_tool_call";
+  diagnostics?: AssistantMessageDiagnostic[];
   timestamp: number;
 }
 
@@ -353,7 +357,9 @@ Fields:
 - `display`: `true` = show in TUI with distinct styling, `false` = hidden
 - `details`: Optional extension-specific metadata (not sent to LLM)
 
-Step uses a hidden `step-incomplete-turn-recovery` custom message when a normal assistant response contains neither visible text nor an executable tool call, or reports `toolUse` without a tool call. The incomplete assistant message remains in the transcript, and the recovery message becomes a user-role message for the next model request. A top-level run permits one such recovery, shared with its steering and tool continuations; a later incomplete assistant response in the same run is marked as an error with an `incomplete_turn` diagnostic, including after intervening tool calls. A response that also exceeded the context window is compacted before recovery; if compaction cannot complete, the run fails without rewriting the assistant message that `message_end` already published. If automatic compaction is disabled for that overflow, the assistant message is instead marked as an error immediately with the `incomplete_turn` diagnostic; the run emits no recovery message or `incomplete_turn_recovery_failed` event and settles normally after any already-queued input. The classifier reads only stop reasons and content-block types; it does not parse thinking or text contents.
+Step uses a hidden `step-incomplete-turn-recovery` custom message when a normal assistant response contains neither visible text nor an executable tool call, or reports `toolUse` without a tool call. The incomplete assistant message remains in the transcript unchanged — its `stopReason` stays the provider's own value and the structural fact is recorded as `incomplete` on the message — and the recovery message becomes a user-role message for the next model request. Recovery is bounded by a streak of consecutive empty turns: any turn with visible text or an executed tool call resets it, any user input resets it, and the second consecutive empty turn ends the run with `failure` on `agent_settled`. A response that also exceeded the context window is compacted before recovery; if compaction cannot complete, the run fails without rewriting the assistant message that `message_end` already published, and the failure travels on `agent_settled`. If automatic compaction is disabled for that overflow, the run fails immediately instead. Every incomplete turn carries an `incomplete_turn` diagnostic recorded before the message is persisted, whose details include `reason`, `consecutiveTurns`, `overflowKind` when known, and the provider's `rawStopReason` when present. The classifier reads only stop reasons and content-block types; it never parses thinking, and reads text only to decide whether any is visible.
+
+The run-level outcome is not a session entry. `agent_settled.failure` exists only in the live event stream, because a message the transcript already holds must not change after it is written: reload a session and the per-turn `incomplete` classification and its diagnostic are still there, but "did this run end without an answer" is reconstructed from the last turn. A recorder that needs the run's own verdict has to capture the event.
 
 ### LabelEntry
 

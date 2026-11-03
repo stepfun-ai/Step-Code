@@ -15,19 +15,24 @@
 
 import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import {
-	type Agent,
-	type AgentContext,
-	type AgentEvent,
-	type AgentMessage,
-	type AgentState,
-	type AgentTool,
-	classifyIncompleteAssistantTurn,
-	type IncompleteAssistantTurnReason,
-	type PrepareNextTurnContext,
-	type ThinkingLevel,
+import type {
+	Agent,
+	AgentContext,
+	AgentEvent,
+	AgentMessage,
+	AgentState,
+	AgentTool,
+	PrepareNextTurnContext,
+	ThinkingLevel,
 } from "@step-harness/agent-core";
-import { contentText } from "@step-harness/providers";
+import {
+	classifyIncompleteAssistantTurn,
+	contentBlocks,
+	contentText,
+	INCOMPLETE_TURN_MESSAGES,
+	type IncompleteTurnReason,
+	isIncompleteAssistantTurn,
+} from "@step-harness/providers";
 import type {
 	AssistantMessage,
 	AuthResult,
@@ -116,11 +121,7 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
-import {
-	createIncompleteTurnRecoveryMessage,
-	FAILURE_MESSAGES,
-	markIncompleteTurnFailed,
-} from "./incomplete-turn-recovery.ts";
+import { createIncompleteTurnRecoveryMessage, recordIncompleteTurn } from "./incomplete-turn-recovery.ts";
 import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
@@ -128,6 +129,7 @@ import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts
 import { isRateLimitError, rateLimitDelay } from "./rate-limit.ts";
 import { readRequestUsage } from "./request-provenance.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
+import type { AgentRunFailure } from "./run-failure.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
 import { getLatestCompactionEntry } from "./session-manager.ts";
@@ -142,6 +144,7 @@ import { boundToolResultContent } from "./tools/tool-output.ts";
 import { addUsageToTotals, createUsageTotals, entryUsage } from "./usage-totals.ts";
 
 export { type ParsedSkillBlock, parseSkillBlock } from "../utils/skill-block.ts";
+export type { AgentRunFailure } from "./run-failure.ts";
 
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
@@ -151,7 +154,7 @@ export type AgentSessionEvent =
 			messages: AgentMessage[];
 			willRetry: boolean;
 	  }
-	| { type: "agent_settled" }
+	| { type: "agent_settled"; failure?: AgentRunFailure }
 	| { type: "live_context"; outcome: LiveContextOutcome }
 	| { type: "auto_clm_start"; reason: "native-threshold" | "soft-threshold" }
 	| { type: "auto_clm_end"; result: AutoClmResult }
@@ -181,12 +184,6 @@ export type AgentSessionEvent =
 			reason?: "rate_limit";
 	  }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
-	| {
-			type: "incomplete_turn_recovery_failed";
-			reason: IncompleteAssistantTurnReason;
-			errorMessage: string;
-			overflowKind?: "context" | "length";
-	  }
 	| {
 			type: "summarization_retry_scheduled";
 			attempt: number;
@@ -220,6 +217,45 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 // ============================================================================
 // Types
 // ============================================================================
+
+/** Whether an assistant message carries a tool call the loop can execute. */
+function hasToolCall(message: AssistantMessage): boolean {
+	return contentBlocks(message).some((block) => block.type === "toolCall");
+}
+
+/**
+ * Whether a finished turn actually produced something.
+ *
+ * Visible text or a structured tool call is progress: the model answered, or it
+ * asked for work it can have executed. Everything else — an empty turn, a
+ * provider error, an abort, a truncated reply — left the task where it was, so it
+ * must not refill a recovery budget.
+ */
+function turnMadeProgress(message: AssistantMessage): boolean {
+	if (hasToolCall(message)) return true;
+	return contentBlocks(message).some(
+		(block) => block.type === "text" && typeof block.text === "string" && block.text.trim().length > 0,
+	);
+}
+
+/**
+ * A view of the message that silent-overflow detection can read.
+ *
+ * Silent overflow is defined for a completed `stop`, because that is the response
+ * a provider accepted while the request no longer fit. A tool-use turn that carries
+ * no call never delivered the work it promised, so it belongs in the same bucket:
+ * without this, an oversized empty tool-use turn would spend the incomplete-turn
+ * recovery on a request that cannot fit.
+ *
+ * A tool-use turn that does carry calls is deliberately excluded. Overflow recovery
+ * removes the assistant message and replays the turn, which would separate those
+ * calls from the results already appended after them.
+ */
+function silentOverflowCandidate(message: AssistantMessage): AssistantMessage {
+	if (message.stopReason !== "toolUse") return message;
+	if (hasToolCall(message)) return message;
+	return { ...message, stopReason: "stop" };
+}
 
 function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<string, string> | undefined {
 	return headers
@@ -1255,26 +1291,6 @@ export class AgentSession {
 		}
 	}
 
-	/**
-	 * Deliver a terminal failure notification without letting one observer replace
-	 * the failure that is about to be thrown. An observer's own failure is not
-	 * recoverable here; the original recovery failure remains authoritative.
-	 */
-	private _emitFailure(event: AgentSessionEvent): void {
-		for (const listener of this._eventListeners) {
-			try {
-				const result: unknown = listener(event);
-				if (result && typeof (result as { then?: unknown }).then === "function") {
-					void Promise.resolve(result).catch(() => {
-						// The caller throws the recovery failure after this notification.
-					});
-				}
-			} catch {
-				// The caller throws the recovery failure after this notification.
-			}
-		}
-	}
-
 	private _emitQueueUpdate(): void {
 		this._emit({
 			type: "queue_update",
@@ -1337,9 +1353,13 @@ export class AgentSession {
 
 	private async _emitAgentSettled(): Promise<void> {
 		this._isAgentRunActive = false;
+		// Capture and clear before notifying: a listener may start the next run, and
+		// that run must not inherit this one's failure.
+		const failure = this._runFailure;
+		this._runFailure = undefined;
 		try {
-			await this._extensionRunner.emit({ type: "agent_settled" });
-			this._emit({ type: "agent_settled" });
+			await this._extensionRunner.emit(failure ? { type: "agent_settled", failure } : { type: "agent_settled" });
+			this._emit(failure ? { type: "agent_settled", failure } : { type: "agent_settled" });
 		} finally {
 			this._resolveIdleWaitIfIdle();
 		}
@@ -1349,14 +1369,14 @@ export class AgentSession {
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
 	/** Whether a thinking-only or missing-response turn may start one recovery continuation. */
 	private _incompleteTurnRecoveryEnabled = true;
-	/** Set after the first incomplete response observed in the current top-level run. */
-	private _incompleteTurnObserved = false;
-	/** Set after the one recovery continuation allowed for the current top-level run. */
-	private _incompleteTurnRecoveryAttempted = false;
-	/** Terminal classification of the last assistant message, finalized after extension content replacement. */
-	private _lastIncompleteTurnReason: IncompleteAssistantTurnReason | undefined = undefined;
-	/** Set when the last assistant message was already marked as an incomplete-turn error. */
-	private _lastTurnMarkedIncomplete = false;
+	/**
+	 * Consecutive incomplete turns. Any actionable turn, or any user input, resets
+	 * it, so one transient empty response in a long autonomous run recovers while a
+	 * model that keeps producing nothing cannot loop.
+	 */
+	private _incompleteTurnStreak = 0;
+	/** Run-level failure the transcript cannot express; reported on `agent_settled`. */
+	private _runFailure: AgentRunFailure | undefined = undefined;
 	/** Last automatic-compaction failure detail, used to explain a failed incomplete-turn recovery. */
 	private _lastAutoCompactionFailure: string | undefined = undefined;
 	/** Recovery prompt selected at the end of a turn and waiting for its continuation to start. */
@@ -1368,6 +1388,11 @@ export class AgentSession {
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
 			this._overflowRecoveryAttempted = false;
+			// User input is a new attempt and the run's outcome is theirs to decide: a
+			// run that recovered once must not turn the next empty response into a
+			// terminal failure, and an earlier empty turn is no longer the outcome.
+			this._incompleteTurnStreak = 0;
+			this._runFailure = undefined;
 			const messageText = contentText(event.message.content, "");
 			if (messageText) {
 				// Check steering queue first
@@ -1391,7 +1416,7 @@ export class AgentSession {
 		await this._emitExtensionEvent(event, signal);
 
 		if (event.type === "message_end" && event.message.role === "assistant") {
-			this._handleIncompleteAssistantTurn(event.message as AssistantMessage);
+			this._classifyAssistantTurn(event.message as AssistantMessage);
 		}
 
 		// Notify all listeners
@@ -1462,31 +1487,66 @@ export class AgentSession {
 		}
 	};
 
-	private _handleIncompleteAssistantTurn(message: AssistantMessage): void {
-		this._lastIncompleteTurnReason = undefined;
-		this._lastTurnMarkedIncomplete = false;
-		if (!this._incompleteTurnRecoveryEnabled) return;
+	/**
+	 * Record the turn's structural classification on the message.
+	 *
+	 * The classification is re-derived after extension `message_end` replacement,
+	 * so it always describes the message that is persisted. The provider's stop
+	 * reason is left untouched: only the diagnostic and `incomplete` describe the
+	 * outcome, and consumers that map a run to success read
+	 * `assistantTerminalFailure()`.
+	 */
+	private _classifyAssistantTurn(message: AssistantMessage): void {
 		const reason = classifyIncompleteAssistantTurn(message);
-		if (!reason) return;
-		if (this._incompleteTurnObserved) {
-			markIncompleteTurnFailed(message, reason, {
-				recoveryAttempts: this._incompleteTurnRecoveryAttempted ? 1 : 0,
-			});
-			this._lastTurnMarkedIncomplete = true;
+		// Always describe the message that is persisted, even when this host owns
+		// completion: `incomplete` is a property of the turn, not of our policy.
+		message.incomplete = reason;
+		if (!reason) {
+			// Only real progress refills the budget and resolves the run. An error, an
+			// abort, or a truncated turn also fails to classify as incomplete, but
+			// counting it as progress is what would let "empty, error, empty, error"
+			// recover forever.
+			if (turnMadeProgress(message)) {
+				this._incompleteTurnStreak = 0;
+				this._runFailure = undefined;
+			}
 			return;
 		}
-		this._incompleteTurnObserved = true;
 		const overflowKind = this._getOverflowKind(message);
-		if (overflowKind && !this.settingsManager.getCompactionSettings().enabled) {
-			markIncompleteTurnFailed(message, reason, {
-				recoveryAttempts: 0,
-				errorMessage: `${FAILURE_MESSAGES[reason]} The response also exceeded the model context window, and automatic compaction is disabled.`,
-				details: { overflowKind, compaction: "disabled" },
-			});
-			this._lastTurnMarkedIncomplete = true;
+		// Record the classification on the message here, before it is persisted, so
+		// the diagnostic survives a reload. A later decision must not edit a message
+		// the transcript already holds.
+		recordIncompleteTurn(message, reason, {
+			streak: this._incompleteTurnStreak + 1,
+			details: { ...(overflowKind ? { overflowKind } : {}) },
+		});
+		if (!this._incompleteTurnRecoveryEnabled) {
+			// The host owns completion: it decides the run's outcome from `incomplete`.
+			// The streak still counts, because the diagnostic records what happened
+			// rather than what this host chose to do about it.
+			this._incompleteTurnStreak += 1;
+			this._runFailure = undefined;
 			return;
 		}
-		this._lastIncompleteTurnReason = reason;
+		this._incompleteTurnStreak += 1;
+		if (this._incompleteTurnStreak > 1) {
+			this._recordIncompleteRunFailure(reason, INCOMPLETE_TURN_MESSAGES[reason]);
+			return;
+		}
+		if (overflowKind && !this.settingsManager.getCompactionSettings().enabled) {
+			this._recordIncompleteRunFailure(
+				reason,
+				`${INCOMPLETE_TURN_MESSAGES[reason]} The response also exceeded the model context window, and automatic compaction is disabled.`,
+			);
+			return;
+		}
+		// The recovery continuation may still resolve the run, so this attempt is not
+		// the run's outcome yet.
+		this._runFailure = undefined;
+	}
+
+	private _recordIncompleteRunFailure(reason: IncompleteTurnReason, message_: string): void {
+		this._runFailure ??= { kind: "incomplete_turn", reason, message: message_ };
 	}
 
 	/** Let a host that already owns turn completion suppress the generic recovery. */
@@ -1495,12 +1555,6 @@ export class AgentSession {
 	}
 
 	private _willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
-		// An incomplete turn has its own bounded recovery path (or is already a
-		// terminal error). Advertising a generic retry here would disagree with
-		// _handlePostAgentRun, which classifies structurally rather than by text.
-		if (this._lastTurnMarkedIncomplete || this._lastIncompleteTurnReason !== undefined) {
-			return false;
-		}
 		const settings = this.settingsManager.getRetrySettings();
 		if (!settings.enabled) {
 			return false;
@@ -2012,12 +2066,10 @@ export class AgentSession {
 		const runAbortController = new AbortController();
 		this._agentRunAbortController = runAbortController;
 		this._isAgentRunActive = true;
-		// A top-level run owns one incomplete-turn recovery, even if steering or a
-		// tool continuation adds more turns before it settles.
-		this._incompleteTurnObserved = false;
-		this._incompleteTurnRecoveryAttempted = false;
-		this._lastIncompleteTurnReason = undefined;
-		this._lastTurnMarkedIncomplete = false;
+		// A run starts with a clean recovery budget. The streak itself survives only
+		// as the count of consecutive empty turns, which user input resets.
+		this._incompleteTurnStreak = 0;
+		this._runFailure = undefined;
 		this._lastAutoCompactionFailure = undefined;
 		try {
 			const incoming = Array.isArray(messages) ? messages : [messages];
@@ -2091,11 +2143,12 @@ export class AgentSession {
 				}
 			}
 		} finally {
+			// The user's cancellation outranks our diagnosis: a terminal empty turn can
+			// be classified before they stop the run, and reporting that as the outcome
+			// of a run they ended themselves would turn their pause into a failure.
+			if (runAbortController.signal.aborted) this._runFailure = undefined;
 			this._pendingIncompleteTurnRecovery = undefined;
-			this._lastIncompleteTurnReason = undefined;
-			this._lastTurnMarkedIncomplete = false;
-			this._incompleteTurnObserved = false;
-			this._incompleteTurnRecoveryAttempted = false;
+			this._incompleteTurnStreak = 0;
 			this._checkedInitialRequest = undefined;
 			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
@@ -2115,23 +2168,11 @@ export class AgentSession {
 	private async _handlePostAgentRun(): Promise<boolean> {
 		const msg = this._lastAssistantMessage;
 		this._lastAssistantMessage = undefined;
-		const incompleteReason = this._incompleteTurnRecoveryEnabled ? this._lastIncompleteTurnReason : undefined;
-		this._lastIncompleteTurnReason = undefined;
-		// A turn already rewritten as an incomplete-turn error must not enter the
-		// generic retry path. That path decides from the error text, which would make
-		// the guarantee depend on the wording of a diagnostic we control.
-		const markedIncomplete = this._lastTurnMarkedIncomplete;
-		this._lastTurnMarkedIncomplete = false;
 		if (!msg) {
 			return false;
 		}
 
-		if (
-			!markedIncomplete &&
-			incompleteReason === undefined &&
-			this._isRetryableError(msg) &&
-			(await this._prepareRetry(msg))
-		) {
+		if (this._isRetryableError(msg) && (await this._prepareRetry(msg))) {
 			return true;
 		}
 
@@ -2153,6 +2194,7 @@ export class AgentSession {
 		// behalf; the recovered work starts from the user's next prompt instead.
 		if (this.hasPendingUserDecision) return false;
 
+		const incompleteReason = this._incompleteTurnRecoveryEnabled ? msg.incomplete : undefined;
 		const incomplete = incompleteReason !== undefined;
 		const overflowKind = incomplete ? this._getOverflowKind(msg) : undefined;
 		const compactionBefore = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
@@ -2179,45 +2221,46 @@ export class AgentSession {
 		}
 
 		if (incomplete) {
-			// A cancellation during compaction must settle quietly. The user already
-			// ended the run; turning that into a prompt rejection would surface it as
-			// an infrastructure failure.
-			if (this._agentRunAbortController?.signal.aborted) return false;
+			// A cancellation during compaction must settle quietly: the user already
+			// ended the run, and their cancellation outranks our diagnosis.
+			if (this._agentRunAbortController?.signal.aborted) {
+				this._runFailure = undefined;
+				return false;
+			}
 			// Compaction awaits provider auth and extension hooks. A decision may have
 			// become pending while it ran, so re-check the guard after that window.
 			if (this.hasPendingUserDecision) return false;
 			// Silent overflow must compact before another request. If compaction did
-			// not commit, do not spend the one recovery on a context that cannot fit.
+			// not commit, do not spend the recovery on a context that cannot fit.
 			// An incomplete turn can only carry a context overflow here: the classifier
 			// excludes length stops, which are the only other overflow kind.
-			if (overflowKind && getLatestCompactionEntry(this.sessionManager.getBranch())?.id === compactionBefore) {
+			if (
+				overflowKind &&
+				// Compaction being disabled was already terminal at classification time.
+				this.settingsManager.getCompactionSettings().enabled &&
+				getLatestCompactionEntry(this.sessionManager.getBranch())?.id === compactionBefore
+			) {
 				// The assistant message already reached listeners and the transcript at
-				// message_end. Rewriting it here would make the published event and the
-				// stored message disagree. Fail the run instead; the assistant keeps the
-				// status it was published with.
+				// message_end, and its stop reason is the provider's own value. Report the
+				// run-level failure instead of rewriting the message: a message the
+				// transcript already holds must not change under it.
 				const detail = this._lastAutoCompactionFailure;
-				const errorMessage = detail
+				const message = detail
 					? `Cannot recover an incomplete assistant turn because automatic compaction did not complete: ${detail}`
 					: "Cannot recover an incomplete assistant turn because automatic compaction did not complete.";
-				// Post-run failures cannot use the prompt response: RPC reports accepted
-				// prompts through events, not a second response for the same request.
-				this._emitFailure({
-					type: "incomplete_turn_recovery_failed",
-					reason: incompleteReason,
-					errorMessage,
-					overflowKind,
-				});
-				throw new Error(errorMessage);
+				this._recordIncompleteRunFailure(incompleteReason, message);
+				return false;
 			}
 			// Let already-queued input run first. If it resolves the turn, the old
 			// incomplete response stays in context without forcing a stale retry.
 			// This runs after the overflow guard because queued input cannot make a
 			// request that still exceeds the context window succeed.
 			if (this.agent.hasQueuedMessages()) return true;
-			// The recovery continuation may cross tool calls; only a new top-level
-			// run starts another budget.
-			if (this._incompleteTurnRecoveryAttempted) return false;
-			this._incompleteTurnRecoveryAttempted = true;
+			// The turn is already terminal — a repeated empty turn, or an overflow that
+			// could not be compacted because compaction is disabled. Nothing left to try
+			// here; a compaction may still have run above, which only helps the next
+			// prompt fit.
+			if (this._runFailure) return false;
 			this._pendingIncompleteTurnRecovery = createIncompleteTurnRecoveryMessage(incompleteReason);
 			return true;
 		}
@@ -3275,7 +3318,9 @@ export class AgentSession {
 		this._branchSummaryAbortController?.abort();
 	}
 
-	/** Classify a response as a context overflow or a recoverable truncated response. */
+	/**
+	 * Classify a response as a context overflow or a recoverable truncated response.
+	 */
 	private _getOverflowKind(assistantMessage: AssistantMessage): "context" | "length" | undefined {
 		const contextWindow = this.model?.contextWindow ?? 0;
 
@@ -3288,7 +3333,7 @@ export class AgentSession {
 			return undefined;
 		}
 		if (!sameModel) return undefined;
-		if (isContextOverflow(assistantMessage, contextWindow)) return "context";
+		if (isContextOverflow(silentOverflowCandidate(assistantMessage), contextWindow)) return "context";
 		if (isRecoverableLength(assistantMessage, this.model?.maxTokens ?? 0)) return "length";
 		return undefined;
 	}
@@ -3341,7 +3386,12 @@ export class AgentSession {
 		const overflowKind = this._getOverflowKind(assistantMessage);
 		if (overflowKind) {
 			const contextOverflow = overflowKind === "context";
-			const willRetry = assistantMessage.stopReason !== "stop";
+			// An empty turn is never replayed. Case 1 removes the assistant message and
+			// calls `agent.continue()`, and a compaction that restores that message
+			// leaves an assistant at the tail, which `continue()` rejects. The
+			// incomplete-turn recovery sends its own prompt instead, so this path only
+			// has to make room.
+			const willRetry = assistantMessage.stopReason !== "stop" && !isIncompleteAssistantTurn(assistantMessage);
 
 			// Case 2: the response completed successfully. Compact, but do not retry because
 			// agent.continue() cannot continue from a completed assistant response.
@@ -3350,6 +3400,9 @@ export class AgentSession {
 			}
 
 			if (this._overflowRecoveryAttempted) {
+				// The attempt that just failed is the one worth reporting; a detail left
+				// from an earlier compaction would describe a different failure.
+				this._lastAutoCompactionFailure = undefined;
 				const errorMessage = contextOverflow
 					? "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model."
 					: "Truncated response recovery failed after one compact-and-retry attempt.";
@@ -3451,6 +3504,7 @@ export class AgentSession {
 
 		try {
 			if (!this.model) {
+				this._lastAutoCompactionFailure = "No model is selected.";
 				return false;
 			}
 
@@ -3468,6 +3522,9 @@ export class AgentSession {
 				preparation && this._getLiveContext()?.prepareCompaction(preparation, this.agent.state.messages);
 			if (liveCompaction) preparation = liveCompaction.preparation;
 			if (!preparation) {
+				// Nothing old enough to summarize. The caller reports this as the reason
+				// it could not make room, instead of a bare "did not complete".
+				this._lastAutoCompactionFailure = "No older history could be summarized.";
 				return false;
 			}
 
@@ -3489,6 +3546,8 @@ export class AgentSession {
 				})) as SessionBeforeCompactResult | undefined;
 
 				if (extensionResult?.cancel) {
+					// Not an exception, but still the reason a caller could not make room.
+					this._lastAutoCompactionFailure = "An extension cancelled compaction.";
 					this._emit({
 						type: "compaction_end",
 						reason,
@@ -3620,6 +3679,7 @@ export class AgentSession {
 			if (started) {
 				const aborted = this._autoCompactionAbortController?.signal.aborted ?? false;
 				const failureDetails = aborted ? undefined : this._recordCompactionFailure(error, reason);
+				if (aborted) this._lastAutoCompactionFailure = "Automatic compaction was cancelled.";
 				let formattedErrorMessage = aborted
 					? undefined
 					: reason === "overflow"

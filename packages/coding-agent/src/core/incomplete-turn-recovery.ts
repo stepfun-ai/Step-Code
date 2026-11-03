@@ -1,29 +1,34 @@
-import type { IncompleteAssistantTurnReason } from "@step-harness/agent-core";
-import { appendAssistantMessageDiagnostic } from "@step-harness/providers";
-import type { AssistantMessage } from "@step-harness/providers/compat";
+import {
+	type AssistantMessage,
+	appendAssistantMessageDiagnostic,
+	contentBlocks,
+	type IncompleteTurnReason,
+} from "@step-harness/providers";
 import type { CustomMessage } from "./messages.ts";
 
 export const INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE = "step-incomplete-turn-recovery";
 
-const RECOVERY_PROMPTS: Record<IncompleteAssistantTurnReason, string> = {
+/**
+ * Recovery instructions for a turn that produced nothing actionable.
+ *
+ * The wording does not refer to "your previous response": a response with no
+ * content blocks is dropped by the provider serializers, so the model may only
+ * see the original prompt followed by this message.
+ */
+const RECOVERY_PROMPTS: Record<IncompleteTurnReason, string> = {
 	no_visible_output: [
-		"I don't see a visible answer or a tool call in your previous response.",
+		"[Step runtime recovery] The last turn produced no visible answer and no tool call.",
 		"If work remains, call the appropriate tool now; otherwise finish with a clear answer for me.",
-		"Do not place tool calls or commands only inside reasoning.",
+		"Do not put tool calls or commands inside reasoning only.",
 	].join("\n"),
 	missing_tool_call: [
-		"I don't see an executable tool call in your previous response, even though it ended as a tool-use turn.",
+		"[Step runtime recovery] The last turn ended as a tool-use turn but carried no executable tool call.",
 		"If work remains, call the appropriate tool now; otherwise finish with a clear answer for me.",
-		"Do not place tool calls or commands only inside reasoning.",
+		"Do not put tool calls or commands inside reasoning only.",
 	].join("\n"),
 };
 
-export const FAILURE_MESSAGES: Record<IncompleteAssistantTurnReason, string> = {
-	no_visible_output: "The model returned no visible answer or executable tool call.",
-	missing_tool_call: "The model ended a tool-use turn without an executable tool call.",
-};
-
-export function createIncompleteTurnRecoveryMessage(reason: IncompleteAssistantTurnReason): CustomMessage {
+export function createIncompleteTurnRecoveryMessage(reason: IncompleteTurnReason): CustomMessage {
 	return {
 		role: "custom",
 		customType: INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
@@ -33,22 +38,29 @@ export function createIncompleteTurnRecoveryMessage(reason: IncompleteAssistantT
 	};
 }
 
-export function markIncompleteTurnFailed(
+/**
+ * Record why an incomplete turn could not stand, on the turn itself.
+ *
+ * The message keeps the provider's stop reason: this only adds the diagnostic and
+ * never rewrites a provider fact.
+ */
+export function recordIncompleteTurn(
 	message: AssistantMessage,
-	reason: IncompleteAssistantTurnReason,
-	options: { recoveryAttempts: number; errorMessage?: string; details?: Record<string, unknown> },
+	reason: IncompleteTurnReason,
+	options: { streak: number; details?: Record<string, unknown> },
 ): void {
-	const content = message.content ?? [];
-	message.stopReason = "error";
-	message.errorMessage = options.errorMessage ?? FAILURE_MESSAGES[reason];
+	const content = contentBlocks(message);
 	appendAssistantMessageDiagnostic(message, {
 		type: "incomplete_turn",
 		timestamp: Date.now(),
 		details: {
-			recoveryAttempts: options.recoveryAttempts,
 			reason,
+			consecutiveTurns: options.streak,
 			hadThinking: content.some((block) => block.type === "thinking"),
-			hadVisibleText: content.some((block) => block.type === "text" && block.text.trim().length > 0),
+			hadVisibleText: content.some(
+				(block) => block.type === "text" && typeof block.text === "string" && block.text.trim().length > 0,
+			),
+			...(message.rawStopReason ? { rawStopReason: message.rawStopReason } : {}),
 			...options.details,
 		},
 	});

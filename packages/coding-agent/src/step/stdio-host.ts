@@ -1092,6 +1092,10 @@ export class StepStdioHost {
 				},
 			});
 		} else if (event.type === "agent_settled") {
+			// A settled run is not automatically a successful one: a terminal empty turn
+			// keeps the provider's stop reason on its message, so the outcome can only be
+			// read here. Without this the query would report success with no answer.
+			if (event.failure && query.errorMessage === undefined) query.errorMessage = event.failure.message;
 			this.#maybeFinish(query);
 		}
 	}

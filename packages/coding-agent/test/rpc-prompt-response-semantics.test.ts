@@ -308,7 +308,7 @@ describe("RPC prompt response semantics", () => {
 		}
 	});
 
-	it("reports a post-acceptance recovery failure through the event stream only", async () => {
+	it("reports a post-acceptance recovery failure on the settled run, not as a second response", async () => {
 		let calls = 0;
 		const streamFn: StreamFn = () => {
 			const stream = new MockAssistantStream();
@@ -345,20 +345,18 @@ describe("RPC prompt response semantics", () => {
 			lineHandler(JSON.stringify({ id: "b4", type: "prompt", message: "Hello" }));
 
 			await vi.waitFor(() => {
-				const failures = parseOutputLines(rpcIo.outputLines).filter(
-					(record) => record.type === "incomplete_turn_recovery_failed",
-				);
-				expect(failures).toHaveLength(1);
-				expect(failures[0]).toMatchObject({
-					reason: "no_visible_output",
-					overflowKind: "context",
-				});
-				expect(failures[0].errorMessage).toContain(
+				const settled = parseOutputLines(rpcIo.outputLines).filter((record) => record.type === "agent_settled");
+				expect(settled).toHaveLength(1);
+				const failure = settled[0].failure as Record<string, unknown> | undefined;
+				expect(failure).toMatchObject({ kind: "incomplete_turn", reason: "no_visible_output" });
+				expect(String(failure?.message)).toContain(
 					"Cannot recover an incomplete assistant turn because automatic compaction did not complete",
 				);
-				expect(failures[0].errorMessage).toContain("Context overflow recovery failed");
+				expect(String(failure?.message)).toContain("Context overflow recovery failed");
 			});
 
+			// An accepted prompt still gets exactly one response; the failure travels
+			// as a durable event so a record consumer sees it exactly once.
 			const responses = getPromptResponses(rpcIo.outputLines, "b4");
 			expect(responses).toHaveLength(1);
 			expect(responses[0]).toMatchObject({ success: true });

@@ -31,6 +31,7 @@ import {
 	theme,
 } from "@step-harness/coding-agent";
 import { Spacer, Text } from "@step-harness/pi-tui";
+import { INCOMPLETE_TURN_MESSAGES } from "@step-harness/providers";
 import {
 	BranchSummaryStatusIndicator,
 	buildStatusTips,
@@ -346,6 +347,12 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 			break;
 
 		case "agent_settled":
+			// A settled run is not automatically a successful one. The transcript already
+			// shows the empty turn, so only report a failure that says more than that:
+			// a recovery that could not make room carries the compaction reason.
+			if (event.failure && event.failure.message !== INCOMPLETE_TURN_MESSAGES[event.failure.reason]) {
+				ctx.showError(event.failure.message);
+			}
 			await ctx.checkShutdownRequested();
 			break;
 
@@ -482,11 +489,6 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 			ctx.redraw.requestRender();
 			break;
 		}
-
-		case "incomplete_turn_recovery_failed":
-			// The interactive path reports this failure through the prompt rejection;
-			// the event exists for hosts that record post-acceptance session events.
-			break;
 
 		case "summarization_retry_finished": {
 			ctx.clearStatusIndicator("retry");
