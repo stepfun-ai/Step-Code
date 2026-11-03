@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createInitialState, getState, setState } from "../client/src/state/store.ts";
-import { dismissNotice, pushNotice } from "../client/src/state/session.ts";
+import { closeStream, connectStream, dismissNotice, pushNotice } from "../client/src/state/session.ts";
 import type { SessionSnapshot } from "../client/src/state/types.ts";
 
 function reset(): void {
@@ -49,4 +49,37 @@ test("a snapshot's planMode is what the strip draws, not a notice", () => {
 	// Nothing about plan mode is in the transcript: no notice, no timeline row.
 	assert.deepEqual(getState().notices, []);
 	assert.deepEqual(getState().timelineItems, []);
+});
+
+test("a transient settled failure arrives through SSE as a danger toast, not a notice row", () => {
+	reset();
+	const original = globalThis.EventSource;
+	const originalWindow = globalThis.window;
+	const handlers = new Map<string, (event: { data: string }) => void>();
+	class FixtureSource {
+		addEventListener(name: string, listener: (event: { data: string }) => void): void {
+			handlers.set(name, listener);
+		}
+		close(): void {}
+	}
+	try {
+		globalThis.EventSource = FixtureSource as unknown as typeof EventSource;
+		globalThis.window = { setTimeout: () => 1, clearTimeout: () => {} } as unknown as Window & typeof globalThis;
+		connectStream("s");
+		handlers.get("notice")?.({
+			data: JSON.stringify({
+				level: "error",
+				text: "Retry limit reached (1/1); the run ended without an answer.",
+				transient: true,
+			}),
+		});
+		assert.equal(getState().toast?.tone, "danger");
+		assert.match(getState().toast?.message ?? "", /1\/1/);
+		assert.deepEqual(getState().notices, []);
+	} finally {
+		closeStream();
+		globalThis.EventSource = original;
+		globalThis.window = originalWindow;
+		reset();
+	}
 });

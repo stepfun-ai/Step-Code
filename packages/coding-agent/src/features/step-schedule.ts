@@ -777,7 +777,12 @@ export class StepGoalRuntime {
 		this.run.attemptActive = false;
 		this.recordMessages(messages);
 		const assistant = lastAssistant(this.run.messages);
-		this.lastStopReason = assistant?.stopReason ?? "error";
+		// Only what the message itself proves: a provider error or a cancellation. An
+		// empty turn keeps the provider's own stop reason, so whether it ended the run
+		// is the settled outcome's decision, not this attempt's.
+		const stopReason = assistant?.stopReason;
+		this.lastStopReason =
+			stopReason === "error" || stopReason === "aborted" ? stopReason : assistant ? "stop" : "error";
 		this.lastErrorMessage =
 			boundedText(assistant?.errorMessage, 500) || (assistant ? undefined : "Agent run ended without a response.");
 		if (this.goal && this.run.participated && this.run.goalId === this.goal.id) {
@@ -787,7 +792,14 @@ export class StepGoalRuntime {
 	}
 
 	/** Pi calls this after retries, compaction, and native queues have settled. */
-	onAgentSettled(): GoalContinuation | undefined {
+	onAgentSettled(failure?: { message: string }): GoalContinuation | undefined {
+		// The settled run is the authoritative outcome: an empty turn keeps the
+		// provider's stop reason on its message, so `agent_end` alone cannot tell a
+		// failed run from a quiet one.
+		if (failure) {
+			this.lastStopReason = "error";
+			this.lastErrorMessage = boundedText(failure.message, 500);
+		}
 		const run = this.run;
 		if (run?.attemptActive) return undefined;
 		const participated = Boolean(run?.participated && this.goal && run.goalId === this.goal.id);
@@ -1176,10 +1188,10 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 			runtime.onMessageEnd(event.message);
 			updateStatus(ctx);
 		});
-		pi.on("agent_settled", (_event, ctx) => {
+		pi.on("agent_settled", (event, ctx) => {
 			setContext(ctx);
 			const before = runtime.get()?.status;
-			runtime.onAgentSettled();
+			runtime.onAgentSettled(event.failure);
 			notifyAutoStop(before, ctx);
 			updateStatus(ctx);
 		});

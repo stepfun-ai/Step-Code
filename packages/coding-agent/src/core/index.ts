@@ -2,7 +2,9 @@
  * Core modules shared between all run modes.
  */
 
+export { INCOMPLETE_TURN_MESSAGES, type IncompleteTurnReason } from "@step-harness/providers";
 export {
+	type AgentRunFailure,
 	AgentSession,
 	type AgentSessionConfig,
 	type AgentSessionEvent,
@@ -77,6 +79,11 @@ export {
 	type TurnStartEvent,
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
+export {
+	createIncompleteTurnRecoveryMessage,
+	INCOMPLETE_TURN_RECOVERY_ATTEMPTS,
+	INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
+} from "./incomplete-turn-recovery.ts";
 export {
 	type ModelRequestCompleted,
 	type ModelRequestObserver,

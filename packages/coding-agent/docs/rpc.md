@@ -900,7 +900,7 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 |-------|-------------|
 | `agent_start` | Agent begins processing |
 | `agent_end` | One low-level agent run completes (may still be followed by retry, compaction, or queued continuations); carries `willRetry` and a message count, not the messages |
-| `agent_settled` | Agent run is fully settled; no automatic retry, compaction retry, or queued continuation remains |
+| `agent_settled` | Agent run is fully settled; no automatic retry, compaction retry, or queued continuation remains. Carries `failure` when the run produced no usable answer |
 | `turn_start` | New turn begins |
 | `turn_end` | Turn completes; carries the message role and a tool-result count, not the messages |
 | `message_start` | Message begins |
@@ -938,9 +938,14 @@ What only this event says is that the run ended and whether it will be retried,
 so the record carries `messageCount` instead of the array.
 
 `messageCount` is the length of the run's `messages` array, **not** a checksum: a
-resampled tool-call leak or a throwing `shouldStopAfterTurn` can make the loop
-emit more `message_end` events than it lists. Detect a truncated run by a message
-that never got its `message_end`, not by comparing counts.
+throwing `shouldStopAfterTurn` can make the loop emit more `message_end` events
+than it lists. Detect a truncated run by a message that never got its
+`message_end`, not by comparing counts.
+
+One `agent_end` does not bound one prompt: an incomplete-turn recovery, a
+compaction retry, and queued continuations all emit their own. `willRetry`
+reports the provider retry that follows in this run, not those continuations;
+`agent_settled` is the boundary that says the run is over.
 
 ```json
 {
@@ -954,8 +959,21 @@ that never got its `message_end`, not by comparing counts.
 
 Emitted after the full session-level run settles. At this point Step will not continue automatically through retry, compaction retry, or queued follow-up messages.
 
+A run that produced no usable answer carries `failure` here. It is not reported by rewriting the assistant message: an incomplete turn keeps the provider's own `stopReason`, and a client that inferred success from the transcript would be wrong. Provider errors and cancellations keep using `stopReason`.
+
 ```json
 {"type": "agent_settled"}
+```
+
+```json
+{
+  "type": "agent_settled",
+  "failure": {
+    "kind": "incomplete_turn",
+    "reason": "no_visible_output",
+    "message": "The model returned no visible answer or executable tool call."
+  }
+}
 ```
 
 ### turn_start / turn_end

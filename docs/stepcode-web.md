@@ -206,7 +206,8 @@ The kernel appends a finished message after notifying its listeners, so the
 Host checks on a microtask, once however many events arrived. When the branch no
 longer extends what was published (tree navigation, a rewind, a rebind to
 another file) the event carries `reset: true` and the whole branch. An earlier
-assistant message whose thinking timing was saved after it is sent again.
+assistant message whose thinking timing was saved after it, or whose empty turn
+a later recovery answers (`incompleteTurnRecovered`), is sent again.
 
 Stream events still ask for a snapshot (for retry state, the title, goal and
 plan state), but through one throttled schedule per connection: one read in
@@ -265,8 +266,10 @@ write to fall back on.
 `interruptedTurn` in the snapshot tells the client the newest turn was cut off,
 derived from the entries (`hasInterruptedTurn`): a prompt with no reply, a branch
 ending in tool work (a tool result, or an assistant that stopped with calls), or a
-reply recorded as `aborted`. Errors and truncated replies are not interrupted; the
-transcript already renders them. It is false while a turn runs or is starting, so
+reply recorded as `aborted`. Errors, truncated replies, and a turn the kernel
+classified as carrying nothing actionable (`message.incomplete`) are not
+interrupted: the last one has its own explanation and may already be recovered.
+The transcript already renders them. It is false while a turn runs or is starting, so
 a prompt waiting for its first token is not called interrupted. The client draws
 it as a quiet divider under the transcript. Because it is read from the file, a
 reopened session says the same thing a live page did, instead of the run silently
@@ -274,6 +277,16 @@ disappearing. Imported message tails are source snapshots with unobserved outcom
 not evidence of native interruption; later native continuation messages still use
 the same interruption checks. Shutdown drains imports alongside stopping live turns,
 then closes their shared session index after both cleanup operations settle.
+
+Incomplete response cards explain the recorded turn, not whether its run ended.
+The host marks `incompleteTurnRecovered` only when a persisted hidden recovery
+message names that assistant entry in `details.recoversEntryId`; intervening
+compaction and metadata entries do not break the pairing. Actual live recovery
+starts announce the message's `attempt/maxAttempts`. Final `agent_settled.failure`
+sets the session status to failed and emits an error notice (red toast), rather
+than being overwritten as completed. No run-outcome entry is added: history
+reload keeps the response explanation and recorded recovery pairing, not a
+guessed terminal outcome.
 
 The transcript file itself starts at the first prompt, not at the first reply
 (`SessionManager`'s conversation guard), so a first turn cut off by a restart

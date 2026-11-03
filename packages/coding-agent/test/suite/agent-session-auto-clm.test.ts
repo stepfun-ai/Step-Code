@@ -448,39 +448,6 @@ describe("automatic CLM maintenance", () => {
 		expect(h.eventsOfType("compaction_start")).toHaveLength(0);
 		expect(h.session.getLiveContextStatus()!.revision).toBe(0);
 	});
-	it("retains parser-resampling exclusions when maintenance is interrupted", async () => {
-		const noop: AgentTool = {
-			name: "noop",
-			label: "Noop",
-			description: "Check progress",
-			parameters: Type.Object({}),
-			execute: async () => ({ content: [{ type: "text", text: "current evidence" }], details: {} }),
-		};
-		const h = await setup({ tools: [noop] });
-		seed(h, "brief prior state");
-		h.setResponses([fauxAssistantMessage(oldText)]);
-		await h.session.prompt("collect old findings");
-		let nextContext: Context | undefined;
-		h.setResponses([
-			fauxAssistantMessage("<tool_call>UNEXECUTED_PARSER_LEAK</tool_call>"),
-			fauxAssistantMessage(fauxToolCall("noop", {}), { stopReason: "toolUse" }),
-			async (context) => {
-				expect(context.tools?.map((tool) => tool.name)).toEqual(["apply_context_edit"]);
-				await h.session.prompt("STEERING: retain output order", { streamingBehavior: "steer" });
-				return fauxAssistantMessage("No edit while user input pending");
-			},
-			(context) => {
-				nextContext = context;
-				return fauxAssistantMessage("done");
-			},
-		]);
-		await h.session.prompt("inspect task");
-		expect(h.eventsOfType("compaction_start")).toHaveLength(0);
-		expect(h.getPendingResponseCount()).toBe(0);
-		expect(nextContext).toBeDefined();
-		expect(JSON.stringify(nextContext!.messages)).not.toContain("UNEXECUTED_PARSER_LEAK");
-		expect(JSON.stringify(nextContext!.messages)).toContain("STEERING");
-	});
 	it("waits for the complete tool batch and continues the task once", async () => {
 		let finished = false;
 		const bulk: AgentTool = {

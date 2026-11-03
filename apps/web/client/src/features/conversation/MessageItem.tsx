@@ -141,7 +141,8 @@ export const MessageItem = memo(function MessageItem({
 				label={command ? `/${command.name}` : (skill?.name ?? pluginInstall?.name ?? t("modeUltraloop"))}
 			/>
 		) : null;
-	if (item.error) return <MessageError item={item} inlineTimestamp={inlineTimestamp} />;
+	if (item.error)
+		return <MessageError item={item} inlineTimestamp={inlineTimestamp} attachments={attachments} cwd={cwd} />;
 	// The live turn before its first text (reasoning, or waiting on the first token).
 	if (role === "assistant" && !content) return <ThinkingIndicator />;
 	return (
@@ -280,18 +281,25 @@ function errorDetail(error: string): { readonly status: string; readonly message
 function MessageError({
 	item,
 	inlineTimestamp,
+	attachments,
+	cwd,
 }: {
 	readonly item: MessageTimelineItem;
 	readonly inlineTimestamp: boolean;
+	readonly attachments?: readonly TurnArtifact[];
+	readonly cwd: string;
 }) {
 	const t = useT();
 	const detail = errorDetail(item.error ?? "");
 	const parts = detail.message.split(/(https?:\/\/[^\s"'<>)]*[^\s"'<>),.;:!?])/g);
+	// Classification explains this response, not the run outcome: a pending
+	// decision or queued user input may still continue the run.
+	const incomplete = item.errorKind === "incomplete";
 	return (
 		<article className="message assistant message-error" role="alert" data-entry-id={item.entryId}>
 			<div className="message-error-title">
-				{t("modelRequestFailed")}
-				{detail.status ? <span className="message-error-status">{detail.status}</span> : null}
+				{incomplete ? t("incompleteResponse") : t("modelRequestFailed")}
+				{!incomplete && detail.status ? <span className="message-error-status">{detail.status}</span> : null}
 			</div>
 			<p className="message-error-text">
 				{parts.map((part, index) =>
@@ -305,6 +313,8 @@ function MessageError({
 					),
 				)}
 			</p>
+			{/* A later model failure cannot erase files the turn already produced. */}
+			{attachments?.length ? <MessageAttachments artifacts={attachments} cwd={cwd} /> : null}
 			{inlineTimestamp ? <MessageMeta item={item} /> : null}
 		</article>
 	);

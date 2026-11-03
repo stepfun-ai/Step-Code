@@ -146,6 +146,8 @@ export interface SessionEntry {
 	readonly promptCommand?: string;
 	/** Lifecycle-only metadata on custom_message / agent-notification entries. */
 	readonly details?: unknown;
+	/** Set by the host on an assistant entry whose empty turn the session recovered. */
+	readonly incompleteTurnRecovered?: boolean;
 	readonly [key: string]: unknown;
 }
 
@@ -459,8 +461,13 @@ export interface MessageTimelineItem {
 	readonly images?: readonly string[];
 	readonly usage?: Usage;
 	readonly timestamp?: string;
-	/** The model request failed (assistant `stopReason: "error"`); the provider's message. */
+	/** Explanation for a failed provider request or an incomplete response. */
 	readonly error?: string;
+	/**
+	 * A failed provider request and an incomplete response need different labels.
+	 * The latter does not establish the run outcome.
+	 */
+	readonly errorKind?: "request" | "incomplete";
 	/**
 	 * A user message the kernel expanded from a prompt command: `content` is the
 	 * line the user typed (`/<name> args`), not the template it became.

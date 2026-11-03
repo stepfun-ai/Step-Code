@@ -185,6 +185,8 @@ a reader reconstructs the transcript from `message_end` exactly as before.
 and the loop can emit more `message_end` events than it lists (a resampled
 tool-call leak, a throwing `shouldStopAfterTurn`). A reader detects a truncated
 run by a message that never got its `message_end`, not by comparing counts.
+(The leak resampling has since been removed; an incomplete turn is now reported
+on the message and the settled run, so only the throwing hook can still do this.)
 
 This is boundary-payload deduplication, **not** an exactly-once record. What still
 repeats, and why it stays:

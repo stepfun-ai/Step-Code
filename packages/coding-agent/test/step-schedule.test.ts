@@ -280,6 +280,43 @@ describe("StepGoalRuntime", () => {
 		expect(failed.runtime.get()?.status).toBe("blocked");
 	});
 
+	test("a settled run failure stops the goal even when the turn looks complete", () => {
+		// An empty turn keeps the provider's stop reason on its message, so `agent_end`
+		// alone reads as a normal stop. Only the settled failure says the run failed.
+		const failed = runtimeHarness();
+		failed.runtime.start("Recover the service", "session-1");
+		failed.runtime.onAgentStart();
+		failed.runtime.onAgentEnd([assistant("stop")]);
+		expect(failed.runtime.get()?.status).toBe("active");
+		failed.runtime.onAgentSettled({
+			message: "The model returned no visible answer or executable tool call.",
+		});
+		expect(failed.runtime.get()?.status).toBe("blocked");
+		expect(failed.continuations).toHaveLength(0);
+	});
+
+	test("an empty turn alone does not fail the goal: the settled outcome decides", () => {
+		// A turn with no visible text or call can be recovered, and the session may
+		// hand completion to a host. Reading the message here would block a goal for a
+		// run the session never called a failure.
+		const recovered = runtimeHarness();
+		recovered.runtime.start("Recover the service", "session-1");
+		recovered.runtime.onAgentStart();
+		recovered.runtime.onAgentEnd([assistant("stop")]);
+		expect(recovered.runtime.onAgentSettled()).toBeDefined();
+		expect(recovered.runtime.get()?.status).toBe("active");
+		expect(recovered.continuations).toHaveLength(1);
+	});
+
+	test("the user's own stop pauses the goal instead of blocking it", () => {
+		const interrupted = runtimeHarness();
+		interrupted.runtime.start("Recover the service", "session-1");
+		interrupted.runtime.onAgentStart();
+		interrupted.runtime.onAgentEnd([assistant("aborted")]);
+		interrupted.runtime.onAgentSettled();
+		expect(interrupted.runtime.get()?.status).toBe("paused");
+	});
+
 	test("restores a matching snapshot and honors a clear tombstone", () => {
 		const source = runtimeHarness();
 		const goal = source.runtime.start("Persist me", "session-1");

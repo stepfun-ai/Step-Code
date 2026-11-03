@@ -1232,8 +1232,10 @@ paths:
             `planMode` reports whether plan mode is active; both are read from the session branch, not from UI state.
             `revision` is the newest event revision the host had published when this snapshot was serialized; a client
             that has already applied a newer stream event must ignore this answer.
-            `interruptedTurn` is true when the newest recorded turn was cut off — a prompt with no reply, or a reply the
-            kernel recorded as `aborted` — and false while a turn is still running.
+            `interruptedTurn` is true when the newest recorded turn was cut off — a prompt with no reply, a branch ending
+            in tool work, or a reply the kernel recorded as `aborted` — and false while a turn is still running. A turn
+            the kernel classified as carrying nothing actionable (`message.incomplete`) is not an interruption: it has
+            its own explanation and may already be recovered.
           content:
             application/json:
               schema:
@@ -1329,6 +1331,13 @@ paths:
                             On a user message only: the prompt-command line (`/<template> args`) the user typed,
                             when this message is its expansion. Paired by content from a host-recorded
                             `stepcode-web.prompt-command` custom entry; never part of the model's context.
+                        incompleteTurnRecovered:
+                          type: boolean
+                          description: >-
+                            On an assistant entry whose turn carried nothing actionable (`message.incomplete`):
+                            the kernel already sent the hidden follow-up that recovers it. Paired by the
+                            recovery message's `details.recoversEntryId`, never by adjacency, so a usage
+                            provenance record or a compaction in between does not change it.
                   policies:
                     type: array
                     items: { $ref: "#/components/schemas/PolicyPreset" }

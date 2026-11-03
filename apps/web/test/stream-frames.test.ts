@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createStepSessionManager } from "@step-harness/coding-agent";
+import { createStepSessionManager, INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE, type SessionEntry } from "@step-harness/coding-agent";
 import type { AssistantMessage } from "@step-harness/providers";
 import { LiveMessageAssembler } from "../client/src/state/live-message.ts";
 import { JournalCursor } from "../src/journal-cursor.ts";
@@ -244,4 +244,39 @@ test("a projected range is the tail of the full projection, plus messages a late
 	} finally {
 		await rm(agentDir, { recursive: true, force: true });
 	}
+});
+
+test("a projected range re-sends the empty turn a later recovery answers", () => {
+	const at = "2026-11-03T11:00:00.000Z";
+	const prompt = (id: string): SessionEntry =>
+		({ type: "message", id, timestamp: at, message: { role: "user", content: "Go.", timestamp: 1 } }) as SessionEntry;
+	const empty = {
+		type: "message",
+		id: "a",
+		timestamp: at,
+		message: {
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "Thinking." }],
+			stopReason: "stop",
+			incomplete: "no_visible_output",
+			timestamp: 2,
+		},
+	} as SessionEntry;
+	const recovery = {
+		type: "custom_message",
+		id: "r",
+		timestamp: at,
+		customType: INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
+		content: "Continue.",
+		display: false,
+		details: { recoversEntryId: "a" },
+	} as SessionEntry;
+	const branch = [prompt("u"), empty, recovery];
+	const full = projectEntries(branch);
+	assert.equal(full[1]?.incompleteTurnRecovered, true);
+	// The page held the empty turn before its recovery was recorded: it gets the turn again, now paired.
+	assert.deepEqual(projectEntryRange(branch, 2), [full[1], full[2]]);
+	// Once the page holds both, later entries re-send neither.
+	const later = [...branch, prompt("v")];
+	assert.deepEqual(projectEntryRange(later, 3), [projectEntries(later)[3]]);
 });

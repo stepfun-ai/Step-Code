@@ -175,18 +175,6 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
 
 	/**
-	 * Bounded resampling for turns whose tool call leaked into plain text.
-	 *
-	 * Serving-side tool parsers can fail on the model's raw output, leaving
-	 * `<tool_call>`/`<function=` markup in the text content with no
-	 * structured tool call: the model meant to act, but the turn would end
-	 * the loop. Each retry drops the leaked attempt from the request context
-	 * (its message events remain in the event stream) and streams the
-	 * identical context again. Default 2; set 0 to disable.
-	 */
-	toolCallLeakRetries?: number;
-
-	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
 	 *
 	 * Each AgentMessage must be converted to a UserMessage, AssistantMessage, or ToolResultMessage
@@ -270,10 +258,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 
 	/**
 	 * Called immediately before every provider request, including the first request of a prompt or
-	 * continuation, after pending steering messages have been appended to the context. Tool-call
-	 * markup resampling of the same request does not call it again. On follow-up requests that have
-	 * not received steering yet, the loop polls steering once more after this hook returns, so input
-	 * queued during a long-running hook (for example, compaction) reaches the same request.
+	 * continuation, after pending steering messages have been appended to the context. On follow-up
+	 * requests that have not received steering yet, the loop polls steering once more after this hook
+	 * returns, so input queued during a long-running hook (for example, compaction) reaches the same request.
 	 * Return replacement context/model/thinking state to affect that request, or undefined to keep it.
 	 *
 	 * Contract: must not throw or reject. Throwing interrupts the low-level agent loop without producing a normal event sequence.

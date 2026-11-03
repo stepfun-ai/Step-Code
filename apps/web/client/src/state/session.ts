@@ -109,6 +109,21 @@ let noticeSeq = 0;
 const GOAL_STATUS_NOTICE =
 	/^(Goal set: |Goal (paused|resumed|cleared|updated)\.|Goal commands: |Goal: .*\(iteration |Stopped a queued goal turn |Goal .+ is (paused|blocked|usage_limited))/u;
 
+/**
+ * Explain an assistant turn that carried nothing the client could act on.
+ *
+ * The kernel keeps the provider's stop reason on such a turn and classifies it as
+ * `incomplete`, so the row says what happened instead of rendering empty. An
+ * unknown value still gets an explanation: `incomplete` being set at all is the
+ * kernel's verdict, and a newer reason must not bring back the blank row this
+ * classification exists to remove.
+ */
+function incompleteTurnText(incomplete: unknown): string {
+	if (incomplete === "missing_tool_call") return t("incompleteMissingToolCall");
+	if (incomplete) return t("incompleteNoVisibleOutput");
+	return "";
+}
+
 /** Whether a notice only restates goal state the goal panel already renders. */
 export function goalStatusNotice(text: string): boolean {
 	return GOAL_STATUS_NOTICE.test(text.trim());
@@ -626,13 +641,34 @@ export function timelineFromEntries(
 			message.role === "assistant" && message.stopReason === "error"
 				? String(message.errorMessage || t("modelRequestFailed"))
 				: "";
+		/*
+		 * An empty turn is a different thing. The provider called it a normal stop and
+		 * the session may already have recovered it with one hidden follow-up, so it
+		 * reads as a retry — its thinking and text stay — while a terminal one needs
+		 * its own explanation. Suppressing the body is only right for a provider
+		 * failure, whose content is a truncated attempt.
+		 */
+		const incomplete = message.role === "assistant" ? incompleteTurnText(message.incomplete) : "";
+		// The host pairs this turn with the hidden follow-up that recovered it.
+		const recovered = incomplete !== "" && entry.incompleteTurnRecovered === true;
 		const next = messages[index + 1]?.message;
-		if (error && (next ? next.role === "assistant" : retry !== undefined)) {
+		// A provider failure folds into the retry the kernel is running. A recovered
+		// empty turn folds into one too, whether or not its follow-up produced an
+		// assistant message — an abort mid-recovery still has to say what happened.
+		// A provider failure folds only when a retry or a reply follows; otherwise its
+		// card below stands alone. A recovered turn always folds: it was retried.
+		const errorFolds = error !== "" && (next ? next.role === "assistant" : retry !== undefined);
+		const foldedRetry = errorFolds || recovered;
+		const note = recovered ? "" : incomplete;
+		if (foldedRetry) {
 			// The kernel dropped the attempt from its context, so tool calls it streamed before failing never ran.
+			const folded = error || incomplete;
 			const last = items.at(-1);
-			if (last?.kind === "retry") items[items.length - 1] = { ...last, errors: [...last.errors, error] };
-			else items.push({ itemId: `retry-${entry.id}`, kind: "retry", errors: [error] });
-			continue;
+			if (last?.kind === "retry") items[items.length - 1] = { ...last, errors: [...last.errors, folded] };
+			else items.push({ itemId: `retry-${entry.id}`, kind: "retry", errors: [folded] });
+			// A failed attempt's body is truncated, so it is not worth showing. A recovered
+			// empty turn's thinking and text are the model's real output: keep them.
+			if (error) continue;
 		}
 		if (message.role !== "assistant" && (text || message.role === "user")) {
 			// A prompt command's expansion is shown as the line the user typed.
@@ -649,7 +685,7 @@ export function timelineFromEntries(
 				content: promptCommand ?? text,
 				...(promptCommand ? { promptCommand: true } : {}),
 				...(images.length ? { images } : {}),
-				...(error ? { error } : {}),
+				...(note ? { error: note } : {}),
 				usage: entry.usage,
 				timestamp: entry.timestamp,
 			});
@@ -737,14 +773,17 @@ export function timelineFromEntries(
 						: {}),
 				});
 			}
-			if (error)
+			if (error || note)
 				items.push({
-					itemId: `message-${entry.id}`,
+					// Its own id: the text block above already owns `message-${entry.id}`.
+					itemId: `message-${entry.id}-note`,
 					entryId: entry.id,
 					kind: "message",
 					role: "assistant",
 					content: "",
-					error,
+					error: error || note,
+					// This labels the response, not the eventual run outcome.
+					errorKind: error ? "request" : "incomplete",
 					usage: entry.usage,
 					timestamp: entry.timestamp,
 				});
@@ -1046,6 +1085,8 @@ interface AgentStreamEvent {
 		readonly content?: unknown;
 		readonly usage?: unknown;
 		readonly timestamp?: unknown;
+		readonly customType?: string;
+		readonly details?: unknown;
 	};
 	readonly toolCallId?: string;
 	readonly toolName?: string;
@@ -1057,6 +1098,27 @@ interface AgentStreamEvent {
 	/** `compaction_start` / `compaction_end` carry the reason and, on failure, the message. */
 	readonly reason?: string;
 	readonly errorMessage?: string;
+}
+
+/** A live recovery start is evidence of an attempt; a turn classification is not. */
+export function incompleteRecoveryNotice(event: AgentStreamEvent): string | undefined {
+	if (
+		event.type !== "message_start" ||
+		event.message?.role !== "custom" ||
+		event.message.customType !== "step-incomplete-turn-recovery"
+	)
+		return undefined;
+	const details = event.message.details;
+	const attempt =
+		typeof details === "object" && details !== null && "attempt" in details ? details.attempt : undefined;
+	const max =
+		typeof details === "object" && details !== null && "maxAttempts" in details ? details.maxAttempts : undefined;
+	const positiveInteger = (value: unknown) =>
+		typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 1;
+	return t("incompleteRetryStarted", {
+		attempt: positiveInteger(attempt),
+		max: positiveInteger(max),
+	});
 }
 
 /** Remember the newest revision this page has applied for `id`. */
@@ -1396,6 +1458,8 @@ function handleAgentEvent(
 	thinkingTimings?: ThinkingTimings,
 	promptCommand?: string,
 ): void {
+	const recoveryNotice = incompleteRecoveryNotice(agentEvent);
+	if (recoveryNotice) showToast(recoveryNotice, "neutral");
 	if (
 		agentEvent.type === "agent_start" ||
 		agentEvent.type === "message_start" ||
