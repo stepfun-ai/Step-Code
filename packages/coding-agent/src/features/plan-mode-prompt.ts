@@ -19,8 +19,11 @@ export const PLAN_MODE_MESSAGE_TYPE = "step-plan-mode";
  * older block keeps the rules it was written with. Bumping this makes the next
  * request append the current block; without it, a rule only reaches sessions
  * that entered plan mode after the upgrade.
+ *
+ * Not the same number as the `step-plan` entry's `version`: that one describes the
+ * persisted state format, this one the wording of a prompt block.
  */
-export const PLAN_MODE_PROMPT_VERSION = 2;
+export const PLAN_MODE_BLOCK_VERSION = 2;
 
 /** Block announcing that plan mode is active, with the session plan file. */
 export function buildPlanModePrompt(planFilePath: string): string {
