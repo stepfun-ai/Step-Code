@@ -343,6 +343,17 @@ describe("Step App system prompt product", () => {
 		expect(STEP_APP_SYSTEM_PROMPT_PRODUCT.includeDocumentation).toBe(false);
 	});
 
+	it("asks the app model to mention files as Markdown links the preview can open", () => {
+		const introduction = STEP_APP_SYSTEM_PROMPT_PRODUCT.introduction ?? "";
+		expect(introduction).toContain("[system-prompt.ts](src/step/system-prompt.ts)");
+		expect(introduction).toMatch(/code spans and code blocks as code, never links/u);
+		// The label names the file a click opens, never a package or a code span.
+		expect(introduction).toMatch(/plain text without backticks/u);
+		expect(introduction).toContain("never label a link with a package, module or symbol name");
+		// The terminal identity keeps plain paths: a CLI cannot open a link target.
+		expect(buildStepSystemPromptAppendix(["read_file"])).not.toMatch(/Markdown link/u);
+	});
+
 	it("exposes the shared product read-only to every session", () => {
 		// Freezing is only safe while the builder reads the product and never writes
 		// into it. Build twice from the same constant: no throw, identical output.
