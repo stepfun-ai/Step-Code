@@ -1076,7 +1076,7 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 		const setContext = (ctx: ExtensionContext): void => {
 			const host: Partial<GoalHostCallbacks> = {
 				isIdle: () => ctx.isIdle(),
-				hasPendingMessages: () => ctx.hasPendingMessages(),
+				hasPendingMessages: () => ctx.hasPendingMessages() || ctx.hasPendingUserDecision?.() === true,
 			};
 			if (ownsRuntime) {
 				host.persist = (snapshot) => pi.appendEntry("step-goal", snapshot);

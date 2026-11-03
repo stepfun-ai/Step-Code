@@ -36,7 +36,7 @@ import { getThenRunCommand } from "../step/then-run.ts";
 import { applyStepTraceHeaders } from "../step/trace-headers.ts";
 import { registerUsageRecording } from "../step/usage/recording.ts";
 import type { UsageResources } from "../step/usage/types.ts";
-import { planModeToolCallDecision } from "./step-plan.ts";
+import { isPlanExtensionMounted, planModeToolCallDecision } from "./step-plan.ts";
 import {
 	fetchStepModelEfforts,
 	registerStepProvider,
@@ -142,7 +142,7 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		// loader reads from agent/project directories rather than the plugin root.
 		createStepPluginResourcesExtension()(pi);
 		// Provenance recording belongs to the session lifecycle, not the `/usage`
-		// panel: a host without that UI (StepCode Web and Desktop) still has to
+		// panel: a host without that UI (the web and desktop app) still has to
 		// record the request a feedback report is joined with. A host with a usage
 		// UI keeps supplying its own resources through the host object.
 		const usageHost = options.usageHost;
@@ -397,17 +397,20 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				};
 			}
 			// Plan mode decides its own denials here, ahead of the approval prompt.
-			// This handler is registered before the plan extension's, so without
-			// this the `ask` preset would ask the user to approve an edit plan mode
-			// forbids and only then report the block. A write to the plan file
-			// itself falls through to the normal permission policy below.
-			const planDecision = planModeToolCallDecision({
-				manager: ctx.sessionManager,
-				cwd: ctx.cwd,
-				toolName: event.toolName,
-				input: event.input,
-			});
-			if (planDecision?.block) return planDecision.block;
+			// This handler is registered before the plan extension's, so without it
+			// the `ask` preset would ask the user to approve an edit plan mode
+			// forbids and only then report the block. Only enforce the boundary when
+			// the plan extension is mounted, so an embedder that mounts this
+			// extension alone cannot inherit a state it has no command to leave.
+			if (isPlanExtensionMounted(ctx.sessionManager)) {
+				const planDecision = planModeToolCallDecision({
+					manager: ctx.sessionManager,
+					cwd: ctx.cwd,
+					toolName: event.toolName,
+					input: event.input,
+				});
+				if (planDecision?.block) return planDecision.block;
+			}
 			return await permissions.handleToolCall(event, ctx);
 		});
 
@@ -468,7 +471,9 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				}
 				// Route initialization through pi's normal user-message path. The model
 				// inspects the repository, and pi's native write/approval flow owns the
-				// actual file mutation and any existing-file decision.
+				// actual file mutation and any existing-file decision. The command
+				// source is inherited, so a user-typed /init may answer a pending
+				// decision.
 				await pi.sendUserMessage(STEP_INIT_PROMPT);
 			},
 		});

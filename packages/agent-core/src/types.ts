@@ -77,6 +77,7 @@ export interface BeforeToolCallResult {
  * - `isError`: if provided, replaces the tool result error flag
  * - `usage`: if provided, replaces the tool result usage
  * - `terminate`: if provided, replaces the early-termination hint
+ * - `stopTurn`: if provided, replaces the single-result turn barrier
  *
  * Omitted fields keep the original executed tool result values.
  * There is no deep merge for `content`, `details`, or `usage`.
@@ -89,9 +90,17 @@ export interface AfterToolCallResult {
 	usage?: Usage;
 	/**
 	 * Hint that the agent should stop after the current tool batch.
-	 * Early termination only happens when every finalized tool result in the batch sets this to true.
+	 * `stopTurn` on any finalized result also stops the batch; every result setting
+	 * `terminate` is the older, all-or-nothing form.
 	 */
 	terminate?: boolean;
+	/**
+	 * End the turn when this result settles, regardless of sibling results.
+	 * This ends the loop invocation only; a host may start another turn for
+	 * queued input or automatic maintenance. Decision barriers should also run
+	 * sequentially.
+	 */
+	stopTurn?: boolean;
 }
 
 /** Context passed to `beforeToolCall`. */
@@ -421,8 +430,20 @@ export interface AgentToolResult<T> {
 	/** Names of tools introduced by this result and available from this transcript point onward. */
 	addedToolNames?: string[];
 	/**
+	 * End this turn regardless of sibling results. In a sequential batch, later
+	 * calls receive skipped results instead of executing; parallel calls already
+	 * in flight still settle. Use sequential execution for decision barriers.
+	 *
+	 * The barrier ends the loop invocation. Hosts may still start another turn,
+	 * for example for input queued after `agent_end` or for automatic context
+	 * maintenance, so a product that must wait for the user has to keep that
+	 * policy on its own side.
+	 */
+	stopTurn?: boolean;
+	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
+	 * A single `stopTurn` result ends the turn without this batch-wide agreement.
 	 */
 	terminate?: boolean;
 }

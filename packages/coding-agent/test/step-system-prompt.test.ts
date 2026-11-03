@@ -445,11 +445,12 @@ describe("one-shot interaction contract", () => {
 		expect(app).not.toContain("Call enter_plan_mode");
 		// Mode instructions come from the append-only announcement, not the
 		// app's system prefix. External exit is a handoff, not approval.
-		const announcement = buildPlanModePrompt("/workspace/app/plan.md", true);
+		const announcement = buildPlanModePrompt("/workspace/app/plan.md");
 		expect(announcement).toContain("You must not perform mutating actions");
-		expect(announcement).toContain("does not approve implementation");
-		expect(announcement).toContain("exit_plan_mode hands a new proposal to an external reviewer");
-		expect(announcement).toContain("leave planning without a proposal");
+		// Leaving is the user's decision: a missing or unchanged file is not a
+		// proposal, and the model cannot use that to turn the mode off.
+		expect(announcement).toContain("a missing or unchanged plan file is not permission to exit");
+		expect(announcement).toContain("Only the user can turn the mode off");
 		expect(render("session")).toContain("Plan mode is user-controlled");
 	});
 

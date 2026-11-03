@@ -316,8 +316,8 @@ active in the session. A denied combined call does not apply the edit. SDK
 `acceptEdits` does not auto-approve an edit carrying `then_run`. SDK
 `PreToolUse` hooks and third-party `tool_call` handlers see it as
 `input.then_run`; embedders that skip the Step extension must gate it
-themselves. In plan mode a `then_run` on the plan file behaves like
-`run_command`, which keeps normal permissions there.
+themselves. Plan mode blocks a `then_run` entirely, including on the plan file
+itself: writing the proposal is allowed, running a shell command with it is not.
 
 ## Plans and tasks
 
@@ -358,11 +358,11 @@ for path rules and retention responsibilities.
   mid-run, the `context` hook adds it to that request only, without writing
   history. See [plan approval](../../../docs/plan-approval.md#mode-announcements).
 - `exit_plan_mode` submits the written proposal for review, requiring a readable,
-  nonempty regular plan file. In the TUI, the user can approve execution, stay in
-  plan mode, or provide refinement notes. Cancel
-  leaves planning active. Headless and RPC runs retain their existing automatic
-  exit behavior after validation; the caller must gate approval externally
-  before allowing execution. `/plan` can still explicitly toggle planning off.
+  nonempty regular plan file. In the TUI, the user can approve execution or
+  provide refinement notes; dismissal keeps planning active and ends the turn.
+  Headless and RPC runs hand the proposal to the caller instead: plan mode exits,
+  the turn ends immediately, and the caller must gate approval externally before
+  allowing execution. `/plan` can still explicitly toggle planning off.
 - `task_create`, `task_update`, `task_get`, and `task_list` are the only task
   tools and work with or without plan mode. Each execution checklist is a
   separate task plan, distinct from the Markdown proposal. Tasks retain their

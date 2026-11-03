@@ -51,6 +51,7 @@ import type {
 	FileChange,
 	LoginReport,
 	NoticeItem,
+	PlanReview,
 	QueueState,
 	SelectionRequest,
 	SessionEntry,
@@ -540,7 +541,12 @@ function compactedMessageCount(
  * Such failures fold into one `retry` row. `retry` is the kernel's retry under
  * way, which makes the trailing failure part of the live series.
  */
-export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry?: SessionRetry): TimelineItem[] {
+export function timelineFromEntries(
+	entries: readonly SessionEntry[] = [],
+	retry?: SessionRetry,
+	/** The proposal the kernel says is waiting; exactly its card is actionable. */
+	pendingPlanHash?: string,
+): TimelineItem[] {
 	const items: TimelineItem[] = [];
 	/*
 	 * A command that expands into its own user message (`/plan <task>`) journals
@@ -747,27 +753,58 @@ export function timelineFromEntries(entries: readonly SessionEntry[] = [], retry
 		// The failed attempt is not recorded yet (or not in this branch): the retry still shows.
 		else items.push({ itemId: "retry-live", kind: "retry", errors: [retry.errorMessage], live: retry });
 	}
-	return settlePlanReviews([...withSubagentLaneState(items, undefined, entries)]);
+	return settlePlanReviews([...withSubagentLaneState(items, undefined, entries)], pendingPlanHash);
 }
 
 /**
- * A plan review is actionable only while nothing has superseded it.
+ * The proposal the page is blocked on, or undefined when nothing waits.
  *
- * Each decision the card sends is an ordinary user message, so a user message
- * after the proposal is the decision. A newer `exit_plan_mode` proposal
- * supersedes an older one. The card itself stays in the transcript as the
- * record of that round; it just stops offering buttons.
+ * Two facts, both required: the kernel records the reviewed snapshot as waiting,
+ * and the mode is still on so this page can actually ask. A pending left by a
+ * caller handoff (`enabled` false) has no surface here — its session is not
+ * blocked, and the next message answers it.
  */
-function settlePlanReviews(items: TimelineItem[]): TimelineItem[] {
-	let latest = -1;
-	items.forEach((item, index) => {
-		if (item.kind === "tool" && item.planReview) latest = index;
-	});
-	if (latest < 0) return items;
-	const decided = items.some((item, index) => index > latest && item.kind === "message" && item.role === "user");
+function pendingPlanReviewFrom(
+	items: readonly TimelineItem[],
+	snapshot: SessionSnapshot | null,
+): PlanReview | undefined {
+	const waiting = snapshot?.pendingPlanHash;
+	if (waiting === undefined || snapshot?.planMode?.enabled !== true) return undefined;
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index]!;
+		if (item.kind === "tool" && item.planReview?.pending && item.planReview.planHash === waiting) {
+			return item.planReview;
+		}
+	}
+	return undefined;
+}
+
+/**
+ * A plan review is actionable only while the kernel says it is waiting.
+ *
+ * `pendingPlanHash` is a session fact: the handoff records it and every decision
+ * clears it. Comparing the transcript instead — newest card, or "no user message
+ * after it" — reads a question as consent and an answered proposal as still
+ * pending. The card itself stays in the transcript as the record of that round;
+ * it just stops offering buttons.
+ */
+function settlePlanReviews(items: TimelineItem[], pendingPlanHash: string | undefined): TimelineItem[] {
+	if (pendingPlanHash === undefined) {
+		return items.map((item) => {
+			if (item.kind !== "tool" || !item.planReview?.pending) return item;
+			return { ...item, planReview: { ...item.planReview, pending: false } };
+		});
+	}
+	// A resubmitted proposal can carry byte-identical text, so the hash alone may
+	// match more than one card. Only the newest is the one waiting; an earlier
+	// round keeps its record unmarked.
+	const waiting = items.reduce(
+		(index, item, at) => (item.kind === "tool" && item.planReview?.planHash === pendingPlanHash ? at : index),
+		-1,
+	);
 	return items.map((item, index) => {
 		if (item.kind !== "tool" || !item.planReview) return item;
-		const pending = item.planReview.pending && index === latest && !decided;
+		const pending = index === waiting;
 		return pending === item.planReview.pending ? item : { ...item, planReview: { ...item.planReview, pending } };
 	});
 }
@@ -868,7 +905,14 @@ export function renderSnapshot(
 			? state.timelineItems
 			: [
 					...withSubagentLaneState(
-						timelineFromEntries(snapshot.entries, snapshot.retry),
+						// Only a proposal this page can answer is actionable: a handoff that
+						// already left the mode has no card here, and marking it pending
+						// would both hide it from the transcript and block the composer.
+						timelineFromEntries(
+							snapshot.entries,
+							snapshot.retry,
+							snapshot.planMode?.enabled === true ? snapshot.pendingPlanHash : undefined,
+						),
 						snapshot.subagentLanes,
 						snapshot.entries,
 					),
@@ -911,6 +955,9 @@ export function renderSnapshot(
 			unreadById: holdStream ? state.unreadById : mapWith(state.unreadById, snapshot.id, false),
 			sessions: mergeSessionSummary(state.sessions, current),
 			timelineItems,
+			// Derived, not read from the snapshot: the answer to "is a proposal
+			// waiting" is the newest pending card plus the mode still being on.
+			pendingPlanReview: pendingPlanReviewFrom(timelineItems, current),
 			pendingTurn,
 			// The snapshot is authoritative when the page (re)loads; live
 			// `compaction_start` / `compaction_end` events refine it afterwards.
@@ -980,13 +1027,17 @@ function noteRevision(id: string, revision: number | undefined): void {
 }
 
 function updateTimeline(update: (items: readonly TimelineItem[]) => readonly TimelineItem[]): void {
-	setState((state) => ({
-		timelineItems: withSubagentLaneState(
+	setState((state) => {
+		const timelineItems = withSubagentLaneState(
 			update(state.timelineItems),
 			state.current?.subagentLanes,
 			state.current?.entries,
-		),
-	}));
+		);
+		return {
+			timelineItems,
+			pendingPlanReview: pendingPlanReviewFrom(timelineItems, state.current),
+		};
+	});
 }
 
 export function applySubagentLane(sessionId: string, value: unknown): void {
@@ -1870,6 +1921,9 @@ export function startDraft(cwd: string = getState().bootstrapCwd, options: { rea
 			draftThinking: current ? "" : state.draftThinking,
 			current: null,
 			timelineItems: [],
+			// The new conversation has answered nothing, and the previous session's
+			// waiting proposal does not belong to it.
+			pendingPlanReview: undefined,
 			pendingTurn: null,
 			draftCwd: startIn,
 		};

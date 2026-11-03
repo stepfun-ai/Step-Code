@@ -137,7 +137,9 @@ test("/plan <task> reaches the model with plan mode on and stated", { timeout: 6
 
 		// The composer's Plan chip sends exactly this.
 		await session.send("/plan add a readme");
-		await waitFor(() => fixture.requests.length >= 4 && !session.isBusy());
+		// The handoff ends the turn: exit_plan_mode reports the proposal and stops
+		// the loop, so the model never spends a request after submitting.
+		await waitFor(() => fixture.requests.length >= 3 && !session.isBusy());
 
 		const first = fixture.requests[0]!;
 		assert.deepEqual(planModeAtFirstRequest, { enabled: true, planFilePath: planPath, planSource: "user" });
@@ -154,9 +156,11 @@ test("/plan <task> reaches the model with plan mode on and stated", { timeout: 6
 		assert.ok(reminder.includes("The user turned on Plan Mode"), reminder);
 		assert.ok(reminder.includes(planPath), reminder);
 		assert.ok(reminder.includes("call exit_plan_mode to submit it for review"), reminder);
-		assert.ok(reminder.includes("does not approve implementation"), reminder);
+		// The handoff is a submission, not an approval: the mode ends on the user's
+		// decision, and the model cannot take it.
+		assert.ok(reminder.includes("You cannot end it yourself"), reminder);
 		assert.equal(texts.filter((text) => text.includes("<collaboration_mode>")).length, 1);
-		for (const request of fixture.requests.slice(1, 4)) {
+		for (const request of fixture.requests.slice(1, 3)) {
 			assert.deepEqual(request.messages[0], first.messages[0], "plan exit cannot rewrite the system prefix");
 			assert.deepEqual(request.tools, first.tools, "plan exit cannot reorder the tool catalog");
 			assert.equal(request.messages.filter((message) => textOf(message).startsWith("<collaboration_mode>\n# Plan Mode")).length, 1);
@@ -171,14 +175,25 @@ test("/plan <task> reaches the model with plan mode on and stated", { timeout: 6
 		);
 		assert.equal(await readFile(planPath, "utf8"), "# Plan\n1. Write README.md\n");
 
-		// One exit submits; the result says not to call it again and the mode is off.
+		// Plan mode is still on: submitting is not approving. The snapshot names the
+		// reviewed snapshot as the decision the page waits on, so the client marks
+		// exactly that card actionable.
+		const submitted = session.snapshot() as { planMode?: { enabled: boolean }; pendingPlanHash?: string };
+		assert.equal(submitted.planMode?.enabled, true);
+		assert.match(submitted.pendingPlanHash ?? "", /^[0-9a-f]{64}$/);
+		// The card's approve verb leaves the mode and starts the work as one
+		// decision; that turn carries the handoff result and the Default block.
+		await session.send("/plan approve");
+		await waitFor(() => fixture.requests.length >= 4 && !session.isBusy());
 		const afterExit = fixture.requests[3]!;
 		const exitResult = textOf(afterExit.messages.filter((message) => message.role === "tool").at(-1)!);
-		assert.ok(exitResult.includes("which the host turned on for the user's /plan request, is now off"), exitResult);
+		assert.ok(exitResult.includes("Plan mode stays on"), exitResult);
 		assert.ok(exitResult.includes("Do not call exit_plan_mode again"), exitResult);
 		assert.match(textOf(afterExit.messages.at(-1)!), /^<collaboration_mode>\n# Collaboration Mode: Default/);
 		assert.equal(afterExit.messages.filter((message) => textOf(message).includes("<system-reminder>Plan")).length, 0);
-		assert.equal((session.snapshot().planMode as { enabled: boolean }).enabled, false);
+		const approved = session.snapshot() as { planMode?: { enabled: boolean }; pendingPlanHash?: string };
+		assert.equal(approved.planMode?.enabled, false);
+		assert.equal(approved.pendingPlanHash, undefined);
 
 		// `/plan` before a picked skill: plan mode on and the skill still expanded.
 		await session.send("/plan /skill:demo-skill tidy up");

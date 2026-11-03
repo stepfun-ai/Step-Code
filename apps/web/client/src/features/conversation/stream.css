@@ -1473,6 +1473,17 @@
  * Styled as a sibling of `.approval` — same card, same heading metrics, same
  * pill actions — because both ask the user to decide before work continues.
  */
+/*
+ * `.plan-review-panel`: the proposal the page is waiting on, at the end of the
+ * stream where the questionnaire also sits. It is the one decision blocking the
+ * page, so it takes the same place for the same reason.
+ */
+.plan-review-panel {
+	margin: 14px 0 6px;
+}
+.plan-review-panel[hidden] {
+	display: none;
+}
 .plan-review {
 	padding: 16px;
 	border: 1px solid color-mix(in srgb, var(--line) 65%, var(--surface));
@@ -1530,19 +1541,7 @@
 	line-height: 20px;
 	overflow-wrap: anywhere;
 }
-.plan-review-contents {
-	margin-top: 10px;
-	padding: 0 4px;
-	max-height: min(360px, 40vh);
-	overflow: auto;
-	color: var(--ink-2);
-	font: 13px / 18px var(--mono);
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
-}
-.plan-review-contents[hidden] {
-	display: none;
-}
+
 .plan-review-actions {
 	display: flex;
 	justify-content: flex-end;

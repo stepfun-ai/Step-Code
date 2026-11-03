@@ -11,7 +11,7 @@ import { t } from "../../i18n";
 import { api, errorMessage, localFileApi, workspaceApi } from "../../lib/api";
 import { resolveFileReference } from "../../lib/file-references";
 import { ancestorPaths } from "../../lib/format";
-import { readStoredInt, STORAGE_KEYS, writeStorage } from "../../lib/storage";
+import { readStorage, readStoredInt, STORAGE_KEYS, writeStorage } from "../../lib/storage";
 import { collectTurnChanges } from "../../lib/turn-changes";
 import { activeRightPanel, closeRightPanel, openRightPanel } from "../../state/right-panel";
 import { copyText, forgetSideAnswer, showError } from "../../state/session";
@@ -468,7 +468,47 @@ export function applyPreviewWidth(width: number, persist = true): number {
 	return resolved;
 }
 
-/** Startup: the remembered width, or the default (legacy `initPreviewPanel`). */
+/**
+ * Record a width the user chose — by dragging the divider or resetting it.
+ *
+ * The marker is what makes a remembered width meaningful: a build that stored a
+ * default would otherwise pin every later first open to that guess, for a user
+ * who never touched the divider.
+ */
+export function choosePreviewWidth(width: number): number {
+	const resolved = applyPreviewWidth(width);
+	writeStorage(STORAGE_KEYS.previewWidthChosen, "1");
+	return resolved;
+}
+
+/**
+ * The width to open at when the user has never dragged the divider.
+ *
+ * The rail docks beside the conversation, so the friendly first look is an even
+ * split of the pane that is left: half preview, half conversation. A fixed 420px
+ * leaves the preview cramped on a wide window and crowds the conversation on a
+ * narrow one.
+ */
+export function defaultPreviewWidth(): number {
+	const app = typeof document === "undefined" ? null : document.querySelector<HTMLElement>(".app");
+	const sidebar = app?.querySelector<HTMLElement>(".sidebar");
+	const sidebarWidth = app?.classList.contains("sidebar-hidden") ? 0 : (sidebar?.getBoundingClientRect().width ?? 0);
+	const rail = app ? Number.parseFloat(getComputedStyle(app).getPropertyValue("--rail-width")) || 44 : 44;
+	const available = Math.max(0, window.innerWidth - sidebarWidth - rail);
+	return Math.round(available / 2);
+}
+
+/**
+ * Startup: the remembered width, or an even split (legacy `initPreviewPanel`).
+ *
+ * A stored width means the user dragged the divider, so it wins — including a
+ * width they set once and expect to keep. Absent one, nothing has been decided
+ * yet and the panel opens at {@link defaultPreviewWidth}.
+ */
 export function restorePreviewWidth(): void {
-	applyPreviewWidth(readStoredInt(STORAGE_KEYS.previewWidth) ?? PREVIEW_DEFAULT, false);
+	// Only a width the user chose is a habit worth keeping. One written by an older
+	// build is a guess, and it would beat the even split forever.
+	const chosen = readStorage(STORAGE_KEYS.previewWidthChosen) === "1";
+	const remembered = chosen ? readStoredInt(STORAGE_KEYS.previewWidth) : undefined;
+	applyPreviewWidth(remembered ?? defaultPreviewWidth(), false);
 }

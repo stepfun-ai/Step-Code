@@ -7,7 +7,6 @@ import type { MessageTimelineItem, SteeringMessage, TimelineItem } from "../../s
 import { Icon } from "../../ui";
 import { Composer } from "../composer";
 import { openSettings } from "../settings/actions";
-import { ClarificationPanel } from "./ClarificationPanel";
 import { CommandRow } from "./CommandRow";
 import { CompactionRow, CompactionRunningRow } from "./CompactionRow";
 import { GoalRoundRow } from "./GoalRoundRow";
@@ -92,7 +91,9 @@ const STICK_THRESHOLD = 48;
  */
 export function ConversationStream() {
 	const t = useT();
-	const items = useAppStore((state) => state.timelineItems);
+	// A pending approval is the page's one decision, drawn by `DecisionPanel` above
+	// the composer; the transcript would otherwise show the same question twice.
+	const items = useAppStore((state) => state.timelineItems.filter((item) => item.kind !== "approval"));
 	const pendingTurn = useAppStore((state) => state.pendingTurn);
 	// Sent with "立即" or Cmd/Ctrl+Enter: the kernel reads them after the current tool call; shown already.
 	const steering = useAppStore((state) => state.current?.steeringMessages ?? NO_STEERING);
@@ -320,7 +321,12 @@ export function ConversationStream() {
 											) : row.item.kind === "tool" ? (
 												<>
 													<ToolRow item={row.item} />
-													{row.item.planReview ? <PlanReviewCard review={row.item.planReview} /> : null}
+													{/* The waiting proposal is drawn as the stream's last element
+													 * (below), where the user answers it. Leaving an inert copy
+													 * here too would show the same decision twice. */}
+													{row.item.planReview && !row.item.planReview.pending ? (
+														<PlanReviewCard review={row.item.planReview} />
+													) : null}
 												</>
 											) : row.item.kind === "thinking" ? (
 												<ThinkingDisclosure item={row.item} active={running} />
@@ -406,9 +412,6 @@ export function ConversationStream() {
 				) : (
 					<EmptyConversation />
 				)}
-				{/* The pending questionnaire is conversation, not composer chrome: it
-				 * renders as the stream's latest element, where the question was asked. */}
-				<ClarificationPanel />
 			</div>
 		</div>
 	);

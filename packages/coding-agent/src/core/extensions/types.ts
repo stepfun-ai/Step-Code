@@ -436,12 +436,38 @@ export interface ExtensionContext {
 	isIdle(): boolean;
 	/** Whether project-local trust is active for this context. */
 	isProjectTrusted(): boolean;
+	/**
+	 * The host can show a plan proposal and collect a decision for it.
+	 *
+	 * Unlike `hasUI`, this is about one specific surface, not about having a
+	 * dialog bridge at all: an rpc child has the bridge but no user to answer.
+	 */
+	planReviewSurface?: boolean;
 	/** The current abort signal, or undefined when the agent is not streaming. */
 	signal: AbortSignal | undefined;
 	/** Abort the current agent operation */
 	abort(): void;
 	/** Whether there are queued messages waiting */
 	hasPendingMessages(): boolean;
+	/**
+	 * Whether a decision the user has not answered blocks turns started on the
+	 * user's behalf. Features that can defer their own trigger — a scheduled job
+	 * that should stay due, a continuation that should retry later — ask this
+	 * instead of enqueueing work that would replay after the decision.
+	 *
+	 * Optional so an older host keeps compiling: a host without it has no gate.
+	 */
+	hasPendingUserDecision?(): boolean;
+	/**
+	 * Register a predicate that blocks automatic turn starts until it returns
+	 * false. User prompts always run; this gates what would start a turn on the
+	 * user's behalf, such as a cron delivery or a goal continuation whose feature
+	 * would otherwise need to know every other starter. Returns an unregister
+	 * function.
+	 *
+	 * Optional so an older host keeps compiling: a host without it ignores guards.
+	 */
+	registerAutomaticTurnGuard?(guard: () => boolean): () => void;
 	/** Gracefully shutdown pi and exit. Available in all contexts. */
 	shutdown(): void;
 	/** Get current context usage for the active model. */
@@ -511,7 +537,12 @@ export interface ReplacedSessionContext extends ExtensionCommandContext {
 
 	sendUserMessage(
 		content: string | (TextContent | ImageContent)[],
-		options?: { deliverAs?: "steer" | "followUp"; expandPromptTemplates?: boolean },
+		options?: {
+			deliverAs?: "steer" | "followUp";
+			expandPromptTemplates?: boolean;
+			/** Who authored the text. A host bridge forwarding a real user passes its own source. */
+			source?: InputSource;
+		},
 	): Promise<void>;
 }
 
@@ -1492,20 +1523,38 @@ export interface ExtensionAPI {
 	// Actions
 	// =========================================================================
 
-	/** Send a custom message to the session. */
+	/**
+	 * Send a custom message to the session.
+	 *
+	 * `triggerTurn` starts a turn when the session is idle, unless a decision the
+	 * user has not answered is pending: the message is then held and delivered as
+	 * context in the turn that answers it. Prefer checking
+	 * `ctx.hasPendingUserDecision()` when the feature can defer its own trigger.
+	 */
 	sendMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
 	): void;
 
 	/**
-	 * Send a user message to the agent. Always triggers a turn.
+	 * Send a user message to the agent, as text the user could have typed.
+	 *
+	 * Starts a turn unless the session is waiting on a decision the user has not
+	 * answered: that message is what answers it, so pass the real author through
+	 * `source` when a host bridge forwards a person's input. Extension-generated
+	 * text keeps the default `"extension"` source and waits for the answer.
+	 *
 	 * When the agent is streaming, use deliverAs to specify how to queue the message.
 	 * Set expandPromptTemplates to dispatch extension commands and expand skill commands and prompt templates.
 	 */
 	sendUserMessage(
 		content: string | (TextContent | ImageContent)[],
-		options?: { deliverAs?: "steer" | "followUp"; expandPromptTemplates?: boolean },
+		options?: {
+			deliverAs?: "steer" | "followUp";
+			expandPromptTemplates?: boolean;
+			/** Who authored the text. A host bridge forwarding a real user passes its own source. */
+			source?: InputSource;
+		},
 	): void;
 
 	/** Append a custom entry to the session for state persistence (not sent to LLM). */
@@ -1766,7 +1815,12 @@ export type SendMessageHandler = <T = unknown>(
 
 export type SendUserMessageHandler = (
 	content: string | (TextContent | ImageContent)[],
-	options?: { deliverAs?: "steer" | "followUp"; expandPromptTemplates?: boolean },
+	options?: {
+		deliverAs?: "steer" | "followUp";
+		expandPromptTemplates?: boolean;
+		/** Who authored the text. A host bridge forwarding a real user passes its own source. */
+		source?: InputSource;
+	},
 ) => void;
 
 export type AppendEntryHandler = <T = unknown>(customType: string, data?: T) => void;
@@ -1855,9 +1909,19 @@ export interface ExtensionContextActions {
 	getScopedModels: () => readonly ScopedModel[];
 	isIdle: () => boolean;
 	isProjectTrusted: () => boolean;
+	/** Whether the host can collect a plan review decision (optional; defaults to false). */
+	hasPlanReviewSurface?: () => boolean;
 	getSignal: () => AbortSignal | undefined;
 	abort: () => void;
 	hasPendingMessages: () => boolean;
+	/** Whether a decision the user has not answered blocks automatic turn starts. */
+	hasPendingUserDecision?: () => boolean;
+	/**
+	 * Register a predicate that blocks automatic turn starts until it returns
+	 * false. User prompts always run; this gates what starts a turn on the user's
+	 * behalf. Returns an unregister function.
+	 */
+	registerAutomaticTurnGuard?: (guard: () => boolean) => () => void;
 	shutdown: () => void;
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (options?: CompactOptions) => void;

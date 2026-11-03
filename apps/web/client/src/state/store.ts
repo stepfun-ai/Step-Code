@@ -14,6 +14,7 @@ import type {
 	DraftModels,
 	LoginReport,
 	NoticeItem,
+	PlanReview,
 	PolicyPreset,
 	SelectionRequest,
 	SessionSnapshot,
@@ -315,6 +316,15 @@ export interface AppState {
 	 */
 	readonly contextFill: { readonly sessionId: string; readonly percent: number } | null;
 	readonly timelineItems: readonly TimelineItem[];
+	/**
+	 * The proposal waiting for the user's answer, or undefined.
+	 *
+	 * Plan mode stays on until the user decides, so this is the one decision the
+	 * page is blocking on: the stream draws it as its last element and the
+	 * composer refuses new text until it is answered. A question typed into the
+	 * composer is not an approval, and must not look like one.
+	 */
+	readonly pendingPlanReview: PlanReview | undefined;
 	/** `ui.notify` output for this page load, shown after the timeline and never persisted. */
 	readonly notices: readonly NoticeItem[];
 	/** The kernel is compacting the context right now (host event, mirrored by the snapshot). */
@@ -456,6 +466,7 @@ export function createInitialState(): AppState {
 		performanceRun: null,
 		contextFill: null,
 		timelineItems: [],
+		pendingPlanReview: undefined,
 		notices: [],
 		compacting: false,
 		pendingTurn: null,

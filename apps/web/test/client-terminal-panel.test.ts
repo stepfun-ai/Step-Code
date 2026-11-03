@@ -18,7 +18,9 @@ test("terminal docks below the conversation, independent of the exclusive inspec
 	assert.doesNotMatch(rail, /id: "terminal"/);
 	assert.match(rail, /data-terminal-toggle/);
 	const app = readFileSync(new URL("../client/src/App.tsx", import.meta.url), "utf8");
-	assert.match(app, /<\/div>\s*<TerminalDock \/>/);
+	// The dock is the last block of the page, directly below the input area —
+	// whether that is the composer or the decision standing in its place.
+	assert.match(app, /<\/div>\s*\)\}\s*<TerminalDock \/>/);
 	appStore.setState(createInitialState());
 	assert.equal(appStore.getState().ui.terminalOpen, false);
 	toggleTerminalDock();

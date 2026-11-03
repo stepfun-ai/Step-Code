@@ -791,7 +791,10 @@ Response:
 
 #### get_last_assistant_text
 
-Get the text content of the last assistant message.
+Get the text content of the last assistant message. When the run handed a plan
+proposal to the caller and no user message has answered it yet, this returns the
+handoff text (the proposal) instead, because the assistant message only
+introduces the submission.
 
 ```json
 {"type": "get_last_assistant_text"}
