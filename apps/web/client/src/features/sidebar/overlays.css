@@ -207,8 +207,25 @@
 	text-align: left;
 	font-size: 13px;
 }
-.session-menu button:hover {
+.session-menu button:hover,
+.session-menu button.open {
 	background: var(--hover);
+}
+/* "Move to group" opens the tag picker as a submenu: its label grows and a chevron points at it. */
+.session-menu .session-menu-label {
+	flex: 1;
+}
+.session-menu .session-menu-trailing {
+	color: var(--ink-3);
+}
+/*
+ * The submenu is anchored to its row, inside the menu's 6px padding and 1px
+ * border: clear the menu's edge by the usual 4px, and lift the panel so its
+ * first row lines up with "Move to group".
+ */
+.tag-picker.session-submenu {
+	--popover-gap: 11px;
+	margin-top: -7px;
 }
 /* Destructive items name their consequence in the danger colour, as ui/Menu does. */
 .session-menu button.danger {

@@ -3,7 +3,7 @@ import { TAG_COLOR_NAMES, type TagColor, useT } from "../../i18n";
 import { useImeGuard } from "../../lib/ime";
 import { getState, shallowEqual, useAppStore } from "../../state/store";
 import { Icon } from "../../ui";
-import { closeTagPicker, createGroupAndTag, setSessionTag } from "./actions";
+import { closeRowMenus, closeTagPicker, createGroupAndTag, setSessionTag } from "./actions";
 import { GroupRenameInput } from "./GroupRenameInput";
 import { cssVar, TAG_COLOR_KEYS, TAG_COLORS } from "./tags";
 
@@ -27,7 +27,7 @@ function TagNameInput({ sessionId, color }: { readonly sessionId: string; readon
 			return;
 		}
 		createGroupAndTag(sessionId, color, name);
-		closeTagPicker();
+		closeRowMenus();
 	};
 	const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
 		// Keeps the document shortcuts (and the Escape chain) out of the name field.
@@ -62,7 +62,8 @@ function TagNameInput({ sessionId, color }: { readonly sessionId: string; readon
 
 /**
  * Content of `#tagPicker`: choose, create or clear a session's group (legacy
- * `openTagPicker`, 1014-1060). Mounted on open, so every open starts from the group list.
+ * `openTagPicker`, 1014-1060). The "Move to group" submenu of a row's "…" menu;
+ * mounted on open, so every open starts from the group list.
  *
  * Picking a colour keeps the panel as it is: the chip shows as chosen and the name row
  * opens under the chips, so the panel neither swaps its content nor moves under the
@@ -79,7 +80,8 @@ export function TagPicker({ sessionId }: { readonly sessionId: string }) {
 	const choose = (tag: TagColor | "") => {
 		if (!tag || data.tags.get(sessionId) === tag) setSessionTag(sessionId, null);
 		else setSessionTag(sessionId, tag);
-		closeTagPicker();
+		// A pick ends the whole menu, not just the submenu it was made in.
+		closeRowMenus();
 	};
 	return (
 		<>

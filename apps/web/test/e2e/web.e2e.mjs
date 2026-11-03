@@ -2058,32 +2058,53 @@ test(
 	`)
     assert.deepEqual(anchored, { open: true, rightOffset: 0, gap: 4 })
 
-    // The session row's more and tag buttons open their menus under themselves the same way.
+    // The session row's more button opens its menu under itself the same way; "Move to group"
+    // opens the tag picker as a submenu beside its row, and "…" closes both.
     const rowMenus = await browser.run(`
 		const row = await until(() => $(".session-row"), "a session row");
-		const place = async (selector, menuId) => {
-			const button = row.querySelector(selector);
-			button.click();
-			const menu = await until(() => $("#" + menuId), menuId + " to open");
-			await new Promise((resolve) => requestAnimationFrame(resolve));
-			const a = button.getBoundingClientRect();
-			const b = menu.getBoundingClientRect();
-			const placed = {
-				// The grouped view renders the same session in a hidden row; only the visible row's menu exists.
-				count: $$("#" + menuId).length,
-				expanded: button.getAttribute("aria-expanded"),
-				shown: a.width > 0,
-				rightOffset: Math.round(b.right - a.right),
-				gap: Math.round(b.top - a.bottom),
-			};
-			button.click();
-			await until(() => !$("#" + menuId), menuId + " to close on a second click");
-			return placed;
+		const button = row.querySelector(".session-menu-button");
+		button.click();
+		const menu = await until(() => $("#sessionMenu"), "sessionMenu to open");
+		await new Promise((resolve) => requestAnimationFrame(resolve));
+		const a = button.getBoundingClientRect();
+		const b = menu.getBoundingClientRect();
+		const session = {
+			// The grouped view renders the same session in a hidden row; only the visible row's menu exists.
+			count: $$("#sessionMenu").length,
+			expanded: button.getAttribute("aria-expanded"),
+			shown: a.width > 0,
+			rightOffset: Math.round(b.right - a.right),
+			gap: Math.round(b.top - a.bottom),
 		};
-		return { session: await place(".session-menu-button", "sessionMenu"), tag: await place(".session-tag-button", "tagPicker") };
+		const first = $("#sessionMenu button")?.dataset.action;
+		const group = $("#sessionMenu [data-action='group']");
+		group.click();
+		const picker = await until(() => $("#tagPicker"), "tagPicker to open");
+		await new Promise((resolve) => requestAnimationFrame(resolve));
+		const g = group.getBoundingClientRect();
+		const p = picker.getBoundingClientRect();
+		const submenu = {
+			count: $$("#tagPicker").length,
+			menuKept: Boolean($("#sessionMenu")),
+			expanded: group.getAttribute("aria-expanded"),
+			besideMenu: Math.round(p.left - menu.getBoundingClientRect().right),
+			// Its first row (inside 6px padding and a 1px border) is level with "Move to group".
+			topAligned: Math.round(p.top + 7 - g.top),
+		};
+		$("#sessionMenu [data-action='rename']").dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+		$("#sessionMenu [data-action='rename']").dispatchEvent(new PointerEvent("pointerenter"));
+		await until(() => !$("#tagPicker"), "tagPicker to close when another row is pointed at");
+		group.click();
+		await until(() => $("#tagPicker"), "tagPicker to reopen");
+		button.click();
+		await until(() => !$("#tagPicker") && !$("#sessionMenu"), "both to close on a click on …");
+		return { session, submenu, first };
 	`)
-    const placed = { count: 1, expanded: "true", shown: true, rightOffset: 0, gap: 4 }
-    assert.deepEqual(rowMenus, { session: placed, tag: placed })
+    assert.deepEqual(rowMenus, {
+      session: { count: 1, expanded: "true", shown: true, rightOffset: 0, gap: 4 },
+      submenu: { count: 1, menuKept: true, expanded: "true", besideMenu: 4, topAligned: 0 },
+      first: "group",
+    })
 
     await browser.run(`
 		$("#projectGroups .workspace-menu-button").click();
@@ -2644,7 +2665,7 @@ test("a group stops being offered once its last session drops it", { skip }, asy
   await browser.goto(`${origin}/`)
   const seen = await browser.run(`
     const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "tag group session row");
-    row.querySelector(".session-tag-button").click();
+    row.querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
     const picker = await until(() => $("#tagPicker"), "tag picker");
     const before = [...picker.querySelectorAll("[data-tag]")].map((item) => item.textContent);
     picker.querySelector("[data-new-tag='red']").click();
@@ -2654,7 +2675,7 @@ test("a group stops being offered once its last session drops it", { skip }, asy
     $("#tagNameConfirm").click();
     await until(() => !$("#tagPicker"), "picker closed after create");
 
-    row.querySelector(".session-tag-button").click();
+    row.querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
     const created = await until(() => $("#tagPicker"), "picker after create");
     const withGroup = [...created.querySelectorAll("[data-tag]")].map((item) => item.textContent);
     const colourTaken = !created.querySelector("[data-new-tag='red']");
@@ -2662,7 +2683,7 @@ test("a group stops being offered once its last session drops it", { skip }, asy
     created.querySelector("[data-tag='red']").click();
     await until(() => !$("#tagPicker"), "picker closed after untag");
 
-    row.querySelector(".session-tag-button").click();
+    row.querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
     const after = await until(() => $("#tagPicker"), "picker after untag");
     const withoutGroup = [...after.querySelectorAll("[data-tag]")].map((item) => item.textContent);
     const colourFree = Boolean(after.querySelector("[data-new-tag='red']"));
@@ -2692,7 +2713,7 @@ test("tag group metadata survives browser reload and its last-member removal sur
   await browser.goto(`${origin}/`)
   await browser.run(`
     const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "persisted group row");
-    row.querySelector(".session-tag-button").click();
+    row.querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
     const picker = await until(() => $("#tagPicker"), "persisted group picker");
     picker.querySelector("[data-new-tag='teal']").click();
     const input = await until(() => $("#tagNameInput"), "persisted group name");
@@ -2703,7 +2724,7 @@ test("tag group metadata survives browser reload and its last-member removal sur
   await browser.goto(`${origin}/`)
   const restored = await browser.run(`
     const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "restored group row");
-    row.querySelector(".session-tag-button").click();
+    row.querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
     const picker = await until(() => $("#tagPicker"), "restored group picker");
     const name = picker.querySelector("[data-tag='teal']")?.textContent;
     const stored = JSON.parse(localStorage.getItem("stepcode.tagGroups"));
@@ -2715,7 +2736,7 @@ test("tag group metadata survives browser reload and its last-member removal sur
   await browser.goto(`${origin}/`)
   const removed = await browser.run(`
     const row = await until(() => $('.session-row[data-session-id="${sessionId}"]'), "untagged group row");
-    row.querySelector(".session-tag-button").click();
+    row.querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
     const picker = await until(() => $("#tagPicker"), "untagged group picker");
     const removed = !picker.querySelector("[data-tag='teal']") && Boolean(picker.querySelector("[data-new-tag='teal']"));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -4097,7 +4118,7 @@ test("a row dropped on another group section still retags it, it is not a reorde
 		await until(() => group() && group().querySelectorAll(".session-row").length === 2, "the group drag fixtures");
 
 		const tag = async (id, colour, name) => {
-			rowFor(id).querySelector(".session-tag-button").click();
+			rowFor(id).querySelector(".session-menu-button").click(); (await until(() => $("#sessionMenu [data-action='group']"), "move to group")).click();
 			const picker = await until(() => $("#tagPicker"), "the tag picker");
 			picker.querySelector("[data-new-tag='" + colour + "']").click();
 			const input = await until(() => $("#tagNameInput"), "the group name input");

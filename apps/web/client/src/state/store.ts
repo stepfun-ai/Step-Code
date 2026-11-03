@@ -209,7 +209,7 @@ export interface UiState {
 	readonly sessionMenu: { readonly sessionId: string } | null;
 	/** `#streamMenu`, open below the more button of the conversation header strip. */
 	readonly streamMenu: boolean;
-	/** `#tagPicker`, open below the tag button of a session row. `sessionId` is the legacy `state.tagTarget`. */
+	/** `#tagPicker`, the "Move to group" submenu beside the first row of a session row's open "…" menu. */
 	readonly tagPicker: { readonly sessionId: string } | null;
 	/** `#authBanner` visible (a request returned 401). */
 	readonly authExpired: boolean;
