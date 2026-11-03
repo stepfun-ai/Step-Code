@@ -70,6 +70,8 @@ export interface HarnessOptions {
 	excludedToolNames?: string[];
 	resourceLoader?: ResourceLoader;
 	extensionFactories?: Array<InlineExtension | CreateTestExtensionsResultInput>;
+	/** Extension bindings the session gets, as a host would pass them. */
+	bindings?: Parameters<AgentSession["bindExtensions"]>[0];
 	withConfiguredAuth?: boolean;
 	modelsJson?: Record<string, unknown>;
 	sessionPersistence?: boolean;
@@ -198,6 +200,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	session.subscribe((event) => {
 		events.push(event);
 	});
+
+	if (options.bindings) await session.bindExtensions(options.bindings);
 
 	return {
 		session,

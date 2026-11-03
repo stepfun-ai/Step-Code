@@ -873,6 +873,98 @@ describe("incomplete assistant turn recovery", () => {
 		expect(recovery).toMatchObject({ details: { recoversEntryId: empty?.id } });
 	});
 
+	it("delivers the user's own queued words while a decision is open, without recovering", async () => {
+		// A decision gate holds back work started on the user's behalf, not the words
+		// they wrote — those words are how they answer it. The empty turn itself must
+		// not spend a recovery on their behalf while the decision is open.
+		const harness = await createHarness({
+			bindings: { mode: "print" },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_start", (_event, ctx) => {
+						ctx.registerAutomaticTurnGuard?.(() => true);
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		let queued = false;
+		harness.session.subscribe((event) => {
+			if (event.type !== "agent_end" || queued) return;
+			queued = true;
+			void harness.session.prompt("Use the new direction.", { streamingBehavior: "steer" });
+		});
+		const requests: string[] = [];
+		harness.setResponses([
+			fauxAssistantMessage(fauxThinking("first attempt")),
+			(context) => {
+				requests.push(JSON.stringify(context.messages));
+				return fauxAssistantMessage("Answered the direction.");
+			},
+		]);
+
+		await harness.session.prompt("Inspect the workspace");
+
+		expect(harness.session.hasPendingUserDecision).toBe(true);
+		// The queued words, and not a recovery prompt, are what the model saw next.
+		expect(harness.faux.state.callCount).toBe(2);
+		expect(requests[0]).toContain("Use the new direction.");
+		expect(requests[0]).not.toContain("The last turn produced no visible answer");
+		expect(harness.session.getLastAssistantText()).toBe("Answered the direction.");
+		expect(recoveryEntries(harness)).toHaveLength(0);
+	});
+
+	it("does not recover when compaction itself makes a decision pending", async () => {
+		// The decision is re-read after compaction because that window awaits provider
+		// auth and extension hooks; a decision that appears there still holds the
+		// recovery back.
+		let harness: Harness;
+		harness = await createHarness({
+			models: [{ id: "faux-1", contextWindow: 1, maxTokens: 100 }],
+			settings: { compaction: { contextProjection: "off", enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => {
+						// Only the post-run overflow compaction, so the decision appears after
+						// the post-run gate has already been evaluated once.
+						if (event.reason === "overflow") harness.session.registerAutomaticTurnGuard(() => true);
+						return {
+							compaction: {
+								summary: "silent overflow compacted",
+								firstKeptEntryId: event.preparation.firstKeptEntryId,
+								tokensBefore: event.preparation.tokensBefore,
+								details: {},
+							},
+						};
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		for (const message of [
+			{ role: "user" as const, content: "Investigate the parser", timestamp: 1 },
+			fauxAssistantMessage("prior observation ".repeat(200), { timestamp: 2 }),
+			{ role: "user" as const, content: "Continue", timestamp: 3 },
+		]) {
+			harness.sessionManager.appendMessage(message);
+		}
+		harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
+		harness.setResponses([
+			// Later than the pre-run compaction boundary, so the turn is not mistaken for
+			// one recorded before it.
+			fauxAssistantMessage(fauxThinking("incomplete after silent overflow"), { timestamp: Date.now() + 10_000 }),
+			fauxAssistantMessage("must not be used"),
+		]);
+
+		await harness.session.prompt("Inspect the workspace");
+
+		expect(harness.session.hasPendingUserDecision).toBe(true);
+		expect(harness.faux.state.callCount).toBe(1);
+		expect(recoveryEntries(harness)).toHaveLength(0);
+		// A decision the user still owes is not a failure of their run.
+		expect(settledFailures(harness)).toEqual([]);
+	});
+
 	it("does not recover a provider error", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);

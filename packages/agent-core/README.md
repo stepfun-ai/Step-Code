@@ -176,6 +176,17 @@ await agent.continue();
 
 The last message in context must be `user` or `toolResult` (not `assistant`).
 
+Pass `deliverQueued` when the next turn should start from queued input rather than
+from the transcript. The drained message becomes that request's prompt, which is
+what a caller returning after a decision needs: a follow-up queued behind the
+finishing turn would otherwise wait for a request the model takes without seeing
+it. A retry or a context repair must leave it off — those resume the same work,
+and the message the person queued is meant to arrive after it finishes.
+
+```typescript
+await agent.continue({ deliverQueued: true });
+```
+
 ### Event Types
 
 | Event | Description |
@@ -390,6 +401,17 @@ agent.clearAllQueues();
 ```
 
 Use clearSteeringQueue, clearFollowUpQueue, or clearAllQueues to drop queued messages.
+
+A delivery filter withholds individual messages. `setQueueDeliveryFilter` is asked
+per message whenever the loop takes queued input; a refused message stays queued in
+its original position, so a caller can hold part of the queue without dropping or
+reordering what it releases. In `one-at-a-time` mode the delivered message is the
+oldest one the filter allows.
+
+```typescript
+agent.setQueueDeliveryFilter((message) => isFromPerson(message));
+agent.hasDeliverableQueuedMessage((message) => isFromPerson(message));
+```
 
 When steering messages are detected after a turn completes:
 1. All tool calls from the current assistant message have already finished

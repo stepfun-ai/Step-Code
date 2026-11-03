@@ -6,6 +6,7 @@ function createContext(tokens: number | null, compact = vi.fn()): ExtensionConte
 	return {
 		mode: "print",
 		hasUI: false,
+		planReviewSurface: false,
 		ui: {} as ExtensionContext["ui"],
 		cwd: process.cwd(),
 		sessionManager: {} as ExtensionContext["sessionManager"],

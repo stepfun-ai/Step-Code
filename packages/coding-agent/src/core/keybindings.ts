@@ -22,6 +22,7 @@ export interface AppKeybindings {
 	"app.model.select": true;
 	"app.redraw": true;
 	"app.tools.expand": true;
+	"app.warnings.open": true;
 	"app.thinking.toggle": true;
 	"app.session.toggleNamedFilter": true;
 	"app.editor.external": true;
@@ -119,6 +120,7 @@ export const KEYBINDINGS = {
 		description: "Repaint the screen (recovers a garbled terminal)",
 	},
 	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
+	"app.warnings.open": { defaultKeys: "alt+i", description: "Show warnings" },
 	"app.thinking.toggle": {
 		defaultKeys: "ctrl+t",
 		description: "Toggle thinking blocks",

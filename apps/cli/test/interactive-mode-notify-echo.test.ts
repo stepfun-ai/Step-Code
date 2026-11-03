@@ -13,6 +13,8 @@ type NotifyContext = {
 	lastStatusText: Text | undefined;
 	showError: (message: string) => void;
 	showWarning: (message: string) => void;
+	recordWarning: (message: string) => void;
+	acceptingUserInput: number;
 	showStatus: (message: string) => void;
 	showInputEcho: (message: string) => void;
 };
@@ -37,6 +39,8 @@ function createContext(): NotifyContext {
 		lastStatusText: undefined,
 		showError: vi.fn(),
 		showWarning: vi.fn(),
+		recordWarning: vi.fn(),
+		acceptingUserInput: 0,
 		showStatus: vi.fn(),
 		showInputEcho: (message: string) => prototype.showInputEcho.call(context, message),
 	};
@@ -92,8 +96,19 @@ describe("InteractiveMode notification routing", () => {
 		prototype.showExtensionNotify.call(context, "careful", "warning", { echoesInput: true });
 		prototype.showExtensionNotify.call(context, "broken", "error", { echoesInput: true });
 
-		expect(context.showWarning).toHaveBeenCalledWith("careful");
+		// No command is running, so the warning arrived on its own: it goes to the badge.
+		expect(context.recordWarning).toHaveBeenCalledWith("careful");
+		expect(context.showWarning).not.toHaveBeenCalled();
 		expect(context.showError).toHaveBeenCalledWith("broken");
 		expect(context.chatContainer.children).toHaveLength(0);
+	});
+
+	it("answers the input the kernel is still accepting inline", () => {
+		const context = createContext();
+		context.acceptingUserInput = 1;
+		prototype.showExtensionNotify.call(context, "Usage: /cron delete <id>", "warning");
+
+		expect(context.showWarning).toHaveBeenCalledWith("Usage: /cron delete <id>");
+		expect(context.recordWarning).not.toHaveBeenCalled();
 	});
 });
