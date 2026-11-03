@@ -617,9 +617,12 @@ html[data-theme="dark"] .sidebar {
   color: var(--ink);
   font-weight: 600;
 }
-/* Replies are read in full-strength ink; headings and bold stand out by size and weight, not by a lighter body. */
+/*
+ * Reply prose is set in the secondary ink: weight alone (400 vs 600) barely separates
+ * CJK glyphs, so headings and `**bold**` lead-ins keep full ink to stay the emphasis.
+ */
 .message.assistant .message-body {
-  color: var(--ink);
+  color: var(--ink-2);
 }
 .message-body ul,
 .message-body ol {
@@ -717,6 +720,10 @@ html[data-theme="dark"] .sidebar {
   font: 13px / 1.5 var(--mono);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
+}
+/* Code inside a link label (`[`name`](path)`) still reads as the link: it takes the link colour, not body ink. */
+.message-body :is(a, .md-file-reference) code:not(.code-block code) {
+  color: inherit;
 }
 .message-body .md-table-scroll {
   max-width: 100%;
