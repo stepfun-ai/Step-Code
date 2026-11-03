@@ -278,11 +278,19 @@ export interface ChildView {
 	readonly taskIndex?: number;
 }
 
+export interface ToastAction {
+	readonly label: string;
+	/** Runs in the page; the toast closes after it. */
+	readonly run: () => void;
+}
+
 export interface ToastState {
 	readonly message: string;
-	readonly tone: "danger" | "neutral";
+	readonly tone: "danger" | "neutral" | "success";
 	/** Distinguishes two identical consecutive messages. */
 	readonly seq: number;
+	/** Optional link-styled follow-up after the message (e.g. "View"). */
+	readonly action?: ToastAction;
 }
 
 export interface PendingTurn {

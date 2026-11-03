@@ -108,6 +108,15 @@
   --hover-card-success: #62cc8f;
   --hover-card-attention: #f2bf58;
   --hover-card-danger: #ff7b6f;
+  /* The transient toast (ui/Toast): an inverse dark pill in every theme, like the system HUD. */
+  --toast-surface: #2c2c2e;
+  --toast-line: transparent;
+  --toast-ink: #f4f4f5;
+  --toast-link: #5ea2ff;
+  --toast-link-hover: #8ab8ff;
+  --toast-success: #34c759;
+  --toast-danger: #ff6b5f;
+  --toast-shadow: 0 2px 6px rgb(16 16 18 / 12%), 0 12px 32px -8px rgb(16 16 18 / 32%);
   /* Selected thumb of a segmented tray: separated by tone alone, never by a ring. */
   --thumb: var(--surface);
   --inline-code: rgb(16 16 18 / 5.5%);
@@ -272,6 +281,10 @@ html[data-theme="dark"] {
   /* On a dark page the card lifts by a step of tone and a hairline instead. */
   --hover-card-surface: #2e2e33;
   --hover-card-line: var(--line-strong);
+  /* On the dark page the toast lifts by a lighter tone and a hairline instead. */
+  --toast-surface: #36363c;
+  --toast-line: #4a4a52;
+  --toast-shadow: 0 2px 6px rgb(0 0 0 / 36%), 0 16px 40px -10px rgb(0 0 0 / 70%);
   --thumb: #38383e;
   --inline-code: rgb(255 255 255 / 7%);
   --scrollbar-thumb: #38383e;

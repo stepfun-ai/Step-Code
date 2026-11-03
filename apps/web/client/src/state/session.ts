@@ -189,15 +189,27 @@ export function showError(message: string, danger = true): void {
 	showToast(message, danger ? "danger" : "neutral");
 }
 
+/** How long a toast stays; one that offers an action stays longer so it can be reached. */
+const TOAST_MS = 4200;
+const TOAST_ACTION_MS = 6000;
+
 /** A short, self-dismissing announcement. State the UI already draws says nothing else. */
-export function showToast(message: string, tone: ToastState["tone"] = "neutral"): void {
+export function showToast(message: string, tone: ToastState["tone"] = "neutral", action?: ToastState["action"]): void {
 	toastSeq += 1;
 	const seq = toastSeq;
-	setState({ toast: { message, tone, seq } });
+	setState({ toast: { message, tone, seq, ...(action ? { action } : {}) } });
 	if (toastTimer !== undefined) clearTimeout(toastTimer);
-	toastTimer = setTimeout(() => {
-		if (getState().toast?.seq === seq) setState({ toast: null });
-	}, 4200);
+	toastTimer = setTimeout(
+		() => {
+			if (getState().toast?.seq === seq) setState({ toast: null });
+		},
+		action ? TOAST_ACTION_MS : TOAST_MS,
+	);
+}
+
+/** Close the toast now (its action ran); a newer toast is left alone. */
+export function dismissToast(seq: number): void {
+	if (getState().toast?.seq === seq) setState({ toast: null });
 }
 
 /**
@@ -1629,36 +1641,81 @@ export async function renameSession(name: string): Promise<void> {
 
 /**
  * Rename / archive / delete one session (legacy `openSessionMenu` click
- * handler, 1297-1328). Called from the sidebar's row menu and the
- * conversation header's menu. Rename only opens `#renameSessionDialog`
- * (`renameSession` saves); archive and delete patch the open session's
- * snapshot so the header does not wait for the next SSE snapshot.
+ * handler, 1297-1328). Called from the sidebar's row menu, its hover archive
+ * button and the conversation header's menu. Rename only opens
+ * `#renameSessionDialog` (`renameSession` saves). Archive and delete change the
+ * list and the open session's snapshot before the host answers, so the row moves
+ * at once; a refused request puts the row back and reports the error.
  */
 export async function runSessionAction(action: SessionAction, session: SessionSummary): Promise<void> {
+	if (action === "rename") {
+		// The dialog submits through renameSession; nothing changed yet, so there is nothing to refresh.
+		setUi({ renameSession: { sessionId: session.id, name: sessionTitle(session), pending: false } });
+		return;
+	}
+	if (action === "delete" && !window.confirm(t("confirmDelete", { name: sessionTitle(session) }))) return;
 	try {
-		if (action === "rename") {
-			// The dialog submits through renameSession; nothing changed yet, so there is nothing to refresh.
-			setUi({ renameSession: { sessionId: session.id, name: sessionTitle(session), pending: false } });
-			return;
-		}
-		if (action === "archive") {
-			const archived = !session.archived;
-			await apiSend(`/api/v1/sessions/${session.id}/archive`, "PATCH", { archived });
-			patchCurrentSession(session.id, { archived });
-		}
-		if (action === "delete" && window.confirm(t("confirmDelete", { name: sessionTitle(session) }))) {
-			await apiSend(`/api/v1/sessions/${session.id}`, "DELETE");
-			forgetDeletedSession(session.id);
-			const state = getState();
-			if (state.current?.id === session.id) startDraft(state.bootstrapCwd);
-			// After leaving it: leaving a session stashes its tabs.
-			forgetPreviewSession(session.id);
-			forgetComposerDraft(session.id);
-		}
-		await refreshSessions();
+		if (action === "archive") await archiveSessionOptimistically(session);
+		else await deleteSessionOptimistically(session);
 	} catch (error) {
 		showError(errorMessage(error));
 	}
+	// The host's list is the authority once the request settled; a failed refresh changes nothing shown.
+	void refreshSessions().catch(() => {});
+}
+
+/**
+ * Replace the listed sessions ahead of the host. A list read already in flight
+ * was answered before this change, so it must not land after it and put the
+ * row back where it was.
+ */
+function updateListedSessions(update: (sessions: readonly SessionSummary[]) => SessionSummary[]): void {
+	sessionListApplied = ++sessionListRequest;
+	setState((state) => ({ sessions: update(state.sessions) }));
+}
+
+async function archiveSessionOptimistically(session: SessionSummary): Promise<void> {
+	const setArchived = (archived: boolean) => {
+		updateListedSessions((sessions) =>
+			sessions.map((entry) => (entry.id === session.id ? { ...entry, archived } : entry)),
+		);
+		patchCurrentSession(session.id, { archived });
+	};
+	const archived = !session.archived;
+	setArchived(archived);
+	if (archived)
+		showToast(t("sessionArchivedToast"), "success", { label: t("sessionArchivedView"), run: showArchivedList });
+	try {
+		await apiSend(`/api/v1/sessions/${session.id}/archive`, "PATCH", { archived });
+	} catch (error) {
+		setArchived(session.archived === true);
+		throw error;
+	}
+}
+
+/** The archive toast's "View": reveal the sidebar's archived list (project view, archive open). */
+function showArchivedList(): void {
+	setState({ currentView: "project", showArchived: true });
+	setUi({ sidebarHidden: false });
+}
+
+async function deleteSessionOptimistically(session: SessionSummary): Promise<void> {
+	updateListedSessions((sessions) => sessions.filter((entry) => entry.id !== session.id));
+	const state = getState();
+	if (state.current?.id === session.id) startDraft(state.bootstrapCwd);
+	try {
+		await apiSend(`/api/v1/sessions/${session.id}`, "DELETE");
+	} catch (error) {
+		// The session still exists: its row comes back (the page stays where the delete left it).
+		updateListedSessions((sessions) =>
+			sessions.some((entry) => entry.id === session.id) ? [...sessions] : [...sessions, session],
+		);
+		throw error;
+	}
+	forgetDeletedSession(session.id);
+	// After leaving it: leaving a session stashes its tabs.
+	forgetPreviewSession(session.id);
+	forgetComposerDraft(session.id);
 }
 
 /**
