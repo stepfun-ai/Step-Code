@@ -9,7 +9,7 @@ import { createEventBus } from "../src/core/event-bus.ts";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { PLAN_MODE_PROMPT_VERSION } from "../src/features/plan-mode-prompt.ts";
+import { PLAN_MODE_BLOCK_VERSION } from "../src/features/plan-mode-prompt.ts";
 import { getPlanFilePath } from "../src/features/plan-mode-tools.ts";
 import { createStepExtension } from "../src/features/step.ts";
 import { createStepPlanExtension } from "../src/features/step-plan.ts";
@@ -921,9 +921,10 @@ test("/plan approve refuses when no proposal is waiting", async () => {
 	expect(harness.notifications.some((notice) => /No plan is waiting for approval/.test(notice.message))).toBe(true);
 });
 
-test("/plan approve <task text> is a task, not a decision", async () => {
-	// Only a snapshot hash names a proposal. Any other text after the verb is
-	// something to plan, and dropping it would silently lose what the user wrote.
+test("/plan approve with text that is not a hash is refused, not read as a task", async () => {
+	// The verb claims the whole input. A host that sends a truncated or upper-cased
+	// hash must not have its text read as something to plan: that would drop the
+	// wait it meant to answer and hand the broken hash to the model.
 	const cwd = makeWorkspace();
 	const harness = createHarness({ cwd });
 	createStepPlanExtension()(harness.api);
@@ -933,11 +934,57 @@ test("/plan approve <task text> is a task, not a decision", async () => {
 	mkdirSync(path.dirname(planPath), { recursive: true });
 	writeFileSync(planPath, "# Plan\n1. Do the thing\n");
 	await runTool(harness, "exit_plan_mode", {}, context);
+	const waiting = lastPlanEntry(harness).pendingProposalHash;
 
 	await harness.commands.get("plan")!.handler("approve the payment flow", context);
-	expect(harness.userMessages.at(-1)?.[0]).toBe("approve the payment flow");
+	// Nothing ran and nothing was decided: the wait is still there.
+	expect(harness.userMessages).toEqual([]);
 	expect(lastPlanEntry(harness)).toMatchObject({ enabled: true });
+	expect(lastPlanEntry(harness).pendingProposalHash).toBe(waiting);
+	expect(harness.notifications.some((notice) => /not a proposal hash/.test(notice.message))).toBe(true);
+});
+
+test("/plan approve accepts a hash in any case", async () => {
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx({ mode: "rpc", hasUI: true, planReviewSurface: true });
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Plan\n1. Do the thing\n");
+	await runTool(harness, "exit_plan_mode", {}, context);
+	const hash = String(lastPlanEntry(harness).pendingProposalHash);
+
+	await harness.commands.get("plan")!.handler(`approve ${hash.toUpperCase()}`, context);
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
 	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
+});
+
+test("/plan verbs are matched without case", async () => {
+	// A host forwards what its user typed, and a capitalized verb must not fall
+	// through to "plan this text": that would clear the wait it meant to answer.
+	const cwd = makeWorkspace();
+	const harness = createHarness({ cwd });
+	createStepPlanExtension()(harness.api);
+	const context = harness.ctx({ mode: "rpc", hasUI: true, planReviewSurface: true });
+	await enterPlanMode(harness, context);
+	const planPath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planPath), { recursive: true });
+	writeFileSync(planPath, "# Plan\n1. Do the thing\n");
+	await runTool(harness, "exit_plan_mode", {}, context);
+	const hash = String(lastPlanEntry(harness).pendingProposalHash);
+
+	await harness.commands.get("plan")!.handler(`Approve ${hash.toUpperCase()}`, context);
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
+	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
+	expect(harness.userMessages).toEqual([]);
+
+	// `OFF` leaves without implementing anything.
+	await enterPlanMode(harness, context);
+	await harness.commands.get("plan")!.handler("OFF", context);
+	expect(lastPlanEntry(harness)).toMatchObject({ enabled: false });
+	expect(harness.userMessages).toEqual([]);
 });
 
 test("a pending write the branch rejects leaves nothing waiting", async () => {
@@ -998,7 +1045,7 @@ test("a revision requested mid-run is queued behind the running turn", async () 
 	// the pending-decision guard holds back.
 	expect(harness.userMessages.at(-1)).toEqual([
 		"split the second step",
-		{ expandPromptTemplates: true, source: "rpc", deliverAs: "followUp" },
+		{ expandPromptTemplates: true, deliverAs: "followUp" },
 	]);
 	expect(harness.customMessages).toEqual([]);
 	// The old proposal is no longer waiting, so the session holds no gate while
@@ -1096,6 +1143,57 @@ test("a session written before the decision fact keeps its gate after an upgrade
 	await restoreLifecycle(harness, "session_start");
 	expect(harness.appended).toHaveLength(afterFirst);
 
+	await harness.commands.get("plan")!.handler("approve", harness.ctx());
+	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
+	expect(harness.customMessages.some(([message]) => message.customType === "step-plan-approved")).toBe(true);
+});
+
+test("an older entry that already carries the fact keeps it instead of re-deriving it", async () => {
+	// A build that wrote `pendingProposalHash` under `version: 2` keeps a wait even
+	// when the user asked a question after submitting. The transcript scan cannot
+	// see that — it stops at the user message — so re-deriving would drop a wait
+	// the branch still reports.
+	const cwd = makeWorkspace();
+	const planContents = "# Plan\n1. Do the thing\n";
+	const planFilePath = path.join(cwd, ".stepcode", "plans", "session-sess-1.md");
+	mkdirSync(path.dirname(planFilePath), { recursive: true });
+	writeFileSync(planFilePath, planContents);
+	const planHash = createHash("sha256").update(planContents, "utf8").digest("hex");
+
+	const harness = createHarness({ cwd });
+	harness.session.appendCustomEntry("step-plan", {
+		version: 2,
+		enabled: true,
+		planFilePath,
+		pendingProposalHash: planHash,
+	});
+	harness.session.appendMessage({
+		role: "toolResult",
+		toolCallId: "handoff",
+		toolName: "exit_plan_mode",
+		content: [{ type: "text", text: `Review this plan.\n\n${planContents}` }],
+		details: {
+			outcome: "external_approval_required",
+			planFilePath,
+			planContents,
+			planHash,
+			planModeExited: false,
+		},
+		isError: false,
+		timestamp: Date.now(),
+	});
+	// The user is still deciding; a question is not an answer.
+	harness.session.appendMessage({
+		role: "user",
+		content: [{ type: "text", text: "Why the second step?" }],
+		timestamp: Date.now(),
+	});
+	createStepPlanExtension()(harness.api);
+	const before = harness.appended.filter((entry) => entry.customType === "step-plan").length;
+	await restoreLifecycle(harness, "session_start");
+
+	// Nothing was migrated away: the recorded fact is the answer.
+	expect(harness.appended.filter((entry) => entry.customType === "step-plan")).toHaveLength(before);
 	await harness.commands.get("plan")!.handler("approve", harness.ctx());
 	expect(lastPlanEntry(harness).pendingProposalHash).toBeUndefined();
 	expect(harness.customMessages.some(([message]) => message.customType === "step-plan-approved")).toBe(true);
@@ -1307,10 +1405,7 @@ test.each(planEntryCases)(
 		const toolsBefore = harness.activeTools();
 		// `/plan <task>` while planning hands over the task without re-entering.
 		await harness.commands.get("plan")!.handler("refine the proposal", context);
-		expect(harness.userMessages.at(-1)).toEqual([
-			"refine the proposal",
-			{ expandPromptTemplates: true, source: "interactive" },
-		]);
+		expect(harness.userMessages.at(-1)).toEqual(["refine the proposal", { expandPromptTemplates: true }]);
 		expect(harness.appended).toHaveLength(snapshotsBefore);
 		expect(events).toHaveLength(telemetryBefore);
 		expect(events[0]).toEqual({ event: "plan_mode_entered", properties: { source } });
@@ -2481,9 +2576,7 @@ test("/plan with a task enables plan mode and sends the task as a user turn", as
 	await harness.commands.get("plan")!.handler("实现一个俄罗斯方块,简单版", context);
 
 	expect(harness.statuses.get("plan-mode")).toBe("Planning (user)");
-	expect(harness.userMessages).toEqual([
-		["实现一个俄罗斯方块,简单版", { expandPromptTemplates: true, source: "interactive" }],
-	]);
+	expect(harness.userMessages).toEqual([["实现一个俄罗斯方块,简单版", { expandPromptTemplates: true }]]);
 	// The turn must start under the plan-mode tool set, not the unrestricted one.
 	expect(harness.activeTools()).not.toContain("edit_file_unrestricted");
 	expect(harness.activeTools()).toContain("read_file");
@@ -2509,9 +2602,7 @@ test("/plan with a task queues as a follow-up while the agent is streaming", asy
 
 	await harness.commands.get("plan")!.handler("plan this too", harness.ctx({ isIdle: () => false }));
 
-	expect(harness.userMessages).toEqual([
-		["plan this too", { expandPromptTemplates: true, source: "interactive", deliverAs: "followUp" }],
-	]);
+	expect(harness.userMessages).toEqual([["plan this too", { expandPromptTemplates: true, deliverAs: "followUp" }]]);
 });
 
 test("bare /plan still toggles plan mode and sends nothing", async () => {
@@ -2601,9 +2692,7 @@ test("/plan <task> announces plan mode on the turn that carries the task", async
 	const harness = createHarness({ cwd: makeWorkspace() });
 	createStepPlanExtension()(harness.api);
 	await harness.commands.get("plan")!.handler("plan the parser rewrite", harness.ctx());
-	expect(harness.userMessages).toEqual([
-		["plan the parser rewrite", { expandPromptTemplates: true, source: "interactive" }],
-	]);
+	expect(harness.userMessages).toEqual([["plan the parser rewrite", { expandPromptTemplates: true }]]);
 	expect((await startTurn(harness))?.details.mode).toBe("plan");
 });
 
@@ -2696,7 +2785,7 @@ test.each(["session_start", "session_tree"] as const)(
 	async (type) => {
 		const planFilePath = "/workspace/.stepcode/plans/session-sess-1.md";
 		const announced = (mode: "plan" | "default") =>
-			mode === "plan" ? { mode, planFilePath, version: PLAN_MODE_PROMPT_VERSION } : { mode };
+			mode === "plan" ? { mode, planFilePath, version: PLAN_MODE_BLOCK_VERSION } : { mode };
 
 		// A plan that was already announced in the current wording: no repeat.
 		const legacy = createHarness({

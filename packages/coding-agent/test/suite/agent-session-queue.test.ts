@@ -420,6 +420,41 @@ describe("AgentSession queue characterization", () => {
 		);
 	});
 
+	it("keeps a follow-up queued during a failed attempt out of the retry request", async () => {
+		// A retry resumes the same work. A message the person queued behind it is
+		// meant to arrive after that work finishes, so delivering it into the retried
+		// request would answer it instead of what was asked.
+		const harness = await createHarness({
+			settings: { retry: { enabled: true, maxRetries: 2, baseDelayMs: 0 } },
+		});
+		harnesses.push(harness);
+
+		const requests: string[][] = [];
+		harness.setResponses([
+			async () => {
+				await harness.session.sendUserMessage("queued words", { deliverAs: "followUp" });
+				return fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 overloaded_error" });
+			},
+			(context) => {
+				requests.push(context.messages.map((message) => getMessageText(message)));
+				return fauxAssistantMessage("answered the original");
+			},
+			(context) => {
+				requests.push(context.messages.map((message) => getMessageText(message)));
+				return fauxAssistantMessage("answered the follow-up");
+			},
+		]);
+
+		await harness.session.prompt("original question");
+		await harness.session.agent.waitForIdle();
+
+		// The retried request answers the original question, without the follow-up.
+		expect(requests[0]).not.toContain("queued words");
+		// The follow-up runs afterwards, in its own request.
+		expect(requests.at(-1)).toContain("queued words");
+		expect(getUserTexts(harness)).toEqual(["original question", "queued words"]);
+	});
+
 	it("delivers follow-ups queued during agent_end", async () => {
 		let sent = false;
 		const harness = await createHarness({

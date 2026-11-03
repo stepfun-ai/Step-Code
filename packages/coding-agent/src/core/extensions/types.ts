@@ -884,6 +884,16 @@ export interface TurnEndEvent {
 export interface MessageStartEvent {
 	type: "message_start";
 	message: AgentMessage;
+	/**
+	 * The message was written by a person, not generated on their behalf.
+	 *
+	 * Present on user messages: `true` when the person wrote it, `false` when an
+	 * extension produced it. Absent on other roles. A queued message and a prompt
+	 * look identical in the transcript, so an extension that must react to "the
+	 * user spoke" — rather than to "some user message exists" — reads this instead
+	 * of the content.
+	 */
+	fromUser?: boolean;
 }
 
 /** Fired during assistant message streaming with token-by-token updates */

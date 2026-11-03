@@ -623,6 +623,10 @@ Fired for message lifecycle updates.
 ```typescript
 pi.on("message_start", async (event, ctx) => {
   // event.message
+  // event.fromUser — true when a person wrote this user message, false when an
+  // extension produced it. Present on user messages only; absent on other roles.
+  // A queued message and a prompt look the same in the transcript, so an extension
+  // that reacts to "the user spoke" reads this, not the content.
 });
 
 pi.on("message_update", async (event, ctx) => {
@@ -978,7 +982,7 @@ Current run mode: `"tui"`, `"rpc"`, `"json"`, or `"print"`. Use `ctx.mode === "t
 
 `true` when the host can show a plan proposal and collect a decision for it. `mode` and `hasUI` cannot answer this: every RPC host has a dialog bridge, including clients with no review surface and no person to answer.
 
-`exit_plan_mode` reads it. With the surface, the proposal is shown, the turn ends, and plan mode stays on until the user decides; without it, the mode ends and approval belongs to the caller. Hosts set it when they bind the session (`bindExtensions({ planReviewSurface: true })`); an extension sees the value on every handler's `ctx`.
+`exit_plan_mode` reads it. With the surface, the proposal is shown, the turn ends, and plan mode stays on until the user decides; without it, the mode ends and approval belongs to the caller. Hosts set it when they bind the session (`bindExtensions({ planReviewSurface: true })`), or across the wire with `--plan-review-surface`; an extension sees the value on every handler's `ctx`.
 
 ### ctx.cwd
 
@@ -3016,7 +3020,7 @@ const highlighted = highlightCode(code, lang, theme);
 | Mode | `ctx.mode` | `ctx.hasUI` | `ctx.planReviewSurface` | Notes |
 |------|------------|-------------|------------------------|-------|
 | Interactive | `"tui"` | `true` | `false` | Full TUI with terminal rendering; a plan review is answered inside the tool call |
-| RPC (`--mode rpc`) | `"rpc"` | `true` | set by the host | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`. See [rpc.md](rpc.md) |
+| RPC (`--mode rpc`) | `"rpc"` | `true` | set by `--plan-review-surface` | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`. A client that draws the proposal passes the flag. See [rpc.md](rpc.md) |
 | JSON (`--mode json`) | `"json"` | `false` | `false` | Event stream to stdout; UI methods are no-ops |
 | Print (`-p`) | `"print"` | `false` | `false` | Extensions run but can't prompt |
 

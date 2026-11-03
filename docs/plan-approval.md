@@ -16,6 +16,11 @@ session; plan mode then stays on, the turn ends, and the proposal is recorded as
 this: every rpc host passes a dialog bridge, including clients with no review
 surface.
 
+An rpc client states it at startup: `--plan-review-surface` (or
+`RpcModeOptions.planReviewSurface`) for a host that draws the proposal and
+collects the answer. Without the flag a wire client keeps the handoff behavior,
+because the transport says nothing about what the client can draw.
+
 A host without that surface cannot obtain approval. It exits plan mode and hands
 the proposal to the caller, but the turn ends immediately: leaving the mode does
 not authorize execution. The caller must approve the exact snapshot before
@@ -97,7 +102,8 @@ turn: the result sets `stopTurn` in addition to `terminate`.
 
 `approvalSource` identifies who owns the decision: `"user"` for the TUI review,
 including feedback and dismissal, and for a review-surface host whose person
-answers in the app; `"external"` for the headless / RPC caller's approval flow. It does not indicate that approval has occurred. Source
+answers in the app; `"external"` for the headless / RPC caller's approval flow.
+It does not indicate that approval has occurred. Source
 and outcome are independent: a future caller-owned `"approved"` outcome can keep
 `approvalSource: "external"` without claiming the user clicked the TUI. Native
 headless/RPC exits currently emit `"external_approval_required"` only.
@@ -203,9 +209,14 @@ Guards belong to the extension generation that registered them, so a reload drop
 the stale ones along with the runner whose context they capture.
 The session asks that guard before every turn it would start on the user's
 behalf — a feature's `triggerTurn` message, a goal continuation, a cron delivery,
-a background lane waking its parent, and post-run recovery. A feature therefore
+a background lane waking its parent — and post-run recovery. A feature therefore
 does not need to know the other starters to respect the decision, and adding a
 new starter cannot silently bypass it.
+
+Post-run recovery is the exception that proves the rule: overflow and truncation
+recovery repair the transcript so the next request fits. A decision keeps them
+from starting anything new, but the repair itself still runs; threshold compaction
+stays deferred to the next request either way.
 
 A feature that can defer its own trigger asks `ctx.hasPendingUserDecision()` and
 retries later, instead of firing into a queue that would replay work after the
@@ -215,18 +226,42 @@ A user's own prompt always runs: that message is how the decision gets answered.
 A host bridge forwarding a real person's input reports its own `source`, so the
 message is not mistaken for extension-generated text. The same holds while a run
 is in flight: input a person typed waits in the queue, and when the turn submits
-a proposal, that input is still what the next request delivers. The gate reads
-the message the agent would deliver next, not whether the queue contains one —
-work a feature queued ahead of the user's words still waits.
+a proposal, that input is still what the next request delivers — as that request's
+input, not after a request the model already took. The gate reads the message the
+agent would deliver next, not whether the queue contains one — work a feature
+queued ahead of the user's words still waits.
+The wait is settled where the message is delivered, not where a prompt is
+submitted: a message queued behind the submitting turn arrives without a new
+`prompt`, and that delivery is the only channel a caller handoff has.
+Context an extension queued (`sendCustomMessage`) is held the same way: it is
+flushed once the decision is answered, not into a question typed while it waits.
 The guard never guesses from wording. On a host without a review surface the
 decision belongs to the caller, and the only channel it has is a message; the
-first turn after the handoff therefore settles the wait, and the guard stays
-armed until then. A caller that wants the wait ended without writing a message
-sends `/plan off` (leave without implementing) or `/plan approve` (accept the
-proposal), and `/plan approve <hash>` binds the decision to the snapshot the
-caller actually read.
+first message after the handoff therefore settles the wait. A caller that wants
+the wait ended without writing a message sends `/plan off` (leave without
+implementing) or `/plan approve` (accept the proposal), and `/plan approve
+<hash>` binds the decision to the snapshot the caller actually read.
+
+`approve` claims the whole input, so a malformed hash is refused rather than read
+as a task: answering nothing would drop the wait and hand the broken text to the
+model as something to plan. `/plan approve` alone answers whatever is waiting;
+`/plan approve <hash>` must still match the reviewed snapshot after rereading the
+file. Verbs are matched without case, since a host forwards what its user typed,
+and a task whose text starts with one of them has to be rephrased.
+
+Approving, or answering with a message, delivers what the decision held. Leaving
+without approving releases the gate but starts nothing, so held work runs on the
+next turn that starts.
+
+Leaving is a stop, not only a state change: `/plan off` aborts the run in flight.
+The Default announcement reaches the model's next request, so a streaming run
+would otherwise keep going with the plan boundary already lifted and start
+implementing the proposal the user just rejected.
 
 A session written before the decision fact recorded its wait only in the
 transcript. `restorePlanState` migrates it once, from the still-unanswered
 handoff at the tail of the branch, so upgrading does not lift the gate on a
-proposal nobody answered.
+proposal nobody answered. An entry that already carries `pendingProposalHash`
+keeps it under any version: a build that recorded the fact before this one did
+so without bumping the entry, and the transcript scan would drop a wait the
+branch still reports.

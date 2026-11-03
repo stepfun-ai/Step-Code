@@ -28,8 +28,8 @@ import { type LegacyPlanTodoFields, migrateLegacyPlanTodos } from "./plan-mode-m
 import {
 	buildDefaultModePrompt,
 	buildPlanModePrompt,
+	PLAN_MODE_BLOCK_VERSION,
 	PLAN_MODE_MESSAGE_TYPE,
-	PLAN_MODE_PROMPT_VERSION,
 } from "./plan-mode-prompt.ts";
 import {
 	getPlanFilePath,
@@ -136,12 +136,12 @@ function announcementFor(
 	if (planFilePath !== undefined) {
 		// A block written by an older build states older rules; resuming it keeps
 		// the model on those rules until a new turn appends the current one.
-		const current = visible?.version === PLAN_MODE_PROMPT_VERSION;
+		const current = visible?.version === PLAN_MODE_BLOCK_VERSION;
 		if (visible?.mode === "plan" && visible.planFilePath === planFilePath && current) return undefined;
 		const details: PlanModeAnnouncement = {
 			mode: "plan",
 			planFilePath,
-			version: PLAN_MODE_PROMPT_VERSION,
+			version: PLAN_MODE_BLOCK_VERSION,
 		};
 		return {
 			customType: PLAN_MODE_MESSAGE_TYPE,
@@ -609,13 +609,18 @@ export const createStepPlanExtension =
 				// Absolute verbs, so a host that can only send text can express
 				// "leave" and "approve" without racing a toggle. A queued `/plan`
 				// would otherwise flip whatever state the turn left behind.
-				if (prompt === "on") {
+				//
+				// Matched without case: a host may capitalize what it forwards, and a verb
+				// it did not recognize would fall through to "plan this text", clearing the
+				// wait it meant to answer.
+				const verb = prompt.toLowerCase();
+				if (verb === "on") {
 					// The absolute counterpart of `off`, so a host never sends a toggle
 					// whose effect depends on the state a turn left behind.
 					if (!enabled) enter(ctx);
 					return;
 				}
-				if (prompt === "off") {
+				if (verb === "off") {
 					// Leaving is a decision even when the mode already ended: a caller
 					// handoff leaves the proposal waiting, and the user saying "off" is
 					// the answer that releases it.
@@ -624,10 +629,24 @@ export const createStepPlanExtension =
 					return;
 				}
 				// `/plan approve` answers the proposal, `/plan approve <hash>` answers
-				// that one. A hash is 64 lowercase hex characters, so any other text
-				// after the verb is a task and falls through to the branch below.
-				const namedProposal = /^approve\s+([0-9a-f]{64})$/.exec(prompt)?.[1];
-				if (prompt === "approve" || namedProposal !== undefined) {
+				// that one. The verb claims the whole input: a host that sends a
+				// truncated or upper-cased hash must not have its text read as a task to
+				// plan — that would drop the wait it meant to answer and hand the broken
+				// hash to the model.
+				const approveMatch = /^approve(?:\s+(.*))?$/s.exec(verb);
+				if (approveMatch) {
+					// `verb` is already lowercased, so the argument matches a hash whichever
+					// case the host sent.
+					const namedProposal = approveMatch[1]?.trim();
+					// An empty argument answers whatever is waiting. A named one has to be
+					// the snapshot hash exactly: anything else is not a decision.
+					if (namedProposal !== undefined && !/^[0-9a-f]{64}$/.test(namedProposal)) {
+						ctx.ui.notify(
+							"That is not a proposal hash. Use `/plan approve`, `/plan approve <hash>`, or `/plan <task>` to plan something else.",
+							"warning",
+						);
+						return;
+					}
 					// The user accepted the proposal the host showed them. Leaving the
 					// mode and starting the implementation turn are one decision: the
 					// only way this turn runs with file mutations enabled.
@@ -655,8 +674,12 @@ export const createStepPlanExtension =
 					}
 					if (current !== pendingProposal) {
 						// Nothing was decided: the wait stays, so automatic work keeps
-						// holding until someone reviews the text that is on disk now.
-						ctx.ui.notify("The plan changed since it was submitted; ask for a new review.", "warning");
+						// holding until someone reviews the text that is on disk now. Leaving
+						// is the way out when the text will not be reviewed again.
+						ctx.ui.notify(
+							"The plan changed since it was submitted; ask for a new review, or use `/plan off` to leave plan mode.",
+							"warning",
+						);
 						return;
 					}
 					// A caller handoff already left the mode; the caller answering in
@@ -698,10 +721,11 @@ export const createStepPlanExtension =
 				//
 				// The words are the user's, forwarded: a proposal submitted by the turn
 				// this waited behind must not turn their request for changes into
-				// extension traffic that the pending-decision guard then holds back.
+				// extension traffic that the pending-decision guard then holds back. The
+				// session already knows who typed the command, so this forwards it rather
+				// than guessing from the transport.
 				pi.sendUserMessage(prompt, {
 					expandPromptTemplates: true,
-					source: ctx.mode === "tui" ? "interactive" : "rpc",
 					...(ctx.isIdle() ? {} : { deliverAs: "followUp" as const }),
 				});
 			},
@@ -726,13 +750,11 @@ export const createStepPlanExtension =
 		// rewriting the system prompt or tool list. The block persists with the
 		// turn, so later requests reuse it from the cached history.
 		pi.on("before_agent_start", async (_event, ctx) => {
-			// Who can answer this proposal?
-			//
-			// A host with a review surface asks its user while the mode is on, so the
-			// fact stays until an explicit verb — there a question is not consent. But
-			// a pending left by a caller handoff (`enabled` already false) has no
-			// surface left to answer it, even on this host: opening such a session in
-			// the app must not lock it, so the next user turn is the decision.
+			// A proposal the caller was handed has no surface left to answer it, even
+			// on a host that has one: opening such a session in the app must not lock
+			// it, so the next user turn is the decision. A host with a review surface
+			// asks its user while the mode is on, so there the fact stays until an
+			// explicit verb — a question is not consent.
 			if (pendingProposal !== undefined && (!enabled || !ctx.planReviewSurface)) clearPendingProposal();
 			const visible = lastAnnouncement(
 				ctx.sessionManager.buildContextEntries().filter((entry) => entry.type === "custom_message"),
@@ -743,6 +765,24 @@ export const createStepPlanExtension =
 				recordedAnnouncement(ctx),
 			);
 			return message ? { message } : undefined;
+		});
+
+		// A person's message settles a wait only where that wait has no other channel.
+		//
+		// A host with a review surface asks its user while the mode is on, so there
+		// the fact stays until an explicit verb — a question is not consent. But a
+		// proposal the caller was handed (`enabled` already false) has no surface
+		// left to answer it, even on this host: opening such a session in the app
+		// must not lock it, so the next thing the person says is the decision.
+		//
+		// Judged at delivery rather than when a prompt is submitted: a message
+		// queued behind the submitting turn arrives without a new `prompt`, and that
+		// delivery is the only channel a caller handoff has.
+		pi.on("message_start", (event, ctx) => {
+			if (!event.fromUser) return;
+			if (pendingProposal === undefined) return;
+			if (enabled && ctx.planReviewSurface) return;
+			clearPendingProposal();
 		});
 
 		// The context hook reconciles the request view without writing history.
@@ -799,11 +839,17 @@ export const createStepPlanExtension =
 			// A proposal still waiting survives a restart, including a caller handoff
 			// that already left the mode: the guard must keep holding work until
 			// someone answers it, and only the answer clears this.
-			pendingProposal = restoredPlanState?.pendingProposalHash;
+			const recordedPending = restoredPlanState?.pendingProposalHash;
+			pendingProposal = typeof recordedPending === "string" ? recordedPending : undefined;
 			// An entry older than the fact recorded the wait only in the transcript.
 			// Migrate it once, so upgrading does not silently lift the gate on a
 			// session whose proposal nobody has answered.
-			if (restoredPlanState && (restoredPlanState.version ?? 2) < 3) {
+			//
+			// Only when the entry carries no fact of its own: a build that wrote the
+			// hash under an older entry version already answered this, and the
+			// transcript scan would drop it — a question typed past a proposal makes
+			// the scan report none, which is exactly the wait that build keeps.
+			if (restoredPlanState && pendingProposal === undefined && (restoredPlanState.version ?? 2) < 3) {
 				pendingProposal = findLegacyUnansweredHandoff(ctx.sessionManager)?.planHash;
 				// Written back once, so every reader of the branch — the automatic-turn
 				// guard, the RPC and SDK replies, a host's card — sees one fact rather
