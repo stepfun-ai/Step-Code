@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, mock, test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { translate } from "../client/src/i18n/index.ts";
 import { artifactKind, localFileReference, workspaceFilePath, workspaceFileReference } from "../client/src/lib/file-references.ts";
 import { markdownFileReferences } from "../client/src/lib/markdown.ts";
 import { MarkdownContent } from "../client/src/ui/MarkdownView/markdown-content.ts";
@@ -226,4 +227,15 @@ test("a delivery card describes a file only with a label written in words", () =
 	assert.equal(describe("packages/boot/plugin-market/README.zh.md", "pluginMarket"), undefined);
 	assert.equal(describe("packages/x/README.md", "@deepseek-ai/dsh"), undefined);
 	assert.equal(describe("notes.md", "  "), undefined);
+});
+
+test("a delivery card without a description names the file's kind in both languages", () => {
+	const kind = (path: string, locale: "zh-CN" | "en-US") => translate(locale, `deliveryKind.${artifactKind(path)}`);
+	assert.equal(kind("out/test.jpg", "zh-CN"), "图片");
+	assert.equal(kind("site/a.html", "zh-CN"), "网页");
+	assert.equal(kind("deck/test.ppt", "zh-CN"), "演示文稿");
+	assert.equal(kind("docs/README.zh.md", "zh-CN"), "文档");
+	assert.equal(kind("data/sheet.xlsx", "zh-CN"), "表格");
+	assert.equal(kind("out/test.jpg", "en-US"), "Image");
+	assert.equal(kind("deck/test.ppt", "en-US"), "Presentation");
 });

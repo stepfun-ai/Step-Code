@@ -27,7 +27,7 @@
 .attachment-title { display: flex; align-items: baseline; min-width: 0; }
 .attachment-name { overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 500; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-diffstat { flex: none; margin-left: 8px; font-size: 11px; }
-/* A descriptive link label ("贪吃蛇小游戏"); absent when the label only repeats the name or a package. */
+/* A descriptive link label ("贪吃蛇小游戏"), else the file kind (图片, 网页). */
 .attachment-meta { overflow: hidden; color: var(--ink-3); font-size: 11.5px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
 
 

@@ -47,7 +47,7 @@ function SystemBrowserIcon({ browser }: { readonly browser: SystemBrowser | null
 
 /**
  * The finished answer's deliverables, attached under its closing bubble: one
- * card per file (type tile, name, and a descriptive link label when there is one) in a two-column grid.
+ * card per file (type tile, name, and the link's description or else the file kind) in a two-column grid.
  *
  * A page the embedded browser can render opens there when the card is clicked,
  * as the card's turn left it; its actions show that turn's change of the file
@@ -133,7 +133,9 @@ function AttachmentCard({
 	const t = useT();
 	const [pending, setPending] = useState(false);
 	const name = basename(artifact.path);
-	const description = artifactDescription(artifact);
+	// A descriptive link label ("贪吃蛇小游戏") says more than the kind; without one the card names the kind
+	// (图片, 网页, 演示文稿). The folder is left to the path tooltip.
+	const meta = artifactDescription(artifact) ?? t(`deliveryKind.${artifact.kind}`);
 	const embedded = EMBEDDED_RENDERABLE.test(name);
 	const system = SYSTEM_RENDERABLE.test(name);
 	const change = artifact.change;
@@ -175,7 +177,7 @@ function AttachmentCard({
 					<span className="attachment-icon" aria-hidden="true">
 						<Icon name={KIND_ICONS[artifact.kind]} size="md" />
 					</span>
-					{/* The name, then this turn's line counts; a descriptive link label below. The full path is the tooltip. */}
+					{/* The name and this turn's line counts; below, the link's description or else the file kind. The full path is the tooltip. */}
 					<span className="attachment-text">
 						<span className="attachment-title">
 							<span className="attachment-name">{name}</span>
@@ -187,7 +189,7 @@ function AttachmentCard({
 								/>
 							) : null}
 						</span>
-						{description ? <span className="attachment-meta">{description}</span> : null}
+						<span className="attachment-meta">{meta}</span>
 					</span>
 				</button>
 			</Tooltip>

@@ -99,7 +99,7 @@ function opensTurn(item: TimelineItem, turnId: string): boolean {
  * The card's second line: the link label, only when it describes the file in words ("贪吃蛇小游戏",
  * "Weekly report"). A label that merely names the file, a folder on its path, or a package, module
  * or symbol (`app-boot`, `pluginMarket`, `@scope/pkg`) adds nothing the name and tooltip do not
- * already say, and reads as noise, so the card shows its name alone.
+ * already say, and reads as noise, so the card names the file's kind instead.
  */
 export function artifactDescription(artifact: Pick<TurnArtifact, "path" | "label">): string | undefined {
 	const label = artifact.label.trim();
