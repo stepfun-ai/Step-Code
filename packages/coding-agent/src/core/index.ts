@@ -2,6 +2,7 @@
  * Core modules shared between all run modes.
  */
 
+export { INCOMPLETE_TURN_MESSAGES, type IncompleteTurnReason } from "@step-harness/providers";
 export {
 	type AgentRunFailure,
 	AgentSession,

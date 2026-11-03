@@ -1,5 +1,9 @@
 // Core session management
 
+// The user-facing wording for an empty turn, and its reason type. A host that
+// renders a run needs both; re-exporting keeps it from depending on the provider
+// package directly.
+export { INCOMPLETE_TURN_MESSAGES, type IncompleteTurnReason } from "@step-harness/providers";
 export { type Args, type Mode, parseArgs } from "./cli/args.ts";
 // -----------------------------------------------------------------------------
 // S4-0 barrel widening: symbols consumed by the interactive UI that moved to the
