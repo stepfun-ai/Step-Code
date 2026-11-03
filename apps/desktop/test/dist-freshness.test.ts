@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -96,4 +96,19 @@ test("newestSourceMtimeMs skips build and dependency directories", async (t) => 
 	await write(join(directory, "dist", "d.ts"), 4 * SECOND);
 
 	assert.equal(newestSourceMtimeMs(directory), 2 * SECOND);
+});
+
+test("every packaging script rebuilds stale workspace output first", async () => {
+	// A plain `build.mjs` bundles the Electron entry only: the server imports the
+	// workspace packages through `node_modules`, so packaging on top of a dist left
+	// over from an earlier branch ships that branch's code under the new commit.
+	// `--ensure-web` is what closes that gap, and it is cheap when nothing is stale.
+	const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as {
+		scripts: Record<string, string>;
+	};
+	for (const name of ["package", "package:mac", "package:win"]) {
+		const script = manifest.scripts[name];
+		assert.ok(script, `${name} is missing`);
+		assert.match(script, /build\.mjs --ensure-web/, `${name} packages without rebuilding stale workspace output`);
+	}
 });

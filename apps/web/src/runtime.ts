@@ -901,6 +901,8 @@ export class WebSession {
 	private readonly steeringImages = new SteeringImages();
 	/** Set by `interrupt`: the run it stops settles without starting the next queued message. */
 	private holdQueue = false;
+	/** Messages taken from the queue whose prompt has not started yet. */
+	private dispatchInFlight = 0;
 	/** The last run ended in an error or abort; its settle leaves the queue for the user. */
 	private lastRunFailed = false;
 	/**
@@ -1278,26 +1280,18 @@ export class WebSession {
 				...(promptCommand ? { promptCommand } : {}),
 			});
 			if (event.type === "agent_settled") {
-				const hold = this.holdQueue || this.lastRunFailed;
-				this.holdQueue = false;
+				// `holdQueue` is cleared when the next run starts, not here: the edges
+				// below read it through `canDispatchAutomatically`, and clearing it first
+				// would let a stopped run's queue start on its own.
 				// Deferred: the kernel finishes settling after its listeners return,
 				// and an extension may have started a follow-up run in the meantime.
-				if (!hold) setImmediate(() => this.dispatchQueued());
-				// A decision that starts no run (leaving the mode, or an approval the
-				// plan file outran) settles nothing, so the queue would stay parked and
-				// a newer message would overtake it. The decision makes the host free
-				// again; dispatch on that edge.
-				setImmediate(() => {
-					if (this.session.hasPendingUserDecision) return;
-					if (!this.queue.size) return;
-					this.dispatchQueued();
-				});
+				setImmediate(() => this.dispatchQueued(undefined, "automatic"));
 			}
 			// A manual compaction settles no run, so queued messages wait for this
 			// event instead. Auto compaction is part of a run: its retry continues
 			// the turn, and `agent_settled` dispatches the queue after that.
 			if (event.type === "compaction_end" && event.reason === "manual" && !this.session.isStreaming) {
-				setImmediate(() => this.dispatchQueued());
+				setImmediate(() => this.dispatchQueued(undefined, "automatic"));
 			}
 		});
 		// Extension startup (MCP servers above all) registers tools after binding.
@@ -1447,11 +1441,6 @@ export class WebSession {
 			this.unread = false;
 			return this.sendWithinTurn(text, attachments, followUp);
 		});
-		// A command can settle no run at all — leaving plan mode, or an approval the
-		// plan file outran — while messages wait behind the decision it just made.
-		// `agent_settled` only fires for a run, so dispatch on this edge too; the
-		// `mustQueue` check keeps a real run's own settle in charge.
-		if (this.queue.size > 0 && !this.mustQueue()) setImmediate(() => this.dispatchQueued());
 	}
 
 	/**
@@ -1473,6 +1462,12 @@ export class WebSession {
 		} finally {
 			this.pendingPrompts -= 1;
 		}
+		// A command can settle no run at all — leaving plan mode, an approval the
+		// plan file outran, `/goal pause` — so `agent_settled` never fires and the
+		// queue would stay parked while a newer message overtook it. One edge here
+		// covers every caller; the automatic check keeps a parked queue parked and a
+		// real run's own settle in charge.
+		if (this.queue.size > 0) setImmediate(() => this.dispatchQueued(undefined, "automatic"));
 	}
 
 	private async sendWithinTurn(text: string, attachments: readonly WebAttachment[], followUp: boolean): Promise<void> {
@@ -1644,21 +1639,34 @@ export class WebSession {
 		}));
 	}
 
-	/** Whether a message sent now has to wait: a run is active, the context is being compacted, or the session waits on the user. */
+	/** Whether a message sent now has to wait: a run is active, the context is being compacted, or the page is blocked on a decision. */
 	private mustQueue(): boolean {
 		return (
 			this.session.isStreaming ||
 			this.session.isCompacting ||
+			// A message left the queue but its prompt has not started yet: dispatching
+			// past that point starts a second run beside it.
+			this.dispatchInFlight > 0 ||
+			this.pendingPrompts > 0 ||
 			this.startingPrompt !== undefined ||
 			this.status === "waiting" ||
-			// The kernel holds automatic starts behind a decision the user has not
-			// answered; the host queue is one of those starters. Holding it here is
-			// what keeps a message typed during planning from being dispatched the
-			// instant the handoff ends the turn — that would answer the proposal
-			// before the user did.
-			this.session.hasPendingUserDecision ||
+			this.awaitingPlanDecision() ||
 			this.isReverting()
 		);
+	}
+
+	/**
+	 * The page is blocked on a plan card: plan mode is on and the session records a
+	 * proposal waiting for its answer.
+	 *
+	 * Only that state closes the composer, so it is the only state that holds the
+	 * host queue. A wait recorded with the mode already off — a caller handoff
+	 * opened here — has no card to answer; holding on it would strand what the user
+	 * types with nothing to click.
+	 */
+	private awaitingPlanDecision(): boolean {
+		const state = getStepPlanState(this.session.sessionManager.getBranch());
+		return state?.enabled === true && state.pendingProposalHash !== undefined;
 	}
 
 	/**
@@ -1670,7 +1678,7 @@ export class WebSession {
 		// Shutdown is in progress: nothing queued now will ever run.
 		if (this.closing) return;
 		const item = this.queue.add(input);
-		if (!this.mustQueue() && this.queue.size === 1) this.dispatchQueued(item.id);
+		if (!this.mustQueue() && this.queue.size === 1) this.dispatchQueued(item.id, "user");
 	}
 
 	editQueued(id: string, text: string): boolean {
@@ -1682,26 +1690,61 @@ export class WebSession {
 	}
 
 	/**
+	 * Whether the queue may start its next message without the user asking again.
+	 *
+	 * A stopped or failed run parks the queue until the user acts: continuing on
+	 * their behalf is what `holdQueue` exists to prevent, and retrying a failure
+	 * they did not retry repeats it. `awaitingPlanDecision` is the other hold —
+	 * the page is blocked on a proposal, so the next message has to wait for the
+	 * answer. Every automatic dispatch point asks this; a user action (`enqueue`,
+	 * `steerQueued`) does not, because that is the user asking again.
+	 */
+	private canDispatchAutomatically(): boolean {
+		return !this.holdQueue && !this.lastRunFailed && !this.awaitingPlanDecision();
+	}
+
+	/**
 	 * Start the next queued message (or `id`) as a new turn, unless one must
 	 * still wait. Its run's settle dispatches the one after it.
+	 *
+	 * `reason` records who asked: the automatic edges check the parked queue, a
+	 * user action does not.
 	 */
-	private dispatchQueued(id?: string): boolean {
+	private dispatchQueued(id?: string, reason: "automatic" | "user" = "user"): boolean {
 		// Shutdown is in progress: a turn started now would be disposed mid-stream.
 		if (this.closing) return false;
+		if (reason === "automatic" && !this.canDispatchAutomatically()) return false;
 		if (this.mustQueue()) return false;
 		const item = id ? this.queue.take(id) : this.queue.shift();
 		if (!item) return false;
-		void this.sendQueued(item).catch((caught: unknown) => {
-			this.publishError(caught instanceof Error ? caught.message : String(caught));
-		});
+		// Counted from here, before `sendQueued` starts: reading uploaded files is an
+		// await, and a second edge must not take the next message in the meantime.
+		this.dispatchInFlight += 1;
+		void this.sendQueued(item)
+			.catch((caught: unknown) => {
+				this.publishError(caught instanceof Error ? caught.message : String(caught));
+			})
+			.finally(() => {
+				this.dispatchInFlight -= 1;
+			});
 		return true;
 	}
 
 	private async sendQueued(item: QueuedMessage): Promise<void> {
-		const text = await withUploadedFiles(
-			item.text,
-			item.files.map((file) => file.id),
-		);
+		let text: string;
+		try {
+			text = await withUploadedFiles(
+				item.text,
+				item.files.map((file) => file.id),
+			);
+		} catch (caught) {
+			// The message never took shape, so nothing of it reached the kernel: it stays
+			// where the user put it, ahead of anything queued behind it, instead of
+			// vanishing with the error that stopped it. A failure after this point may
+			// already be a started turn, and restoring then would send it twice.
+			this.queue.restore([item]);
+			throw caught;
+		}
 		await this.send(text, item.attachments, true);
 	}
 
@@ -1719,7 +1762,9 @@ export class WebSession {
 		if (!this.session.isStreaming) {
 			if (this.status === "waiting" || this.isReverting())
 				throw new Error("The session is waiting; try again later");
-			return this.dispatchQueued(targets[0]);
+			// Steering is the user asking for this message to run now, so a parked
+			// queue does not hold it.
+			return this.dispatchQueued(targets[0], "user");
 		}
 		const refused: QueuedMessage[] = [];
 		let failure: unknown;

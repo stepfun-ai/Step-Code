@@ -11,6 +11,21 @@ test("help exposes the live-consumer opt-in and its log cost", () => {
 	}
 });
 
+test("--plan-review-surface is stated, never inferred from --mode rpc", () => {
+	// An rpc client that cannot draw a proposal must keep the handoff behavior, so
+	// nothing about the transport sets this.
+	expect(parseArgs(["--mode", "rpc"]).planReviewSurface).toBeUndefined();
+	expect(parseArgs(["--mode", "rpc", "--plan-review-surface"]).planReviewSurface).toBe(true);
+
+	const log = vi.spyOn(console, "log").mockImplementation(() => {});
+	try {
+		printHelp();
+		expect(log.mock.calls.flat().join("\n")).toContain("--plan-review-surface");
+	} finally {
+		log.mockRestore();
+	}
+});
+
 describe("parseArgs", () => {
 	describe("--version flag", () => {
 		test("parses --version flag", () => {

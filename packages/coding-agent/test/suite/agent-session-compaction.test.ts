@@ -663,6 +663,43 @@ describe("AgentSession compaction characterization", () => {
 		);
 	});
 
+	it("recovers from a truncated response even while an automatic-turn guard holds", async () => {
+		// Recovery repairs the transcript for the next request; it is not work on the
+		// user's behalf. A guard that blocks new turns must not turn an error into a
+		// dead end, so the retry still happens once.
+		const harness = await createHarness({
+			models: [{ id: "faux-1", contextWindow: 1_000_000, maxTokens: 100 }],
+			settings: { compaction: { keepRecentTokens: 1, reserveTokens: 0 } },
+			bindings: { mode: "print" },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_start", (_event, ctx) => {
+						ctx.registerAutomaticTurnGuard?.(() => true);
+					});
+					pi.on("session_before_compact", async (event) => ({
+						compaction: {
+							summary: "overflow compacted",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+							details: {},
+						},
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			() => fauxAssistantMessage("x".repeat(64), { stopReason: "length", timestamp: Date.now() + 10_000 }),
+			() => fauxAssistantMessage("y".repeat(64), { stopReason: "length", timestamp: Date.now() + 10_000 }),
+		]);
+
+		await harness.session.prompt("x".repeat(5000));
+
+		expect(harness.session.hasPendingUserDecision).toBe(true);
+		expect(harness.faux.state.callCount).toBe(2);
+		expect(harness.eventsOfType("compaction_start").filter((event) => event.reason === "overflow")).toHaveLength(1);
+	});
+
 	it("cancels in-progress manual compaction when abortCompaction is called", async () => {
 		const harness = await createHarness({
 			settings: { compaction: { keepRecentTokens: 1 } },

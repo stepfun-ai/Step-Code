@@ -181,9 +181,16 @@ test("/plan <task> reaches the model with plan mode on and stated", { timeout: 6
 		const submitted = session.snapshot() as { planMode?: { enabled: boolean }; pendingPlanHash?: string };
 		assert.equal(submitted.planMode?.enabled, true);
 		assert.match(submitted.pendingPlanHash ?? "", /^[0-9a-f]{64}$/);
-		// The card's approve verb leaves the mode and starts the work as one
-		// decision; that turn carries the handoff result and the Default block.
-		await session.send("/plan approve");
+		// A hash that is not the waiting snapshot decides nothing, so the page keeps
+		// its card instead of hiding an answer the kernel refused.
+		await session.send("/plan approve not-a-hash");
+		const refused = session.snapshot() as { planMode?: { enabled: boolean }; pendingPlanHash?: string };
+		assert.equal(refused.planMode?.enabled, true);
+		assert.equal(refused.pendingPlanHash, submitted.pendingPlanHash);
+		// The card's approve verb names the snapshot it shows, leaves the mode, and
+		// starts the work as one decision; that turn carries the handoff result and
+		// the Default block.
+		await session.send(`/plan approve ${submitted.pendingPlanHash}`);
 		await waitFor(() => fixture.requests.length >= 4 && !session.isBusy());
 		const afterExit = fixture.requests[3]!;
 		const exitResult = textOf(afterExit.messages.filter((message) => message.role === "tool").at(-1)!);
@@ -195,10 +202,33 @@ test("/plan <task> reaches the model with plan mode on and stated", { timeout: 6
 		assert.equal(approved.planMode?.enabled, false);
 		assert.equal(approved.pendingPlanHash, undefined);
 
+		// A message typed while the proposal waits is held by the host, and leaving
+		// the mode releases it: `/plan off` starts no run of its own, so the queue
+		// needs that edge or the message waits with nothing left on screen to send it.
+		fixture.script.push(
+			() => ({ tool: "write_file", args: { path: planPath, content: "# Plan\n1. Write README.md\n" } }),
+			() => ({ tool: "exit_plan_mode", args: {} }),
+			() => ({ text: "Submitted." }),
+		);
+		await session.send("/plan add a readme");
+		await waitFor(() => (session.snapshot() as { pendingPlanHash?: string }).pendingPlanHash !== undefined);
+		session.enqueue({ text: "and mention the tests", attachments: [], files: [] });
+		assert.equal((session.snapshot() as { queuedMessages: unknown[] }).queuedMessages.length, 1);
+		const beforeRelease = fixture.requests.length;
+		// The card's "exit" button goes through the mode route, which starts no run.
+		await session.setMode("plan", false);
+		await waitFor(() => !session.isBusy() && fixture.requests.length > beforeRelease);
+		const released = fixture.requests.at(-1)!.messages.map(textOf);
+		assert.ok(
+			released.some((text) => text.includes("and mention the tests")),
+			"the queued message did not run after the decision",
+		);
+		assert.equal((session.snapshot() as { queuedMessages: unknown[] }).queuedMessages.length, 0);
+
 		// `/plan` before a picked skill: plan mode on and the skill still expanded.
 		await session.send("/plan /skill:demo-skill tidy up");
-		await waitFor(() => fixture.requests.length >= 5 && !session.isBusy());
-		const withSkill = fixture.requests[4]!.messages.map(textOf);
+		await waitFor(() => fixture.requests.length >= 7 && !session.isBusy());
+		const withSkill = fixture.requests.at(-1)!.messages.map(textOf);
 		assert.ok(
 			withSkill.some((text) => text.includes("DEMO SKILL BODY") && text.includes("tidy up")),
 			"the skill was not expanded",

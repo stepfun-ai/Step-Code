@@ -8,9 +8,12 @@ import { StepStdioHost } from "../src/step/stdio-host.ts";
 function createFakeRuntime(withAgent = false): {
 	runtime: AgentSessionRuntimeHost;
 	session: AgentSession;
+	/** Entries the session branch reports, as the real manager's does. */
+	branch: Array<{ type: string; customType?: string; data?: unknown }>;
 	emit(event: AgentSessionEvent): void;
 } {
 	const listeners = new Set<AgentSessionEventListener>();
+	const branch: Array<{ type: string; customType?: string; data?: unknown }> = [];
 	const session = {
 		sessionId: "session-1",
 		model: { provider: "step", id: "step-3.7-flash", name: "Step 3.7 Flash" },
@@ -29,6 +32,9 @@ function createFakeRuntime(withAgent = false): {
 		sessionManager: {
 			getCwd: () => "/workspace",
 			getSessionDir: () => "/workspace/.sessions",
+			// The real manager always reports its branch; the host reads the plan
+			// decision fact from it.
+			getBranch: () => [...branch],
 		},
 		extensionRunner: {
 			getRegisteredCommands: () => [],
@@ -77,6 +83,7 @@ function createFakeRuntime(withAgent = false): {
 	return {
 		runtime,
 		session,
+		branch,
 		emit: (event) => {
 			for (const listener of listeners) listener(event);
 		},
@@ -163,18 +170,25 @@ describe("StepStdioHost", () => {
 			while (!predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
 			expect(predicate()).toBe(true);
 		};
-		const { runtime, session } = createFakeRuntime();
+		const { runtime, session, branch } = createFakeRuntime();
 		// The handoff ends the turn on its tool result, so the query settles with no
 		// assistant text at all: an empty success result would hide the proposal.
 		(session as unknown as { getLastAssistantText: () => string | undefined }).getLastAssistantText = () => undefined;
+		const planHash = "a".repeat(64);
 		session.messages.push({
 			role: "toolResult",
 			toolCallId: "plan-1",
 			toolName: "exit_plan_mode",
 			content: [{ type: "text", text: "Caller must approve.\n\nPlan contents:\n# Proposal\nDo it." }],
-			details: { outcome: "external_approval_required" },
+			details: { outcome: "external_approval_required", planHash },
 			isError: false,
 			timestamp: Date.now(),
+		});
+		// The wait is the session fact, not the shape of the transcript.
+		branch.push({
+			type: "custom",
+			customType: "step-plan",
+			data: { version: 3, enabled: false, pendingProposalHash: planHash },
 		});
 		const host = new StepStdioHost({ runtimeHost: runtime, input, output, onExitRequested: vi.fn() });
 		const running = host.run();
@@ -226,19 +240,25 @@ describe("StepStdioHost", () => {
 			while (!predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
 			expect(predicate()).toBe(true);
 		};
-		const { runtime, session } = createFakeRuntime();
+		const { runtime, session, branch } = createFakeRuntime();
 		// The model often writes one line before calling the tool. That line is not
 		// the proposal, so the pending handoff has to win over it.
 		(session as unknown as { getLastAssistantText: () => string | undefined }).getLastAssistantText = () =>
 			"Plan is ready, submitting for review.";
+		const planHash = "b".repeat(64);
 		session.messages.push({
 			role: "toolResult",
 			toolCallId: "plan-1",
 			toolName: "exit_plan_mode",
 			content: [{ type: "text", text: "Caller must approve.\n\nPlan contents:\n# Proposal\nDo it." }],
-			details: { outcome: "external_approval_required" },
+			details: { outcome: "external_approval_required", planHash },
 			isError: false,
 			timestamp: Date.now(),
+		});
+		branch.push({
+			type: "custom",
+			customType: "step-plan",
+			data: { version: 3, enabled: false, pendingProposalHash: planHash },
 		});
 		const host = new StepStdioHost({ runtimeHost: runtime, input, output, onExitRequested: vi.fn() });
 		const running = host.run();

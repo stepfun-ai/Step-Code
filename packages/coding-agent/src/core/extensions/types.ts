@@ -441,8 +441,13 @@ export interface ExtensionContext {
 	 *
 	 * Unlike `hasUI`, this is about one specific surface, not about having a
 	 * dialog bridge at all: an rpc child has the bridge but no user to answer.
+	 * A host that cannot ask leaves this false, and the tool hands the proposal
+	 * to its caller as before.
+	 *
+	 * Required, so a host that forgets to declare it is a type error rather than a
+	 * silent fallback to the handoff behaviour.
 	 */
-	planReviewSurface?: boolean;
+	planReviewSurface: boolean;
 	/** The current abort signal, or undefined when the agent is not streaming. */
 	signal: AbortSignal | undefined;
 	/** Abort the current agent operation */
@@ -923,6 +928,16 @@ export interface TurnEndEvent {
 export interface MessageStartEvent {
 	type: "message_start";
 	message: AgentMessage;
+	/**
+	 * The message was written by a person, not generated on their behalf.
+	 *
+	 * Present on user messages: `true` when the person wrote it, `false` when an
+	 * extension produced it. Absent on other roles. A queued message and a prompt
+	 * look identical in the transcript, so an extension that must react to "the
+	 * user spoke" — rather than to "some user message exists" — reads this instead
+	 * of the content.
+	 */
+	fromUser?: boolean;
 }
 
 /** Fired during assistant message streaming with token-by-token updates */

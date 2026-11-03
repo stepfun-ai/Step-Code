@@ -13,9 +13,9 @@
 		"start": "node scripts/build.mjs --ensure-web && electron .",
 		"dev": "node scripts/build.mjs --ensure-web && electron .",
 		"icons": "node scripts/icons.mjs",
-		"package": "node scripts/build.mjs && node scripts/package.mjs",
-		"package:mac": "node scripts/build.mjs && node scripts/package.mjs --mac",
-		"package:win": "node scripts/build.mjs && node scripts/package.mjs --win",
+		"package": "node scripts/build.mjs --ensure-web && node scripts/package.mjs",
+		"package:mac": "node scripts/build.mjs --ensure-web && node scripts/package.mjs --mac",
+		"package:win": "node scripts/build.mjs --ensure-web && node scripts/package.mjs --win",
 		"clean": "shx rm -rf dist release"
 	},
 	"dependencies": {

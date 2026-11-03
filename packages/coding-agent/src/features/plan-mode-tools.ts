@@ -30,8 +30,6 @@ export type StepPlanExitOutcome = "approved" | "toggled_off" | "auto_headless" |
 /** State transitions the plan-mode tools drive on the step-plan extension. */
 export interface StepPlanModeController {
 	isPlanModeActive(): boolean;
-	/** Plan mode is on because the user asked for it (`/plan`, `--plan`), not through a model tool. */
-	enteredByUser(): boolean;
 	/** Leave plan mode: restore any tools plan mode added, persist state, record telemetry. */
 	exitPlanMode(outcome: StepPlanExitOutcome, extensionContext: ExtensionContext): void;
 	/** Plan file path for this session (persisted or derived from the session id). */
@@ -46,8 +44,14 @@ export interface StepPlanModeController {
 	 * answered proposal cannot look pending.
 	 */
 	recordPendingProposal(planHash: string): void;
-	/** The hash of the proposal waiting for an answer, or undefined. */
-	pendingProposalHash(): string | undefined;
+	/**
+	 * Hand the proposal to a caller: record the wait and leave the mode together.
+	 *
+	 * One transition, not two: a caller that got only half of it would either
+	 * hold automatic work for a proposal it never received, or receive a proposal
+	 * the session does not hold a decision for.
+	 */
+	handOffProposal(planHash: string, outcome: StepPlanExitOutcome, extensionContext: ExtensionContext): void;
 	/** The proposal was answered (approved, revised, or left); nothing waits now. */
 	clearPendingProposal(): void;
 }
@@ -161,7 +165,7 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 		renderShell: "self",
 		renderResult: renderPlanReviewResult,
 		description:
-			"Submit the written proposal for review. Requires a readable, nonempty regular plan file. The user decides; you do not. In a host with a review surface — the terminal dialog, or the web and desktop apps — the proposal is shown and this turn ends, and plan mode stays until they answer: approval leaves planning and starts the work, a request for changes arrives as a new user message, and leaving keeps the mode off. A host without that surface hands the proposal to its caller, which must obtain approval before execution. If no proposal was written, answer read-only questions directly and keep plan mode active until the user turns it off.",
+			"Submit the written proposal for review. Requires a readable, nonempty regular plan file. The user decides; you do not. In a host that can show the proposal and collect a decision — the terminal dialog is one — the proposal is shown and this turn ends, and plan mode stays until they answer: approval leaves planning and starts the work, a request for changes arrives as a new user message, and leaving keeps the mode off. A host without that surface hands the proposal to its caller, which must obtain approval before execution. If no proposal was written, answer read-only questions directly and keep plan mode active until the user turns it off.",
 		promptSnippet: "Submit the written proposal for review",
 		parameters: Type.Object({}),
 		// A decision barrier: later calls in this batch must not run behind it.
@@ -195,15 +199,13 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				planContents,
 				planHash,
 				planModeExited: !planMode.isPlanModeActive(),
-				approvalSource: ctx.mode === "rpc" || !ctx.hasUI ? "external" : "user",
+				// Who owns the decision, not what carries it. A host that draws the
+				// proposal has a person answering, whatever transport it uses; without
+				// that surface the caller owns approval.
+				approvalSource: ctx.planReviewSurface || (ctx.mode !== "rpc" && ctx.hasUI) ? "user" : "external",
 				outcome,
 				...(feedback === undefined ? {} : { feedback }),
 			});
-			// Said in the persisted result so a later turn, which no longer sees the
-			// request-local reminder, still knows the mode was the user's.
-			const offText = planMode.enteredByUser()
-				? "Plan mode, which the host turned on for the user's /plan request, is now off"
-				: "Plan mode is now off";
 			// Every handoff leaves a proposal awaiting approval, so no automatic
 			// starter continues past it. A host that can ask the user keeps the fact
 			// until an explicit decision; one that cannot clears it on the caller's
@@ -222,23 +224,27 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 					true,
 				);
 			}
+			// An RPC child has a dialog bridge (hasUI is true) but no real user
+			// behind it, so its dialog can be auto-cancelled. Exit plan mode, but end
+			// this turn: the caller still owns approval before execution. A proposal
+			// answered by nobody still has to hold automatic starters back, so the
+			// handoff records it here too.
 			if (ctx.mode === "rpc") {
-				// An rpc child has no user behind its dialog bridge, so nothing can
-				// answer there. Exit plan mode, but end this turn: the caller still
-				// owns approval before execution.
-				planMode.recordPendingProposal(planHash);
-				planMode.exitPlanMode("auto_rpc", ctx);
+				planMode.handOffProposal(planHash, "auto_rpc", ctx);
+				ctx.ui.notify(
+					"RPC host has no plan-review bridge; caller approval is required before execution.",
+					"warning",
+				);
 				return reviewedResult(
-					`${offText} and the proposal was submitted for review. Do not call exit_plan_mode again. Exiting reports that the investigation is finished; it does not authorize implementation. This turn ends now: do not execute until the caller approves.\n\nPlan file: ${planFilePath}\n\nPlan contents:\n${planContents}`,
+					`Cannot gate approval in this RPC host. Plan file at ${planFilePath}; caller should approve externally. This turn ends now; do not execute until the caller approves.\n\nPlan contents:\n${planContents}`,
 					reviewed("external_approval_required"),
 					true,
 				);
 			}
 			if (!ctx.hasUI) {
-				planMode.recordPendingProposal(planHash);
-				planMode.exitPlanMode("auto_headless", ctx);
+				planMode.handOffProposal(planHash, "auto_headless", ctx);
 				return reviewedResult(
-					`${offText}. Plan file kept at ${planFilePath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show an interactive prompt; the caller must gate approval externally. This turn ends now. Do not call exit_plan_mode again.`,
+					`Plan mode exited. Plan file kept at ${planFilePath} for reference.\n\nPlan contents:\n${planContents}\n\nCannot show interactive prompt; caller must gate approval externally. This turn ends now.`,
 					reviewed("external_approval_required"),
 					true,
 				);

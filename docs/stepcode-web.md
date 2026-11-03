@@ -241,21 +241,31 @@ the whole conversation vanished with the process.
 
 An `exit_plan_mode` result without a host dialog is a decision waiting for the  
 user. The client turns the tool's persisted `details` into `#planReviewCard`: the  
-proposal, "view full plan", and two buttons. The card is projected from the tool  
+proposal, "view full plan", and three buttons — request changes, exit, approve. The card is projected from the tool  
 result in the session entries, not only from the live stream event, because every  
 finished message refreshes the snapshot; a card that existed only on the stream  
 disappeared before anyone could answer it, and a reopened session showed none.
 
 - **Request changes** sends the notes through `/plan`. The pending snapshot is
-  cleared, the notes reach the model with an instruction to revise and submit
-  again, and the round produces a new proposal.
-- **Approve and run** sends `/plan approve`: it rereads the plan file, refuses if
-  the text changed since the review, then leaves plan mode and starts the
-  implementation turn as one decision.
+  cleared and the notes are the whole message: plan mode already tells the model
+  that a change request means updating the plan file and submitting it again, so a
+  second hidden instruction would only arrive on its own and could send the model
+  back to submit a plan it had not revised.
+- **Approve and run** sends `/plan approve <hash>`, naming the snapshot this card
+  shows: a decision that arrives after a newer submission must not approve that
+  one. It rereads the plan file, refuses if the text changed since the review,
+  then leaves plan mode and starts the implementation turn as one decision.
 - **Exit plan mode** sends `/plan off`: it leaves without implementing.
 
-The first two are ordinary user messages, so the decision is in the transcript and
-starts one turn. Which card is actionable is not inferred from the transcript:
+The verbs go to the kernel directly rather than into the host queue. A decision
+cannot wait behind the turn it is meant to answer, and the host queue is held
+while a proposal is open, so a queued answer would never be dispatched. The
+composer keeps its normal queue semantics; only the card takes this path. The
+card also stays actionable until the session stops reporting the proposal as
+waiting, so a decision the kernel refused — because the plan file changed under
+it — is never hidden behind a card that thinks it is done.
+
+Which card is actionable is not inferred from the transcript:
 it is the snapshot the kernel recorded as waiting, so a question typed past the
 proposal cannot read as consent and an answered proposal cannot look pending. A
 decided card stays in the transcript as the record of that round but offers no
@@ -730,16 +740,25 @@ Plan mode ends only on the user's decision, the same rule as the terminal: the
 model cannot leave it, and a missing or unchanged plan file is not permission to
 try. The web host draws the proposal itself, so `exit_plan_mode` hands the plan
 over and ends the turn while the mode stays on; the review card then offers the
-three verbs the kernel owns. `/plan approve` leaves the mode and starts the
-implementation turn as one decision. `/plan <notes>` keeps planning with the
-notes as the next task. `/plan off` leaves the mode without implementing, and the
-plan strip's exit button sends exactly that — an absolute verb, because a queued
-toggle would flip whatever state the turn left behind.
+three verbs the kernel owns. `/plan approve <hash>` names the snapshot the card
+shows, leaves the mode, and starts the implementation turn as one decision.
+`/plan <notes>` keeps planning with the notes as the next task. `/plan off`
+leaves the mode without implementing, and the plan strip's exit button sends
+exactly that — an absolute verb, because a queued toggle would flip whatever
+state the turn left behind.
 
 While the card waits the composer is closed: the page is blocked on one decision,
 and text typed past the card would read as an answer to it. The file boundary
 still holds, and the kernel keeps the automatic turn starters (goal continuation,
 cron delivery, lane wake-ups, the host's own queue) held until the user answers.
+
+The host queue is held on one condition, the same one that decides whether a card
+is on screen: plan mode is on and the session records a proposal waiting. Both are
+read from the session fact, so the queue is never held for a card the page cannot
+show — a wait recorded with the mode already off is a caller handoff, whose owner
+answers with its next message. A stopped or failed run parks the queue too, and
+every automatic dispatch point asks the same gate; a user action (sending, or
+unqueueing a message) does not.
 
 Tool results say the outcome plainly and persist it: a submission reports that
 plan mode stays on until the user answers, and an ordinary user message after it
