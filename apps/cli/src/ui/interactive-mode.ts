@@ -83,7 +83,6 @@ import {
 	openBrowser,
 	openStepSession,
 	ProjectTrustStore,
-	type PromptOptions,
 	parseChangelog,
 	parseGitUrl,
 	parseSkillBlock,
@@ -170,7 +169,7 @@ import {
 	registerTaskUpdateCall,
 	resetTaskUpdateTranscript,
 } from "./runtime/task-update-transcript.ts";
-import { FooterComponent, formatTokens, warningListHint } from "./view/chrome/footer.ts";
+import { FooterComponent, formatTokens } from "./view/chrome/footer.ts";
 import {
 	BranchSummaryStatusIndicator,
 	IdleStatus,
@@ -201,7 +200,6 @@ import { ThinkingSelectorComponent } from "./view/dialogs/thinking-selector.ts";
 import { TreeSelectorComponent } from "./view/dialogs/tree-selector.ts";
 import { TrustSelectorComponent } from "./view/dialogs/trust-selector.ts";
 import { UserMessageSelectorComponent } from "./view/dialogs/user-message-selector.ts";
-import { type SessionWarning, WarningListComponent, warningListCapacity } from "./view/dialogs/warning-list.ts";
 import { CustomEntryComponent } from "./view/editor/custom-entry.ts";
 import { STEP_EDITOR_PLACEHOLDER, StepEditor } from "./view/editor/step-editor.ts";
 import { AssistantMessageComponent } from "./view/transcript/assistant-message.ts";
@@ -372,9 +370,6 @@ type LoginProviderCompletionOption = {
 };
 
 const AUTH_TYPE_ORDER = { oauth: 0, api_key: 1 } satisfies Record<AuthSelectorProvider["authType"], number>;
-
-/** Warnings one host keeps; older ones fall off so a long session cannot grow this list. */
-const WARNING_LOG_LIMIT = 50;
 
 function createFuzzyAutocompleteItems<T>(
 	items: T[],
@@ -630,14 +625,6 @@ export class InteractiveMode {
 	// Shutdown state
 	private shutdownRequested = false;
 
-	// Warnings the Step footer counts. They never enter the transcript or the
-	// session file: the badge and its list are the only place they surface.
-	private warningLog: Array<SessionWarning & { sessionId: string }> = [];
-	// User inputs the kernel is still accepting (a command's handler, the input
-	// hooks before a turn). Warnings they publish are replies and stay inline;
-	// see promptUserInput and showExtensionNotify.
-	private acceptingUserInput = 0;
-
 	// Extension UI state
 	private extensionDialogsBlocked = false;
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
@@ -796,8 +783,6 @@ export class InteractiveMode {
 				options.tuiStyle === "step" && this.session.extensionRunner.getCommand("permissions")
 					? keyText("app.thinking.cycle")
 					: undefined,
-			warningCount: () => this.warningsForCurrentSession().length,
-			warningListKey: () => warningListHint(this.keybindings.getKeys("app.warnings.open")),
 		});
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerContainer = new Container();
@@ -1369,8 +1354,8 @@ export class InteractiveMode {
 		}
 
 		if (mcpImportNotice) this.showNotice(mcpImportNotice);
-		if (mcpImportError) this.recordWarning(mcpImportError);
-		if (themePromptError) this.recordWarning(themePromptError);
+		if (mcpImportError) this.showWarning(mcpImportError);
+		if (themePromptError) this.showWarning(themePromptError);
 
 		if (!this.options.disableBackgroundServices) {
 			const controller = new AbortController();
@@ -1399,7 +1384,7 @@ export class InteractiveMode {
 		// Check tmux keyboard setup asynchronously
 		this.checkTmuxKeyboardSetup().then((warning) => {
 			if (warning) {
-				this.recordWarning(warning);
+				this.showWarning(warning);
 			}
 		});
 
@@ -1417,14 +1402,14 @@ export class InteractiveMode {
 			if (diagnostic.type === "error") {
 				this.showError(diagnostic.message);
 			} else if (diagnostic.type === "warning") {
-				this.recordWarning(diagnostic.message);
+				this.showWarning(diagnostic.message);
 			} else {
 				this.showStatus(diagnostic.message);
 			}
 		}
 
 		if (migratedProviders && migratedProviders.length > 0) {
-			this.recordWarning(`Migrated credentials to auth.json: ${migratedProviders.join(", ")}`);
+			this.showWarning(`Migrated credentials to auth.json: ${migratedProviders.join(", ")}`);
 		}
 
 		const modelsJsonError = this.session.modelRuntime.getError();
@@ -1433,16 +1418,15 @@ export class InteractiveMode {
 		}
 
 		if (modelFallbackMessage) {
-			this.recordWarning(modelFallbackMessage);
+			this.showWarning(modelFallbackMessage);
 		}
 
 		void this.maybeWarnAboutAnthropicSubscriptionAuth();
 
-		// Process initial messages. They are the user's input from the command
-		// line, so their replies answer inline like anything typed in the editor.
+		// Process initial messages
 		if (initialMessage) {
 			try {
-				await this.promptUserInput(initialMessage, { images: initialImages });
+				await this.session.prompt(initialMessage, { images: initialImages });
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 				this.showError(errorMessage);
@@ -1452,7 +1436,7 @@ export class InteractiveMode {
 		if (initialMessages) {
 			for (const message of initialMessages) {
 				try {
-					await this.promptUserInput(message);
+					await this.session.prompt(message);
 				} catch (error: unknown) {
 					const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 					this.showError(errorMessage);
@@ -1469,7 +1453,7 @@ export class InteractiveMode {
 				const { text, images } = await resolvePastedImages(this.pastedImages, userInput, {
 					autoResizeImages: this.settingsManager.getImageAutoResize(),
 				});
-				await this.promptUserInput(text, { images: images.length ? images : undefined });
+				await this.session.prompt(text, { images: images.length ? images : undefined });
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 				this.showError(errorMessage);
@@ -3281,11 +3265,7 @@ export class InteractiveMode {
 		if (type === "error") {
 			this.showError(message);
 		} else if (type === "warning") {
-			// A warning raised while the kernel accepts the user's input is its answer
-			// ("Usage: ...", a refusal), so it belongs where the user is looking.
-			// Anything later arrived on its own and only counts in the badge.
-			if (this.acceptingUserInput > 0) this.showWarning(message);
-			else this.recordWarning(message);
+			this.showWarning(message);
 		} else if (options?.echoesInput) {
 			this.showInputEcho(message);
 		} else {
@@ -4145,7 +4125,7 @@ export class InteractiveMode {
 			if (this.isExtensionCommand(text)) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
-				await this.promptUserInput(text);
+				await this.session.prompt(text);
 			} else {
 				const { text: message, images } = await resolvePastedImages(this.pastedImages, text, {
 					autoResizeImages: this.settingsManager.getImageAutoResize(),
@@ -4163,7 +4143,7 @@ export class InteractiveMode {
 			const { text: message, images } = await resolvePastedImages(this.pastedImages, text, {
 				autoResizeImages: this.settingsManager.getImageAutoResize(),
 			});
-			await this.promptUserInput(message, {
+			await this.session.prompt(message, {
 				streamingBehavior: "followUp",
 				images: images.length ? images : undefined,
 			});
@@ -4321,80 +4301,6 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
 		this.redraw.requestRender();
-	}
-
-	/**
-	 * Report a warning nobody asked for: startup diagnostics, a background
-	 * failure. Step counts it in the footer badge so it does not push the
-	 * conversation up the screen; the Pi presentation keeps its transcript row.
-	 * A warning that answers the user's own action uses showWarning instead.
-	 */
-	recordWarning(warningMessage: string): void {
-		if (this.presentation !== "step") {
-			this.showWarning(warningMessage);
-			return;
-		}
-		this.warningLog.push({ message: warningMessage, at: Date.now(), sessionId: this.sessionManager.getSessionId() });
-		if (this.warningLog.length > WARNING_LOG_LIMIT) {
-			this.warningLog.splice(0, this.warningLog.length - WARNING_LOG_LIMIT);
-		}
-		this.redraw.requestRender();
-	}
-
-	async promptUserInput(text: string, options?: PromptOptions): Promise<void> {
-		// The kernel reports acceptance once a command's handler returned, or once
-		// a message passed its input hooks and is about to run. Until then every
-		// warning answers this input; the turn that follows is ambient.
-		this.acceptingUserInput += 1;
-		let accepting = true;
-		const accepted = () => {
-			if (!accepting) return;
-			accepting = false;
-			this.acceptingUserInput -= 1;
-		};
-		try {
-			await this.session.prompt(text, {
-				...options,
-				preflightResult: (success) => {
-					accepted();
-					options?.preflightResult?.(success);
-				},
-			});
-		} finally {
-			accepted();
-		}
-	}
-
-	/** The warnings the footer badge counts and the list dialog shows. */
-	private warningsForCurrentSession(): SessionWarning[] {
-		const sessionId = this.sessionManager.getSessionId();
-		return this.warningLog
-			.filter((entry) => entry.sessionId === sessionId)
-			.map(({ message, at }) => ({ message, at }));
-	}
-
-	showWarningList(): void {
-		if (this.warningsForCurrentSession().length === 0) {
-			this.showStatus("No warnings");
-			return;
-		}
-		const sessionId = this.sessionManager.getSessionId();
-		this.showSelector((done) => {
-			const list = new WarningListComponent({
-				getWarnings: () => this.warningsForCurrentSession(),
-				maxVisible: warningListCapacity(this.ui.terminal.rows),
-				onClose: () => {
-					done();
-					this.redraw.requestRender();
-				},
-				onClear: () => {
-					this.warningLog = this.warningLog.filter((entry) => entry.sessionId !== sessionId);
-					done();
-					this.redraw.requestRender();
-				},
-			});
-			return { component: list, focus: list };
-		});
 	}
 
 	/**
@@ -6693,7 +6599,6 @@ export class InteractiveMode {
 		const cycleModelForward = this.getAppKeyDisplay("app.model.cycleForward");
 		const selectModel = this.getAppKeyDisplay("app.model.select");
 		const expandTools = this.getAppKeyDisplay("app.tools.expand");
-		const openWarnings = this.getAppKeyDisplay("app.warnings.open");
 		const toggleThinking = this.getAppKeyDisplay("app.thinking.toggle");
 		const externalEditor = this.getAppKeyDisplay("app.editor.external");
 		const cycleModelBackward = this.getAppKeyDisplay("app.model.cycleBackward");
@@ -6740,7 +6645,6 @@ export class InteractiveMode {
 | \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
 | \`${selectModel}\` | Open model selector |
 | \`${expandTools}\` | Toggle tool output expansion |
-| \`${openWarnings}\` | Show the warnings collected in this session |
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${copyMessage}\` | Copy last assistant message |
