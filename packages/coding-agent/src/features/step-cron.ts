@@ -61,6 +61,7 @@ export interface CronJob {
 	inputs?: { skills?: string[] };
 	model?: { provider: string; modelId?: string; thinkingLevel?: string };
 	permissionPreset?: string;
+	fullAccessAcknowledged?: boolean;
 	delivery?: { lark?: { target: string; format?: "markdown" | "text" } };
 	expiresAt?: number;
 	runCount?: number;
@@ -72,6 +73,7 @@ export interface CronJob {
 }
 
 export interface CronCreateOptions {
+	id?: string;
 	workspace?: string;
 	taskSessionId?: string;
 	title?: string;
@@ -80,6 +82,7 @@ export interface CronCreateOptions {
 	inputs?: { skills?: string[] };
 	model?: { provider: string; modelId?: string; thinkingLevel?: string };
 	permissionPreset?: string;
+	fullAccessAcknowledged?: boolean;
 	delivery?: { lark?: { target: string; format?: "markdown" | "text" } };
 	expiresAt?: number;
 	origin?: "agent" | "desktop" | "legacy";
@@ -94,11 +97,14 @@ export interface CronUpdatePatch {
 	title?: string;
 	inputs?: { skills?: string[] };
 	model?: { provider: string; modelId?: string; thinkingLevel?: string };
-	permissionPreset?: string;
+	permissionPreset?: string | null;
+	fullAccessAcknowledged?: boolean | null;
 	delivery?: { lark?: { target: string; format?: "markdown" | "text" } };
 	expiresAt?: number | null;
 	status?: CronJobStatus;
 	recurring?: boolean;
+	taskSessionId?: string;
+	runCount?: number;
 }
 
 export interface CronCreateResult {
@@ -395,6 +401,8 @@ function parsePersistedJob(value: unknown): CronJob | undefined {
 			return undefined;
 	}
 	if (candidate.permissionPreset !== undefined && typeof candidate.permissionPreset !== "string") return undefined;
+	if (candidate.fullAccessAcknowledged !== undefined && typeof candidate.fullAccessAcknowledged !== "boolean")
+		return undefined;
 	if (candidate.delivery !== undefined) {
 		const delivery = candidate.delivery as Record<string, unknown>;
 		if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) return undefined;
@@ -483,6 +491,8 @@ export interface CronDelivery {
 	kind: "fire" | "missed";
 	job?: CronJob;
 	jobs?: CronJob[];
+	/** A host-initiated run (`runNow`) leaves the schedule untouched. */
+	manual?: boolean;
 }
 
 export class StepCronRuntime {
@@ -564,6 +574,8 @@ export class StepCronRuntime {
 		const expression = SimpleCronExpression.parse(normalizedCron);
 		const normalizedPrompt = prompt.trim();
 		if (!normalizedPrompt) throw new Error("cron_create requires a non-empty prompt");
+		if (options.permissionPreset === "full-access" && options.fullAccessAcknowledged !== true)
+			throw new Error("Full access cron jobs require an explicit risk acknowledgment");
 		if (normalizedPrompt.length > MAX_PROMPT_LENGTH)
 			throw new Error(`Cron prompt exceeds ${MAX_PROMPT_LENGTH} characters`);
 		if (durable && !trusted) throw new Error("Durable cron jobs require a trusted project");
@@ -582,6 +594,7 @@ export class StepCronRuntime {
 			options.inputs !== undefined ||
 			options.model !== undefined ||
 			options.permissionPreset !== undefined ||
+			options.fullAccessAcknowledged !== undefined ||
 			options.delivery !== undefined ||
 			options.expiresAt !== undefined ||
 			options.origin !== undefined ||
@@ -595,7 +608,11 @@ export class StepCronRuntime {
 		const job = this.withLatestJobs(() => {
 			if (this.jobs.size >= this.maxJobs)
 				throw new Error(`At most ${this.maxJobs} cron jobs can be scheduled; delete an existing job first`);
-			const id = this.uniqueId();
+			const requestedId = options.id?.trim();
+			if (requestedId !== undefined && !/^[A-Za-z0-9_-]{1,64}$/u.test(requestedId))
+				throw new Error("Cron job id may only contain letters, digits, underscore, and hyphen");
+			const id = requestedId || this.uniqueId();
+			if (this.jobs.has(id)) throw new Error(`Cron job id ${id} already exists`);
 			const next: CronJob = {
 				schemaVersion: desktopFields ? 2 : 1,
 				id,
@@ -612,6 +629,7 @@ export class StepCronRuntime {
 				...(options.inputs ? { inputs: { skills: [...(options.inputs.skills ?? [])] } } : {}),
 				...(options.model ? { model: { ...options.model } } : {}),
 				...(options.permissionPreset ? { permissionPreset: options.permissionPreset } : {}),
+				...(options.fullAccessAcknowledged ? { fullAccessAcknowledged: true } : {}),
 				...(options.delivery ? { delivery: structuredClone(options.delivery) } : {}),
 				...(options.expiresAt !== undefined ? { expiresAt: options.expiresAt } : {}),
 				...(options.origin ? { origin: options.origin } : {}),
@@ -644,24 +662,38 @@ export class StepCronRuntime {
 			if (patch.title !== undefined) next.title = patch.title.slice(0, 200);
 			if (patch.inputs !== undefined) next.inputs = { skills: [...(patch.inputs.skills ?? [])] };
 			if (patch.model !== undefined) next.model = { ...patch.model };
-			if (patch.permissionPreset !== undefined) next.permissionPreset = patch.permissionPreset;
+			if (patch.permissionPreset !== undefined) {
+				if (patch.permissionPreset === null) delete next.permissionPreset;
+				else next.permissionPreset = patch.permissionPreset;
+			}
+			if (patch.fullAccessAcknowledged !== undefined) {
+				if (patch.fullAccessAcknowledged === null) delete next.fullAccessAcknowledged;
+				else next.fullAccessAcknowledged = patch.fullAccessAcknowledged || undefined;
+			}
 			if (patch.delivery !== undefined) next.delivery = structuredClone(patch.delivery);
 			if ("expiresAt" in patch) {
 				if (patch.expiresAt === null) delete next.expiresAt;
 				else if (patch.expiresAt !== undefined) next.expiresAt = patch.expiresAt;
 			}
 			if (patch.status !== undefined) {
+				if (!["enabled", "paused", "expired", "completed"].includes(patch.status))
+					throw new Error(`Unknown cron job status: ${String(patch.status)}`);
 				next.status = patch.status;
 				next.enabled = patch.status === "enabled";
 			}
 			if (patch.recurring !== undefined) next.recurring = patch.recurring;
+			if (patch.taskSessionId !== undefined) next.taskSessionId = patch.taskSessionId;
+			if (patch.runCount !== undefined) next.runCount = Math.max(0, Math.floor(patch.runCount));
+			if (
+				(patch.permissionPreset !== undefined || patch.fullAccessAcknowledged !== undefined) &&
+				next.permissionPreset === "full-access" &&
+				next.fullAccessAcknowledged !== true
+			)
+				throw new Error("Full access cron jobs require an explicit risk acknowledgment");
 			if (next.schemaVersion === 1) next.schemaVersion = 2;
 			const now = this.readNow();
 			const expression = SimpleCronExpression.parse(next.cron);
-			if (
-				next.status === "enabled" &&
-				(patch.cron !== undefined || patch.recurring !== undefined || next.nextFireAt <= now)
-			) {
+			if (patch.cron !== undefined || patch.recurring !== undefined || patch.status === "enabled") {
 				next.nextFireAt = this.jitter(
 					expression.next(now),
 					now,
@@ -924,7 +956,7 @@ export class StepCronRuntime {
 				const expression = SimpleCronExpression.parse(job.cron);
 				nextFireAt = this.jitter(expression.next(now), now, job.id, true, expression, job.jitter !== false);
 			}
-			this.sendMessage({ kind: "fire", job: { ...job } });
+			this.sendMessage({ kind: "fire", job: { ...job }, ...(manual ? { manual: true } : {}) });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			if (job.schemaVersion === 2 || job.status !== undefined) {
@@ -946,18 +978,19 @@ export class StepCronRuntime {
 			this.emit("cron_fired", { recurring: job.recurring });
 			return;
 		}
-		if (nextFireAt === undefined) {
+		if (job.recurring && expired) {
+			if (job.status !== undefined) {
+				job.status = "expired";
+				job.nextFireAt = now;
+			} else this.removeJob(job.id);
+			this.emit("cron_expired", { id: job.id, recurring: true });
+		} else if (nextFireAt === undefined) {
 			if (job.status !== undefined) {
 				job.status = "completed";
 				job.nextFireAt = now;
 			} else this.removeJob(job.id);
 		} else {
 			job.nextFireAt = nextFireAt;
-			if (job.recurring && expired) {
-				if (job.status !== undefined) job.status = "expired";
-				else this.removeJob(job.id);
-				this.emit("cron_expired", { id: job.id, recurring: true });
-			}
 		}
 		this.emit("cron_fired", { recurring: job.recurring });
 	}
@@ -1132,6 +1165,8 @@ export interface StepCronExtensionOptions {
 	telemetry?: StepTelemetryReporter;
 	enabled?: boolean;
 	readOnly?: boolean;
+	/** Register `cron_update`; off for the CLI so its tool surface stays unchanged. */
+	allowUpdate?: boolean;
 	runtime?: CronRuntimeLike;
 }
 
@@ -1273,28 +1308,30 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 				return jsonResult({ id: params.id, found });
 			},
 		});
-		pi.registerTool({
-			name: "cron_update",
-			label: "Update cron job",
-			description: "Update a scheduled cron job: title, expression, prompt, skills, enabled/paused, or expiry.",
-			promptSnippet: "Update a scheduled cron job",
-			parameters: CronUpdateParams,
-			execute: async (_id, params, _signal, _onUpdate, ctx) => {
-				if (!runtime.update) throw new Error("This host does not support updating cron jobs");
-				currentContext = ctx;
-				runtime.setContext(ctx.cwd);
-				const patch: CronUpdatePatch = {};
-				if (params.cron !== undefined) patch.cron = params.cron;
-				if (params.prompt !== undefined) patch.prompt = params.prompt;
-				if (params.title !== undefined) patch.title = params.title;
-				if (params.skills !== undefined) patch.inputs = { skills: params.skills };
-				if (params.enabled !== undefined) patch.status = params.enabled ? "enabled" : "paused";
-				if (params.expiresAt !== undefined) patch.expiresAt = params.expiresAt;
-				const job = runtime.update(params.id, patch);
-				return jsonResult(job);
-			},
-		});
-
+		if (options.allowUpdate) {
+			pi.registerTool({
+				name: "cron_update",
+				label: "Update cron job",
+				description: "Update a scheduled cron job: title, expression, prompt, skills, enabled/paused, or expiry.",
+				promptSnippet: "Update a scheduled cron job",
+				parameters: CronUpdateParams,
+				execute: async (_id, params, _signal, _onUpdate, ctx) => {
+					if (options.readOnly) throw new Error("This task session cannot update cron jobs");
+					if (!runtime.update) throw new Error("This host does not support updating cron jobs");
+					currentContext = ctx;
+					runtime.setContext(ctx.cwd);
+					const patch: CronUpdatePatch = {};
+					if (params.cron !== undefined) patch.cron = params.cron;
+					if (params.prompt !== undefined) patch.prompt = params.prompt;
+					if (params.title !== undefined) patch.title = params.title;
+					if (params.skills !== undefined) patch.inputs = { skills: params.skills };
+					if (params.enabled !== undefined) patch.status = params.enabled ? "enabled" : "paused";
+					if (params.expiresAt !== undefined) patch.expiresAt = params.expiresAt;
+					const job = runtime.update(params.id, patch);
+					return jsonResult(job);
+				},
+			});
+		}
 		pi.registerCommand("cron", {
 			description: "Inspect or delete cron jobs",
 			handler: async (args: string, ctx: ExtensionCommandContext) => {

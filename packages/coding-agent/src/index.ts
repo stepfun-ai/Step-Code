@@ -499,11 +499,16 @@ export {
 } from "./features/step.ts";
 export { createStepCapabilitiesExtensionInline } from "./features/step-capabilities.ts";
 export {
+	type CronCreateOptions,
 	type CronCreateResult,
 	type CronDelivery,
 	CronFileStore,
 	type CronFileStoreOptions,
 	type CronJob,
+	type CronJobStatus,
+	type CronRunStatus,
+	type CronRuntimeLike,
+	type CronUpdatePatch,
 	createStepCronExtension,
 	SimpleCronExpression,
 	type StepCronExtensionOptions,
