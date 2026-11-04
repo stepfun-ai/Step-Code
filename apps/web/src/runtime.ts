@@ -367,8 +367,6 @@ export function webExtensions(
 	usageRecording?: () => WebUsageResources,
 	onLane?: (lane: SubagentLaneSnapshot | null) => void,
 ): InlineExtension[] {
-	const usage = webUsageTelemetry();
-	const telemetry = usage.reporter;
 	const persisted = settingsManager.getStepSettings();
 	const permission = {
 		initialPreset: (persisted.permissionPreset ?? "approve-for-me") as StepPermissionPresetId,
@@ -393,7 +391,6 @@ export function webExtensions(
 	return [
 		webHostExtension,
 		createStepExtensionInline({
-			telemetry,
 			permission,
 			stepSettings: () => settingsManager,
 			onPermissionChange,
@@ -409,7 +406,6 @@ export function webExtensions(
 		// leaves its tools and slash commands unregistered: `/goal` then reaches
 		// the model as ordinary text, and the session has no create_goal.
 		createStepCapabilitiesExtensionInline({
-			telemetry,
 			cliPath: resolveSubagentCliPath(),
 			ultraloopSessionMode: false,
 			subagent: {
@@ -421,8 +417,8 @@ export function webExtensions(
 				requestApproval: (prompt) => broker.confirm(prompt.title, prompt.message, prompt.signal),
 			},
 		}),
-		createStepCronExtension({ telemetry }),
-		createStepGoalExtension({ telemetry }),
+		createStepCronExtension(),
+		createStepGoalExtension(),
 	];
 }
 
