@@ -297,6 +297,12 @@ export {
 	DefaultResourceLoader,
 	loadProjectContextFiles,
 } from "./core/resource-loader.ts";
+export {
+	CRON_SESSION_ID_PREFIX,
+	CRON_SESSION_ORIGIN,
+	isScheduledTaskSession,
+	type SessionOrigin,
+} from "./core/scheduled-session.ts";
 // SDK for programmatic usage
 export {
 	AgentSessionRuntime,
