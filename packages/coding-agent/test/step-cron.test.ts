@@ -212,7 +212,7 @@ test("cron extension exposes three tools and steer delivery", async () => {
 	vi.useFakeTimers();
 	const harness = createHarness();
 	createStepCronExtension({ enabled: true })(harness.api);
-	expect([...harness.tools.keys()].sort()).toEqual(["cron_create", "cron_delete", "cron_list"]);
+	expect([...harness.tools.keys()].sort()).toEqual(["cron_create", "cron_delete", "cron_list", "cron_update"]);
 	for (const handler of harness.handlers.get("session_start") ?? [])
 		await handler({ type: "session_start" } as never, harness.ctx);
 	const create = harness.tools.get("cron_create")!;
@@ -745,4 +745,81 @@ test("an unschedulable persisted recurrence does not block other jobs on restart
 	} finally {
 		runtime.stop();
 	}
+});
+
+describe("desktop cron task fields", () => {
+	test("creates a v2 task with task session metadata and updates it", () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const directory = makeDirectory();
+		const runtime = new StepCronRuntime({
+			now: () => now,
+			jitterRatio: 0,
+			storagePath: path.join(directory, "tasks.json"),
+		});
+		const created = runtime.create("0 9 * * *", "desktop task", true, true, true, {
+			workspace: directory,
+			taskSessionId: "cron-task-1",
+			status: "enabled",
+			title: "Task",
+			inputs: { skills: ["skill-a"] },
+			autoExpireMs: null,
+			jitter: false,
+			origin: "desktop",
+		}).job;
+		expect(created.schemaVersion).toBe(2);
+		expect(created.taskSessionId).toBe("cron-task-1");
+		expect(created.status).toBe("enabled");
+		expect(created.autoExpireAt).toBeUndefined();
+		const updated = runtime.update(created.id, {
+			title: "Task 2",
+			inputs: { skills: ["skill-b"] },
+			status: "paused",
+		});
+		expect(updated.title).toBe("Task 2");
+		expect(updated.inputs?.skills).toEqual(["skill-b"]);
+		expect(updated.status).toBe("paused");
+		expect(runtime.setEnabled(created.id, true)).toBe(true);
+		expect(runtime.list()[0]?.status).toBe("enabled");
+	});
+
+	test("runNow hands off without advancing the schedule or completing a one-shot", () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const deliveries: CronDelivery[] = [];
+		const runtime = new StepCronRuntime({
+			now: () => now,
+			jitterRatio: 0,
+			sendMessage: (delivery) => deliveries.push(delivery),
+		});
+		const job = runtime.create("0 9 * * *", "manual", false, false, true, {
+			status: "enabled",
+			autoExpireMs: null,
+			jitter: false,
+		}).job;
+		const next = job.nextFireAt;
+		runtime.runNow(job.id);
+		expect(deliveries).toHaveLength(1);
+		expect(runtime.list()[0]?.nextFireAt).toBe(next);
+		expect(runtime.list()[0]?.status).toBe("enabled");
+	});
+
+	test("canDeliver gates each job and maxJobs is configurable", () => {
+		let now = Date.UTC(2026, 0, 1, 12, 0);
+		let allow = false;
+		const deliveries: CronDelivery[] = [];
+		const runtime = new StepCronRuntime({
+			now: () => now,
+			jitterRatio: 0,
+			maxJobs: 1,
+			canDeliver: () => allow,
+			sendMessage: (delivery) => deliveries.push(delivery),
+		});
+		runtime.create("* * * * *", "gated", false, false);
+		expect(() => runtime.create("* * * * *", "second", false, false)).toThrow(/At most 1/);
+		now += 60_000;
+		runtime.tick();
+		expect(deliveries).toHaveLength(0);
+		allow = true;
+		runtime.tick();
+		expect(deliveries).toHaveLength(1);
+	});
 });

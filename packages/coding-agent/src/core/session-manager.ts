@@ -19,7 +19,6 @@ import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
 import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
-import { CHILD_SESSION_ORIGIN } from "./child-session.ts";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
@@ -27,6 +26,7 @@ import {
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "./messages.ts";
+import type { SessionOrigin } from "./scheduled-session.ts";
 import { createSessionSummary, foldSessionSummaryEntry, resolveSessionModifiedTime } from "./session-summary.ts";
 import { createUsageLineage } from "./usage-lineage.ts";
 
@@ -40,8 +40,8 @@ export interface SessionHeader {
 	cwd: string;
 	/** Path of the session this one was forked or continued from. */
 	parentSession?: string;
-	/** Set by a child agent (subagent lane or workflow agent) on the session it creates. */
-	origin?: typeof CHILD_SESSION_ORIGIN;
+	/** Set by a child agent or the desktop cron scheduler on the session it creates. */
+	origin?: SessionOrigin;
 	/** Id of the session whose agent spawned this child, when known. */
 	parentSessionId?: string;
 }
@@ -49,7 +49,7 @@ export interface SessionHeader {
 export interface NewSessionOptions {
 	id?: string;
 	parentSession?: string;
-	origin?: typeof CHILD_SESSION_ORIGIN;
+	origin?: SessionOrigin;
 	parentSessionId?: string;
 }
 
@@ -190,8 +190,8 @@ export interface SessionInfo {
 	name?: string;
 	/** Path to the parent session (if this session was forked). */
 	parentSessionPath?: string;
-	/** Header `origin`; `isChildAgentSession` tells child-agent sessions apart. */
-	origin?: typeof CHILD_SESSION_ORIGIN;
+	/** Header `origin`; identifies child-agent and scheduled-task sessions. */
+	origin?: SessionOrigin;
 	created: Date;
 	modified: Date;
 	messageCount: number;
@@ -716,7 +716,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			cwd,
 			name: summary.name,
 			parentSessionPath,
-			...(header.origin === CHILD_SESSION_ORIGIN ? { origin: header.origin } : {}),
+			...(header.origin ? { origin: header.origin } : {}),
 			created: new Date(header.timestamp),
 			modified: new Date(resolveSessionModifiedTime(header, summary.lastActivityTime, stats.mtime.getTime())),
 			messageCount: summary.messageCount,
