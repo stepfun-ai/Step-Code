@@ -174,11 +174,13 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		 * grant options ("always" persists the acknowledgment) and false when the
 		 * dialog is dismissed, so callers keep the previous tier.
 		 */
-		const confirmFullAccessRisk = async (ui: ExtensionUIContext): Promise<boolean> => {
+		const confirmFullAccessRisk = async (ui: ExtensionUIContext, allowAlways = true): Promise<boolean> => {
 			const generation = permissionSessionGeneration;
 			if (typeof ui.select !== "function") return false;
 			const selected = await ui.select(`${FULL_ACCESS_RISK_TITLE}\n\n${FULL_ACCESS_RISK_MESSAGE}`, [
-				...FULL_ACCESS_RISK_OPTIONS,
+				FULL_ACCESS_RISK_OPTIONS[0],
+				...(allowAlways ? [FULL_ACCESS_RISK_OPTIONS[1]] : []),
+				FULL_ACCESS_RISK_OPTIONS[2],
 			]);
 			if (generation !== permissionSessionGeneration) return false;
 			const choice = parseFullAccessRiskChoice(selected);
@@ -459,6 +461,7 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		const handlePermissionCommand = async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
 			const generation = permissionSessionGeneration;
 			const requested = args.trim().toLowerCase();
+			const sessionOnly = /(^|\s)--session(?:\s|$)/u.test(requested);
 			if (requested === "--cycle" || requested === "cycle") {
 				// Full Access is gated by the risk acknowledgment; a canceled dialog
 				// keeps the current tier instead of moving.
@@ -483,14 +486,14 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				return;
 			}
 
-			let selected = requested;
+			let selected = requested.replace(/(^|\s)--session(?:\s|$)/gu, " ").trim();
 			if (!selected) {
 				const options = permissionsPresetsForSelector();
 				selected = (await ctx.ui.select("Permission mode", options))?.trim().toLowerCase() ?? "";
 				if (!selected || generation !== permissionSessionGeneration) return;
 			}
 			if (normalizeStepPermissionPresetId(selected) === "full-access" && !isFullAccessAcknowledged()) {
-				const granted = await confirmFullAccessRisk(ctx.ui);
+				const granted = await confirmFullAccessRisk(ctx.ui, !sessionOnly);
 				if (generation !== permissionSessionGeneration) return;
 				if (!granted) {
 					ctx.ui.notify("Full access was not enabled.", "warning");
@@ -506,8 +509,9 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 			applyPermissionState(ctx, state, {
 				source: "command",
 				persist:
-					state.preset !== "full-access" ||
-					options.stepSettings?.()?.getStepSettings().fullAccessAcknowledged === true,
+					!sessionOnly &&
+					(state.preset !== "full-access" ||
+						options.stepSettings?.()?.getStepSettings().fullAccessAcknowledged === true),
 			});
 		};
 

@@ -88,14 +88,19 @@ test("every rpc child is stripped of scheduling authority", () => {
 	vi.stubEnv("STEP_DISABLE_CRON", "");
 	vi.stubEnv("STEP_DISABLE_GOAL", "");
 	vi.stubEnv("STEP_DISABLE_SCHEDULE", "");
-	expect(registeredTools(createStepCronExtension())).toEqual(["cron_create", "cron_delete", "cron_list"]);
+	expect(registeredTools(createStepCronExtension({ allowUpdate: true }))).toEqual([
+		"cron_create",
+		"cron_delete",
+		"cron_list",
+		"cron_update",
+	]);
 	expect(registeredTools(createStepGoalExtension()).length).toBeGreaterThan(0);
 
 	const childEnv = buildSubagentChildEnv(runInput());
 	vi.stubEnv("STEP_DISABLE_CRON", String(childEnv.STEP_DISABLE_CRON));
 	vi.stubEnv("STEP_DISABLE_GOAL", String(childEnv.STEP_DISABLE_GOAL));
 
-	expect(registeredTools(createStepCronExtension())).toEqual([]);
+	expect(registeredTools(createStepCronExtension({ allowUpdate: true }))).toEqual([]);
 	expect(registeredTools(createStepGoalExtension())).toEqual([]);
 });
 

@@ -208,10 +208,10 @@ function createHarness(): Harness {
 	return { api, tools, handlers, sent, ctx, commands };
 }
 
-test("cron extension exposes three tools and steer delivery", async () => {
+test("cron extension exposes create/list/update/delete and steer delivery", async () => {
 	vi.useFakeTimers();
 	const harness = createHarness();
-	createStepCronExtension({ enabled: true })(harness.api);
+	createStepCronExtension({ enabled: true, allowUpdate: true })(harness.api);
 	expect([...harness.tools.keys()].sort()).toEqual(["cron_create", "cron_delete", "cron_list", "cron_update"]);
 	for (const handler of harness.handlers.get("session_start") ?? [])
 		await handler({ type: "session_start" } as never, harness.ctx);
@@ -231,6 +231,35 @@ test("cron extension exposes three tools and steer delivery", async () => {
 	});
 	for (const handler of harness.handlers.get("session_shutdown") ?? [])
 		await handler({ type: "session_shutdown" } as never, harness.ctx);
+});
+
+test("a task session cannot create, update, or delete cron jobs", async () => {
+	const harness = createHarness();
+	createStepCronExtension({ enabled: true, readOnly: true, allowUpdate: true })(harness.api);
+	await emitCron(harness, "session_start");
+	const create = harness.tools.get("cron_create")!;
+	await expect(
+		create.execute("create", { cron: "* * * * *", prompt: "nested" } as never, undefined, undefined, harness.ctx),
+	).rejects.toThrow("cannot create");
+	await expect(
+		harness.tools
+			.get("cron_update")!
+			.execute("update", { id: "x", title: "y" } as never, undefined, undefined, harness.ctx),
+	).rejects.toThrow("cannot update");
+	await expect(
+		harness.tools.get("cron_delete")!.execute("delete", { id: "x" } as never, undefined, undefined, harness.ctx),
+	).rejects.toThrow("cannot delete");
+	const listed = (await harness.tools
+		.get("cron_list")!
+		.execute("list", {} as never, undefined, undefined, harness.ctx)) as { content: Array<{ text: string }> };
+	expect(JSON.parse(listed.content[0]!.text)).toEqual([]);
+	await emitCron(harness, "session_shutdown");
+});
+
+test("the CLI cron extension keeps its original tool surface", () => {
+	const harness = createHarness();
+	createStepCronExtension({ enabled: true })(harness.api);
+	expect([...harness.tools.keys()].sort()).toEqual(["cron_create", "cron_delete", "cron_list"]);
 });
 
 test("durable creation is rejected in an untrusted project", async () => {
@@ -762,6 +791,8 @@ describe("desktop cron task fields", () => {
 			status: "enabled",
 			title: "Task",
 			inputs: { skills: ["skill-a"] },
+			permissionPreset: "full-access",
+			fullAccessAcknowledged: true,
 			autoExpireMs: null,
 			jitter: false,
 			origin: "desktop",
@@ -769,6 +800,7 @@ describe("desktop cron task fields", () => {
 		expect(created.schemaVersion).toBe(2);
 		expect(created.taskSessionId).toBe("cron-task-1");
 		expect(created.status).toBe("enabled");
+		expect(created.fullAccessAcknowledged).toBe(true);
 		expect(created.autoExpireAt).toBeUndefined();
 		const updated = runtime.update(created.id, {
 			title: "Task 2",
@@ -800,6 +832,43 @@ describe("desktop cron task fields", () => {
 		expect(deliveries).toHaveLength(1);
 		expect(runtime.list()[0]?.nextFireAt).toBe(next);
 		expect(runtime.list()[0]?.status).toBe("enabled");
+	});
+
+	test("accepts a caller-provided id and lets the host attach a task session", () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const runtime = new StepCronRuntime({ now: () => now, jitterRatio: 0 });
+		const job = runtime.create("0 9 * * *", "named", true, false, true, {
+			id: "task-a",
+			status: "enabled",
+			autoExpireMs: null,
+			jitter: false,
+		}).job;
+		expect(job.id).toBe("task-a");
+		runtime.update(job.id, { taskSessionId: "cron-task-a" });
+		expect(runtime.list()[0]?.taskSessionId).toBe("cron-task-a");
+		expect(() =>
+			runtime.create("0 9 * * *", "duplicate", true, false, true, {
+				id: "task-a",
+				status: "enabled",
+				autoExpireMs: null,
+				jitter: false,
+			}),
+		).toThrow(/already exists/);
+	});
+
+	test("full access requires an explicit acknowledgment on create and update", () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const runtime = new StepCronRuntime({ now: () => now, jitterRatio: 0 });
+		expect(() =>
+			runtime.create("* * * * *", "unsafe", true, false, true, {
+				permissionPreset: "full-access",
+			}),
+		).toThrow(/risk acknowledgment/);
+		const created = runtime.create("* * * * *", "safe", true, false, true, {
+			permissionPreset: "full-access",
+			fullAccessAcknowledged: true,
+		}).job;
+		expect(() => runtime.update(created.id, { fullAccessAcknowledged: false })).toThrow(/risk acknowledgment/);
 	});
 
 	test("canDeliver gates each job and maxJobs is configurable", () => {
