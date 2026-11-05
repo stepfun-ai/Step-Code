@@ -48,13 +48,17 @@ export interface CronJob {
 	cron: string;
 	prompt: string;
 	recurring: boolean;
+	/** Explicit interval schedule; when set, cron is only a validation/fallback expression. */
+	intervalHours?: number;
+	/** One-shot absolute fire time. */
+	runAt?: number;
 	durable: boolean;
 	createdAt: number;
 	nextFireAt: number;
 	lastFiredAt?: number;
 	autoExpireAt?: number;
 	workspace?: string;
-	taskSessionId?: string;
+	sessionId?: string;
 	title?: string;
 	status?: CronJobStatus;
 	enabled?: boolean;
@@ -75,7 +79,7 @@ export interface CronJob {
 export interface CronCreateOptions {
 	id?: string;
 	workspace?: string;
-	taskSessionId?: string;
+	sessionId?: string;
 	title?: string;
 	status?: CronJobStatus;
 	enabled?: boolean;
@@ -83,6 +87,8 @@ export interface CronCreateOptions {
 	model?: { provider: string; modelId?: string; thinkingLevel?: string };
 	permissionPreset?: string;
 	fullAccessAcknowledged?: boolean;
+	intervalHours?: number;
+	runAt?: number;
 	delivery?: { lark?: { target: string; format?: "markdown" | "text" } };
 	expiresAt?: number;
 	origin?: "agent" | "desktop" | "legacy";
@@ -103,7 +109,8 @@ export interface CronUpdatePatch {
 	expiresAt?: number | null;
 	status?: CronJobStatus;
 	recurring?: boolean;
-	taskSessionId?: string;
+	intervalHours?: number | null;
+	runAt?: number | null;
 	runCount?: number;
 }
 
@@ -364,6 +371,14 @@ function parsePersistedJob(value: unknown): CronJob | undefined {
 	) {
 		return undefined;
 	}
+	if (
+		candidate.intervalHours !== undefined &&
+		(typeof candidate.intervalHours !== "number" ||
+			!Number.isInteger(candidate.intervalHours) ||
+			candidate.intervalHours < 1 ||
+			candidate.intervalHours > 168)
+	)
+		return undefined;
 	const numbers = [
 		candidate.createdAt,
 		candidate.nextFireAt,
@@ -375,10 +390,7 @@ function parsePersistedJob(value: unknown): CronJob | undefined {
 		return undefined;
 	if (candidate.workspace !== undefined && (typeof candidate.workspace !== "string" || !candidate.workspace.trim()))
 		return undefined;
-	if (
-		candidate.taskSessionId !== undefined &&
-		(typeof candidate.taskSessionId !== "string" || !candidate.taskSessionId.trim())
-	)
+	if (candidate.sessionId !== undefined && (typeof candidate.sessionId !== "string" || !candidate.sessionId.trim()))
 		return undefined;
 	if (candidate.title !== undefined && (typeof candidate.title !== "string" || candidate.title.length > 200))
 		return undefined;
@@ -585,10 +597,17 @@ export class StepCronRuntime {
 			this.currentStore = this.storeFactory(filePath);
 		}
 		const createdAt = this.readNow();
-		const nominalNext = expression.next(createdAt);
+		if (
+			options.intervalHours !== undefined &&
+			(!Number.isInteger(options.intervalHours) || options.intervalHours < 1 || options.intervalHours > 168)
+		)
+			throw new Error("Cron interval must be a whole number between 1 and 168 hours");
+		const nominalNext =
+			options.runAt ??
+			(options.intervalHours ? createdAt + options.intervalHours * 60 * 60 * 1000 : expression.next(createdAt));
 		const desktopFields =
 			options.workspace !== undefined ||
-			options.taskSessionId !== undefined ||
+			options.sessionId !== undefined ||
 			options.title !== undefined ||
 			options.status !== undefined ||
 			options.inputs !== undefined ||
@@ -598,7 +617,9 @@ export class StepCronRuntime {
 			options.delivery !== undefined ||
 			options.expiresAt !== undefined ||
 			options.origin !== undefined ||
-			options.jitter === false;
+			options.jitter === false ||
+			options.intervalHours !== undefined ||
+			options.runAt !== undefined;
 		const autoExpireAt =
 			options.autoExpireMs === null
 				? undefined
@@ -619,11 +640,13 @@ export class StepCronRuntime {
 				cron: normalizedCron,
 				prompt: normalizedPrompt,
 				recurring,
+				...(options.intervalHours ? { intervalHours: options.intervalHours } : {}),
+				...(options.runAt !== undefined ? { runAt: options.runAt } : {}),
 				durable,
 				createdAt,
 				nextFireAt: this.jitter(nominalNext, createdAt, id, recurring, expression, options.jitter !== false),
 				...(options.workspace ? { workspace: path.resolve(options.workspace) } : {}),
-				...(options.taskSessionId ? { taskSessionId: options.taskSessionId } : {}),
+				...(options.sessionId ? { sessionId: options.sessionId } : {}),
 				...(options.title ? { title: options.title.slice(0, 200) } : {}),
 				...(options.status ? { status: options.status } : {}),
 				...(options.inputs ? { inputs: { skills: [...(options.inputs.skills ?? [])] } } : {}),
@@ -682,7 +705,14 @@ export class StepCronRuntime {
 				next.enabled = patch.status === "enabled";
 			}
 			if (patch.recurring !== undefined) next.recurring = patch.recurring;
-			if (patch.taskSessionId !== undefined) next.taskSessionId = patch.taskSessionId;
+			if (patch.intervalHours !== undefined) {
+				if (patch.intervalHours === null) delete next.intervalHours;
+				else next.intervalHours = patch.intervalHours;
+			}
+			if (patch.runAt !== undefined) {
+				if (patch.runAt === null) delete next.runAt;
+				else next.runAt = patch.runAt;
+			}
 			if (patch.runCount !== undefined) next.runCount = Math.max(0, Math.floor(patch.runCount));
 			if (
 				(patch.permissionPreset !== undefined || patch.fullAccessAcknowledged !== undefined) &&
@@ -693,15 +723,23 @@ export class StepCronRuntime {
 			if (next.schemaVersion === 1) next.schemaVersion = 2;
 			const now = this.readNow();
 			const expression = SimpleCronExpression.parse(next.cron);
-			if (patch.cron !== undefined || patch.recurring !== undefined || patch.status === "enabled") {
-				next.nextFireAt = this.jitter(
-					expression.next(now),
-					now,
-					id,
-					next.recurring,
-					expression,
-					next.jitter !== false,
-				);
+			if (next.intervalHours !== undefined) {
+				if (!Number.isInteger(next.intervalHours) || next.intervalHours < 1 || next.intervalHours > 168)
+					throw new Error("Cron interval must be a whole number between 1 and 168 hours");
+			}
+			if (
+				patch.cron !== undefined ||
+				patch.recurring !== undefined ||
+				patch.intervalHours !== undefined ||
+				patch.runAt !== undefined ||
+				patch.status === "enabled"
+			) {
+				next.nextFireAt =
+					patch.runAt ??
+					next.runAt ??
+					(next.intervalHours !== undefined
+						? now + next.intervalHours * 60 * 60 * 1000
+						: this.jitter(expression.next(now), now, id, next.recurring, expression, next.jitter !== false));
 			}
 			this.jobs.set(id, next);
 			return { ...next };
@@ -821,14 +859,10 @@ export class StepCronRuntime {
 						} else {
 							try {
 								const expression = SimpleCronExpression.parse(job.cron);
-								job.nextFireAt = this.jitter(
-									expression.next(now),
-									now,
-									job.id,
-									true,
-									expression,
-									job.jitter !== false,
-								);
+								job.nextFireAt =
+									job.intervalHours !== undefined
+										? now + job.intervalHours * 60 * 60 * 1000
+										: this.jitter(expression.next(now), now, job.id, true, expression, job.jitter !== false);
 							} catch (error) {
 								// Keep the record, but do not let one bad schedule block project recovery.
 								this.reportFailure(
@@ -954,7 +988,10 @@ export class StepCronRuntime {
 		try {
 			if (job.recurring && !expired && !manual) {
 				const expression = SimpleCronExpression.parse(job.cron);
-				nextFireAt = this.jitter(expression.next(now), now, job.id, true, expression, job.jitter !== false);
+				nextFireAt =
+					job.intervalHours !== undefined
+						? now + job.intervalHours * 60 * 60 * 1000
+						: this.jitter(expression.next(now), now, job.id, true, expression, job.jitter !== false);
 			}
 			this.sendMessage({ kind: "fire", job: { ...job }, ...(manual ? { manual: true } : {}) });
 		} catch (error) {
@@ -1188,6 +1225,19 @@ function formatCronStatus(jobs: readonly CronJob[]): string {
 		.join("\n");
 }
 
+async function requireCronApproval(
+	ctx: ExtensionContext,
+	action: "create" | "update" | "delete",
+	detail: string,
+): Promise<void> {
+	if (!ctx.hasUI || typeof ctx.ui.confirm !== "function") throw new Error(`Cron ${action} requires user approval`);
+	const approved = await ctx.ui.confirm(
+		`Approve scheduled task ${action}?`,
+		`${detail}\n\nAgent-created scheduled-task changes require your approval.`,
+	);
+	if (!approved) throw new Error(`Cron ${action} was not approved`);
+}
+
 /** Register expression-based Cron tools; this extension has no Loop dependency. */
 export function createStepCronExtension(options: StepCronExtensionOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
@@ -1274,6 +1324,7 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 			parameters: CronCreateParams,
 			execute: async (_id, params, _signal, _onUpdate, ctx) => {
 				if (options.readOnly) throw new Error("This task session cannot create cron jobs");
+				await requireCronApproval(ctx, "create", `${params.cron} — ${params.prompt.slice(0, 120)}`);
 				currentContext = ctx;
 				runtime.setContext(ctx.cwd);
 				const recurring = params.recurring !== false;
@@ -1302,6 +1353,7 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 			parameters: CronDeleteParams,
 			execute: async (_id, params, _signal, _onUpdate, ctx) => {
 				if (options.readOnly) throw new Error("This task session cannot delete cron jobs");
+				await requireCronApproval(ctx, "delete", params.id);
 				currentContext = ctx;
 				runtime.setContext(ctx.cwd);
 				const found = runtime.delete(params.id);
@@ -1317,6 +1369,7 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 				parameters: CronUpdateParams,
 				execute: async (_id, params, _signal, _onUpdate, ctx) => {
 					if (options.readOnly) throw new Error("This task session cannot update cron jobs");
+					await requireCronApproval(ctx, "update", params.id);
 					if (!runtime.update) throw new Error("This host does not support updating cron jobs");
 					currentContext = ctx;
 					runtime.setContext(ctx.cwd);

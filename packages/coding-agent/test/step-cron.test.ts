@@ -175,13 +175,13 @@ function createHarness(): Harness {
 	const sent: Array<{ message: Record<string, unknown>; options?: Record<string, unknown> }> = [];
 	const ctx = {
 		mode: "rpc",
-		hasUI: false,
+		hasUI: true,
 		cwd: makeDirectory(),
 		isIdle: () => true,
 		hasPendingMessages: () => false,
 		hasPendingUserDecision: () => false,
 		isProjectTrusted: () => true,
-		ui: { notify: vi.fn() },
+		ui: { notify: vi.fn(), confirm: vi.fn().mockResolvedValue(true) },
 		sessionManager: { getSessionId: () => "cron-session", getEntries: () => [] },
 	} as unknown as ExtensionContext;
 	const api = {
@@ -260,6 +260,27 @@ test("the CLI cron extension keeps its original tool surface", () => {
 	const harness = createHarness();
 	createStepCronExtension({ enabled: true })(harness.api);
 	expect([...harness.tools.keys()].sort()).toEqual(["cron_create", "cron_delete", "cron_list"]);
+});
+
+test("agent-created cron mutations require user approval", async () => {
+	const harness = createHarness();
+	createStepCronExtension({ enabled: true })(harness.api);
+	await emitCron(harness, "session_start");
+	const confirm = harness.ctx.ui.confirm as ReturnType<typeof vi.fn>;
+	confirm.mockResolvedValueOnce(false);
+	await expect(
+		harness.tools
+			.get("cron_create")!
+			.execute(
+				"create",
+				{ cron: "* * * * *", prompt: "needs approval" } as never,
+				undefined,
+				undefined,
+				harness.ctx,
+			),
+	).rejects.toThrow("not approved");
+	expect(harness.tools.get("cron_create")).toBeDefined();
+	await emitCron(harness, "session_shutdown");
 });
 
 test("durable creation is rejected in an untrusted project", async () => {
@@ -787,7 +808,7 @@ describe("desktop cron task fields", () => {
 		});
 		const created = runtime.create("0 9 * * *", "desktop task", true, true, true, {
 			workspace: directory,
-			taskSessionId: "cron-task-1",
+			sessionId: "cron-task-1",
 			status: "enabled",
 			title: "Task",
 			inputs: { skills: ["skill-a"] },
@@ -798,7 +819,7 @@ describe("desktop cron task fields", () => {
 			origin: "desktop",
 		}).job;
 		expect(created.schemaVersion).toBe(2);
-		expect(created.taskSessionId).toBe("cron-task-1");
+		expect(created.sessionId).toBe("cron-task-1");
 		expect(created.status).toBe("enabled");
 		expect(created.fullAccessAcknowledged).toBe(true);
 		expect(created.autoExpireAt).toBeUndefined();
@@ -834,18 +855,18 @@ describe("desktop cron task fields", () => {
 		expect(runtime.list()[0]?.status).toBe("enabled");
 	});
 
-	test("accepts a caller-provided id and lets the host attach a task session", () => {
+	test("accepts a caller-provided id and a bound session", () => {
 		const now = Date.UTC(2026, 0, 1, 12, 0);
 		const runtime = new StepCronRuntime({ now: () => now, jitterRatio: 0 });
 		const job = runtime.create("0 9 * * *", "named", true, false, true, {
 			id: "task-a",
+			sessionId: "session-a",
 			status: "enabled",
 			autoExpireMs: null,
 			jitter: false,
 		}).job;
 		expect(job.id).toBe("task-a");
-		runtime.update(job.id, { taskSessionId: "cron-task-a" });
-		expect(runtime.list()[0]?.taskSessionId).toBe("cron-task-a");
+		expect(runtime.list()[0]?.sessionId).toBe("session-a");
 		expect(() =>
 			runtime.create("0 9 * * *", "duplicate", true, false, true, {
 				id: "task-a",
@@ -869,6 +890,27 @@ describe("desktop cron task fields", () => {
 			fullAccessAcknowledged: true,
 		}).job;
 		expect(() => runtime.update(created.id, { fullAccessAcknowledged: false })).toThrow(/risk acknowledgment/);
+	});
+
+	test("supports explicit hour intervals and absolute one-shot times", () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const runtime = new StepCronRuntime({ now: () => now, jitterRatio: 0 });
+		const interval = runtime.create("* * * * *", "interval", true, false, true, {
+			intervalHours: 5,
+			status: "enabled",
+			autoExpireMs: null,
+			jitter: false,
+		}).job;
+		expect(interval.intervalHours).toBe(5);
+		expect(interval.nextFireAt).toBe(now + 5 * 60 * 60 * 1000);
+		const runAt = now + 2 * 60 * 60 * 1000;
+		const once = runtime.create("* * * * *", "once", false, false, true, {
+			runAt,
+			status: "enabled",
+			autoExpireMs: null,
+			jitter: false,
+		}).job;
+		expect(once.nextFireAt).toBe(runAt);
 	});
 
 	test("canDeliver gates each job and maxJobs is configurable", () => {
