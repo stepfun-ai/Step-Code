@@ -699,11 +699,19 @@
 	gap: 16px;
 	margin-bottom: 20px;
 }
+.settings-editor-head > div:first-child {
+	flex: 1 1 auto;
+	min-width: 0;
+}
 .settings-mode-switch {
+	flex: 0 0 auto;
+	width: max-content;
 	padding: 3px;
 	border-radius: var(--radius-menu);
 }
 .settings-mode-switch button {
+	flex: 0 0 auto;
+	white-space: nowrap;
 	padding: 4px 14px;
 	font-size: 13px;
 }

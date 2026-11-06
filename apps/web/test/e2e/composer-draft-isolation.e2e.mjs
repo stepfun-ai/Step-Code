@@ -279,7 +279,7 @@ test("rich blocks, modes, images and skill picks travel with only their draft", 
 		await page.locator(".control-option--goal").click();
 		await page.route("**/api/v1/settings/skills", (route) => route.fulfill({ json: { skills: [{ id: "fixture-skill", name: "fixture-skill", enabled: true, description: "fixture" }] } }));
 		await page.locator("#plusTrigger").click();
-		await page.locator(".plus-row").nth(1).hover();
+		await page.locator('[data-plus-sub="skills"]').hover();
 		await page.locator(".plus-sub-row").filter({ hasText: "fixture-skill" }).click();
 		assert.equal(await page.locator(".pick-chip--skill").count(), 1);
 		await pasteFile(page, "picture.png", "image/png");
@@ -683,7 +683,7 @@ test("late context picks update their original draft, not B's staged input", { s
 		await page.evaluate(() => window.fixture.setState({ sessions: [{ id: "quoted", name: "Quoted context", cwd: "/fixture" }] }));
 		const context = await deferredRoute(page, "**/api/v1/sessions/quoted");
 		await page.locator("#plusTrigger").click();
-		await page.locator(".plus-row").nth(2).hover();
+		await page.locator('[data-plus-sub="sessions"]').hover();
 		await page.locator(".plus-sub-row").filter({ hasText: "Quoted context" }).click();
 		await context.ready;
 		await open(page, "B");

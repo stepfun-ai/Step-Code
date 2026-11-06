@@ -4,6 +4,9 @@ dist/
 *.log
 .DS_Store
 *.tsbuildinfo
+# Market payloads are generated from the reviewed local collection and shipped as a
+# separate archive (see docs/plugin-market.md); browsing uses the committed catalog.json.
+apps/web/resources/
 # packages/*/node_modules/
 packages/*/dist/
 packages/*/dist-chrome/

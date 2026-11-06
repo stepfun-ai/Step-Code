@@ -18,6 +18,7 @@ import { resolveStepMcpEnvironment } from "./mcp-environment.ts";
 import { createStoredMcpOAuthProvider, hasStoredMcpOAuthCredential } from "./mcp-oauth.ts";
 import { type StepMcpLease, StepMcpPool } from "./mcp-pool.ts";
 import { isPathContained } from "./path-containment.ts";
+import { isStepPluginEnabled } from "./plugin-state.ts";
 import {
 	defaultStepPluginsDir,
 	ensureBuiltinPluginsInstalled,
@@ -745,6 +746,7 @@ export async function discoverStepMcpServers(cwd: string, projectTrusted: boolea
 	if (projectTrusted) roots.push(defaultStepPluginsDir(process.env, { cwd, project: true }));
 	const result: DiscoveredServer[] = [];
 	const globalServers = new Map<string, DiscoveredServer>();
+	const disabledPluginServers = new Set<string>();
 	const seen = new Set<string>();
 	// A trusted project may declare its own servers; they take precedence over the global
 	// ones by name, including turning one off. Nothing read them before, so this is additive.
@@ -783,6 +785,11 @@ export async function discoverStepMcpServers(cwd: string, projectTrusted: boolea
 			if (!parsed.manifest) continue;
 			const declared = await resolveDeclaredServers(pluginDir, parsed.manifest?.mcpServers);
 			if (!declared) continue;
+			if (!isStepPluginEnabled(parsed.manifest.id, config)) {
+				for (const serverName of Object.keys(declared))
+					disabledPluginServers.add(`${parsed.manifest.id}${PLUGIN_SERVER_SEPARATOR}${serverName}`);
+				continue;
+			}
 			for (const [serverName, value] of Object.entries(declared)) {
 				// A declared server may be stdio (command) or remote (url). Requiring
 				// `command` here dropped remote servers silently, even though the
@@ -822,7 +829,7 @@ export async function discoverStepMcpServers(cwd: string, projectTrusted: boolea
 			}
 		}
 	}
-	return result;
+	return result.filter((server) => !disabledPluginServers.has(server.name));
 }
 
 /** A plugin-declared MCP server as a settings screen lists it, disabled ones included. */
@@ -831,6 +838,7 @@ export interface StepPluginMcpServerEntry {
 	readonly name: string;
 	readonly pluginId: string;
 	readonly pluginName: string;
+	readonly pluginEnabled: boolean;
 	readonly transport: "stdio" | "http";
 	/** False when the plugin declares it disabled or `config.toml` sets `enabled = false` for its runtime name. */
 	readonly enabled: boolean;
@@ -847,7 +855,8 @@ export async function listStepPluginMcpServers(
 ): Promise<StepPluginMcpServerEntry[]> {
 	const roots = [defaultStepPluginsDir(process.env)];
 	if (projectTrusted) roots.push(defaultStepPluginsDir(process.env, { cwd, project: true }));
-	const overrides = readGlobalStepConfig(process.env).mcp_servers ?? {};
+	const config = readGlobalStepConfig(process.env);
+	const overrides = config.mcp_servers ?? {};
 	const result: StepPluginMcpServerEntry[] = [];
 	const seen = new Set<string>();
 	for (const root of roots) {
@@ -866,8 +875,12 @@ export async function listStepPluginMcpServers(
 					name,
 					pluginId: parsed.manifest.id,
 					pluginName: parsed.manifest.name ?? parsed.manifest.id,
+					pluginEnabled: isStepPluginEnabled(parsed.manifest.id, config),
 					transport: typeof value.command === "string" && value.command.trim() ? "stdio" : "http",
-					enabled: value.enabled !== false && !(isRecord(override) && override.enabled === false),
+					enabled:
+						isStepPluginEnabled(parsed.manifest.id, config) &&
+						value.enabled !== false &&
+						!(isRecord(override) && override.enabled === false),
 				});
 			}
 		}

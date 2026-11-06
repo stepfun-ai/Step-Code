@@ -21,6 +21,7 @@ import {
 	saveMcpServer,
 	saveMcpServerPatch,
 	setMcpServerEnabled,
+	setPluginEnabled,
 	setSkillEnabled,
 } from "../src/settings.ts";
 
@@ -64,6 +65,23 @@ async function writePlugin(id: string, manifest: Record<string, unknown>): Promi
 	await writeFile(join(dir, "step.plugin.json"), JSON.stringify({ id, ...manifest }));
 	return dir;
 }
+
+test("plugin toggle preserves installation, child settings and unrelated config",async()=>{
+ const root=await writePlugin('toggle-plugin',{skills:['skills'],commands:['commands'],mcpServers:{service:{command:'never-executed'}}});
+ await mkdir(join(root,'skills','toggle-skill'),{recursive:true});await mkdir(join(root,'commands'));
+ await writeFile(join(root,'skills','toggle-skill','SKILL.md'),'---\nname: toggle-skill\ndescription: Test\n---\n# Test\n');
+ await setMcpServerEnabled('toggle-plugin__service',false);
+ await setPluginEnabled('toggle-plugin',false);
+ assert.equal((await listPlugins()).installed.find(p=>p.id==='toggle-plugin')?.enabled,false);
+ assert.equal((await listSkills()).find(s=>s.name==='toggle-skill')?.enabled,false);
+ assert.equal((await listMcpServers()).find(s=>s.name==='toggle-plugin__service')?.enabled,false);
+ await rejectsWith(setMcpServerEnabled('toggle-plugin__service',true),409);
+ await setPluginEnabled('toggle-plugin',true);
+ assert.equal((await listPlugins()).installed.find(p=>p.id==='toggle-plugin')?.enabled,true);
+ assert.equal((await listSkills()).find(s=>s.name==='toggle-skill')?.enabled,true);
+ assert.equal((await listMcpServers()).find(s=>s.name==='toggle-plugin__service')?.enabled,false);
+ await rejectsWith(setPluginEnabled('not-installed',false),404);
+});
 
 test("server declarations need exactly one transport and keep only known fields", () => {
 	assert.deepEqual(parseMcpServerConfig({ command: " npx ", args: ["-y", "pkg"], env: { A: "1" }, junk: 1 }), {
@@ -336,7 +354,7 @@ test("plugins install from a local marketplace and uninstall; marketplaces are a
 	assert.ok(catalog.marketplaces.some((entry) => entry.name === "my-market"));
 	assert.deepEqual(
 		catalog.available.find((entry) => entry.name === "notes"),
-		{ name: "notes", description: "Notes", marketplace: "my-market", installed: false },
+		{ name: "notes", description: "Notes", marketplace: "my-market", installed: false, origin: "market" },
 	);
 
 	await installPlugin("notes", "my-market");
@@ -344,6 +362,7 @@ test("plugins install from a local marketplace and uninstall; marketplaces are a
 	await rejectsWith(installPlugin("missing"), 404);
 	catalog = await listPlugins();
 	assert.equal(catalog.installed.find((plugin) => plugin.id === "notes")?.name, "Notes");
+	assert.equal(catalog.installed.find((plugin) => plugin.id === "notes")?.origin, "market");
 	assert.equal(catalog.available.find((entry) => entry.name === "notes")?.installed, true);
 
 	await removePlugin("notes");

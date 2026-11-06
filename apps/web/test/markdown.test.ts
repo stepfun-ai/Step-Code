@@ -70,6 +70,19 @@ test("images never load: they read as a link to their source", () => {
 	assert.match(html, / local<\/p>$/);
 });
 
+test("linked image badges do not create nested interactive destinations", () => {
+	for (const image of ["https://example.com/badge.svg", "./badge.svg"]) {
+		const html = render(`[![MIT](${image})](https://example.com/license)`, { localFiles: true });
+		assert.equal((html.match(/<a /g) ?? []).length, 1);
+		assert.doesNotMatch(html, /<img|<button/);
+		assert.match(html, /href="https:\/\/example.com\/license"/);
+		assert.match(html, /MIT<\/a>/);
+	}
+	const local = render("[![badge](https://example.com/badge.svg)](./README.md)", { localFiles: true });
+	assert.equal((local.match(/<button /g) ?? []).length, 1);
+	assert.doesNotMatch(local, /<a |<img/);
+});
+
 test("handles incomplete streaming Markdown and keeps surrounding formatting", () => {
 	assert.doesNotMatch(render("[Source](https://", { streaming: true }), /<a /);
 	assert.equal(

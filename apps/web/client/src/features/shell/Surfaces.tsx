@@ -7,7 +7,7 @@
 import { type CSSProperties, useLayoutEffect, useState } from "react";
 import { useT } from "../../i18n";
 import { dismissToast } from "../../state/session";
-import { useAppStore } from "../../state/store";
+import { setState, useAppStore } from "../../state/store";
 import { IconButton, Toast } from "../../ui";
 import { toggleSidebar } from "./actions";
 
@@ -72,16 +72,22 @@ export function SidebarShowButton() {
  * element's public class.
  */
 export function ErrorToast() {
+	const t = useT();
 	const toast = useAppStore((state) => state.toast);
 	const groupError = useAppStore((state) => state.tagGroupsLoadError ?? state.tagGroupsSaveError);
 	const action = toast?.action;
 	const message = toast?.message ?? groupError;
 	const settingsOpen = useAppStore((state) => state.ui.settingsPage !== null);
 	const anchor = useConversationAnchor(Boolean(message) && !settingsOpen);
+	const dismiss = () => {
+		if (toast) dismissToast(toast.seq);
+		else setState({ tagGroupsLoadError: null, tagGroupsSaveError: null });
+	};
 	return (
 		<Toast
 			id="errorToast"
 			className="error-toast"
+			title={toast?.title}
 			message={message}
 			style={anchor}
 			tone={toast?.tone ?? "danger"}
@@ -94,6 +100,8 @@ export function ErrorToast() {
 						}
 					: undefined
 			}
+			onClose={dismiss}
+			closeLabel={t("searchClose")}
 		/>
 	);
 }

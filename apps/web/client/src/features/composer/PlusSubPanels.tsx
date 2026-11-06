@@ -6,18 +6,19 @@
  * conversation into a context chip.
  */
 
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { formatRelativeTime, useT } from "../../i18n";
 import { api, errorMessage } from "../../lib/api";
 import { splitAttachedFiles } from "../../lib/attached-files";
 import { sessionTitle } from "../../state/session";
 import { useAppStore } from "../../state/store";
-import type { SettingsSkill } from "../../state/types";
+import type { SettingsMcpServer, SettingsSkill } from "../../state/types";
 import { Icon, SearchInput } from "../../ui";
-import { openSettings } from "../settings/actions";
+import { extensionResourceSnapshot, openSettings, subscribeExtensionResources } from "../settings/actions";
 
 /** `GET /api/v1/settings/plugins` catalog (openapi.yaml "Plugin catalog"). */
 interface InstalledPlugin {
+	readonly enabled?: boolean;
 	readonly id: string;
 	readonly name: string;
 	readonly version?: string;
@@ -46,8 +47,13 @@ interface PluginRow {
  * of flashing 加载中 again. A failed request drops the cache for a retry.
  */
 const requestCache = new Map<string, Promise<readonly unknown[]>>();
+let cachedRevision = extensionResourceSnapshot();
 
 function cachedRequest<P, T extends readonly unknown[]>(path: string, pick: (payload: P) => T): Promise<T> {
+	if (cachedRevision !== extensionResourceSnapshot()) {
+		requestCache.clear();
+		cachedRevision = extensionResourceSnapshot();
+	}
 	let pending = requestCache.get(path) as Promise<T> | undefined;
 	if (!pending) {
 		pending = api<P>(path).then(
@@ -91,15 +97,17 @@ const loadPlugins = () =>
 				installed?: readonly InstalledPlugin[];
 				available?: readonly AvailablePlugin[];
 			}): readonly PluginRow[] => [
-				...(catalog.installed ?? []).map(
-					(plugin): PluginRow => ({
-						kind: "installed",
-						key: plugin.id,
-						name: plugin.name,
-						hint: plugin.version,
-						description: plugin.description,
-					}),
-				),
+				...(catalog.installed ?? [])
+					.filter((plugin) => plugin.enabled !== false)
+					.map(
+						(plugin): PluginRow => ({
+							kind: "installed",
+							key: plugin.id,
+							name: plugin.name,
+							hint: plugin.version,
+							description: plugin.description,
+						}),
+					),
 				...(catalog.available ?? [])
 					.filter((plugin) => !plugin.installed)
 					.map(
@@ -116,7 +124,14 @@ const loadPlugins = () =>
 	);
 const loadSkills = () =>
 	loadWithTimeout(() =>
-		cachedRequest("/api/v1/settings/skills", (result: { skills?: readonly SettingsSkill[] }) => result.skills ?? []),
+		cachedRequest("/api/v1/settings/skills", (result: { skills?: readonly SettingsSkill[] }) =>
+			(result.skills ?? []).filter((skill) => skill.enabled),
+		),
+	);
+
+const loadConnectors = () =>
+	loadWithTimeout(() =>
+		api<{ servers: readonly SettingsMcpServer[] }>("/api/v1/settings/mcp").then((result) => result.servers),
 	);
 
 /**
@@ -156,17 +171,24 @@ function SubRow({
 	icon,
 	onClick,
 	faded = false,
+	disabled = false,
 }: {
 	readonly name: string;
 	readonly hint?: string;
 	readonly description?: string;
 	/** Kind marker matching the staged chip: the wrench marks a skill, the puzzle a plugin. */
-	readonly icon?: "wrench" | "puzzle";
+	readonly icon?: "wrench" | "puzzle" | "mcp";
 	readonly onClick: () => void;
 	readonly faded?: boolean;
+	readonly disabled?: boolean;
 }) {
 	return (
-		<button type="button" className={faded ? "plus-sub-row plus-sub-row--faded" : "plus-sub-row"} onClick={onClick}>
+		<button
+			type="button"
+			className={faded ? "plus-sub-row plus-sub-row--faded" : "plus-sub-row"}
+			disabled={disabled}
+			onClick={onClick}
+		>
 			{icon ? <Icon className={`plus-sub-kind plus-sub-kind--${icon}`} name={icon} size="md" /> : null}
 			<span className="plus-sub-body">
 				<span className="plus-sub-name">
@@ -184,7 +206,7 @@ interface PickerItem {
 	readonly key: string;
 	/** Lowercased against the search query; undefined entries never match. */
 	readonly matchText: readonly (string | undefined)[];
-	readonly row: Pick<SubRowProps, "name" | "hint" | "description" | "icon" | "faded" | "onClick">;
+	readonly row: Pick<SubRowProps, "name" | "hint" | "description" | "icon" | "faded" | "disabled" | "onClick">;
 }
 
 type SubRowProps = Parameters<typeof SubRow>[0];
@@ -210,11 +232,30 @@ function PickerPanel<T>({
 }) {
 	const t = useT();
 	const [entries, setEntries] = useState<readonly T[] | null>(null);
+	const revision = useSyncExternalStore(subscribeExtensionResources, extensionResourceSnapshot, () => 0);
 	const [error, setError] = useState<string | null>(null);
+	const request = useRef(0);
 	const run = useCallback(() => {
-		load().then(setEntries, (caught) => setError(errorMessage(caught)));
+		const current = ++request.current;
+		load().then(
+			(value) => {
+				if (current === request.current) {
+					setEntries(value);
+					setError(null);
+				}
+			},
+			(caught) => {
+				if (current === request.current) setError(errorMessage(caught));
+			},
+		);
 	}, [load]);
-	useEffect(() => run(), [run]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: revision invalidates cached extension picks.
+	useEffect(() => {
+		run();
+		return () => {
+			request.current++;
+		};
+	}, [run, revision]);
 	const retry = () => {
 		setEntries(null);
 		setError(null);
@@ -256,13 +297,23 @@ function footerButton(label: string, onClick: () => void) {
  * (the kernel has no invocation command for a plugin — its MCP servers, skills
  * and commands are what get used).
  */
-export function PluginsPanel({ onPick }: { readonly onPick: (name: string, installed: boolean) => void }) {
+export function PluginsPanel({
+	onPick,
+	onManage,
+}: {
+	readonly onPick: (name: string, installed: boolean) => void;
+	readonly onManage?: () => void;
+}) {
 	const t = useT();
 	return (
 		<PickerPanel
 			placeholder={t("settingsPluginsSearch")}
 			emptyKey="settingsPluginsNoneAvailable"
-			footer={footerButton(t("plusManagePlugins"), () => openSettings("plugins"))}
+			footer={footerButton(t("plusManagePlugins"), () => {
+				requestCache.delete("/api/v1/settings/plugins");
+				onManage?.();
+				openSettings("plugins");
+			})}
 			load={loadPlugins}
 			item={(row: PluginRow) => ({
 				key: row.key,
@@ -280,13 +331,23 @@ export function PluginsPanel({ onPick }: { readonly onPick: (name: string, insta
 }
 
 /** Every skill the Settings page lists; picking one stages `/skill:<name> `. */
-export function SkillsPanel({ onPick }: { readonly onPick: (name: string) => void }) {
+export function SkillsPanel({
+	onPick,
+	onManage,
+}: {
+	readonly onPick: (name: string) => void;
+	readonly onManage?: () => void;
+}) {
 	const t = useT();
 	return (
 		<PickerPanel
 			placeholder={t("settingsSkillsSearch")}
 			emptyKey="settingsSkillsEmpty"
-			footer={footerButton(t("plusManageSkills"), () => openSettings("skills"))}
+			footer={footerButton(t("plusManageSkills"), () => {
+				requestCache.delete("/api/v1/settings/skills");
+				onManage?.();
+				openSettings("skills");
+			})}
 			load={loadSkills}
 			item={(skill: SettingsSkill) => ({
 				key: skill.id,
@@ -298,6 +359,44 @@ export function SkillsPanel({ onPick }: { readonly onPick: (name: string) => voi
 					description: skill.description,
 					faded: !skill.enabled,
 					onClick: () => onPick(skill.name),
+				},
+			})}
+		/>
+	);
+}
+
+export function ConnectorsPanel({
+	onPick,
+	onManage,
+}: {
+	readonly onPick: (name: string) => void;
+	readonly onManage: () => void;
+}) {
+	const t = useT();
+	return (
+		<PickerPanel
+			placeholder={t("extensionReference.searchConnectors")}
+			emptyKey="extensionReference.noConnectors"
+			footer={footerButton(t("extensionReference.manageConnectors"), () => {
+				onManage();
+				openSettings("mcp");
+			})}
+			load={loadConnectors}
+			item={(server: SettingsMcpServer) => ({
+				key: server.name,
+				matchText: [server.name, server.pluginName],
+				row: {
+					name: server.name,
+					icon: "mcp",
+					hint: !server.enabled
+						? t("settingsMcpOff")
+						: server.status
+							? t(`mcpStatus.${server.status}`)
+							: t("settingsMcpIdle"),
+					description: server.pluginName,
+					faded: !server.enabled,
+					disabled: !server.enabled,
+					onClick: () => onPick(server.name),
 				},
 			})}
 		/>

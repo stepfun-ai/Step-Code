@@ -5,5 +5,16 @@
  */
 
 import "./settings.css";
+import "./extension-management.css";
 
+export { ExtensionCreateMenu, readUploadSelection, type UploadOutcome } from "./ExtensionCreateMenu";
+export { ExtensionRemoveButton } from "./ExtensionRemoveButton";
+export { ExtensionRowMenu } from "./ExtensionRowMenu";
+export type { ExtensionRemoval } from "./extension-removal";
+export { startExtensionTrial } from "./extension-trial";
+export { PluginDependencyStatus } from "./PluginDependencyStatus";
+export { PluginInstallButton } from "./PluginInstallButton";
+export { importPluginFile } from "./plugin-actions";
 export { SettingsView } from "./SettingsView";
+export { SkillInstallButton } from "./SkillInstallButton";
+export { importSkillFile } from "./skill-actions";

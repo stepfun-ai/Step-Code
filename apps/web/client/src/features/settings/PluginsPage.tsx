@@ -1,19 +1,24 @@
 /**
  * Plugins: installed user plugins (uninstall), plugins offered by the configured
  * marketplaces (install), and the marketplaces themselves (add, update, remove).
- * A plugin's MCP servers and skills are switched on the MCP and Skills pages.
+ * Plugin-level enable/disable gates its contributions without removing installed files.
  */
 
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
 import { useT } from "../../i18n";
 import { apiSend, errorMessage } from "../../lib/api";
 import { cx } from "../../lib/format";
-import { showError } from "../../state/session";
+import { showError, showNotice, showToast } from "../../state/session";
 import { useAppStore } from "../../state/store";
 import type { SettingsPluginCatalog } from "../../state/types";
-import { Icon, IconButton, Modal, SearchInput, SegmentedControl, Tooltip } from "../../ui";
-import { closeSettingsDialog, openSettingsDialog, showSettingsPage, useSettingsResource } from "./actions";
+import { Button, Icon, IconButton, Modal, SearchInput, Switch, Tooltip } from "../../ui";
+import { closeSettingsDialog, invalidateExtensionResources, openSettingsDialog, useSettingsResource } from "./actions";
+import { ExtensionCreateMenu } from "./ExtensionCreateMenu";
+import { ExtensionRowMenu } from "./ExtensionRowMenu";
+import { ExtensionSourceGroups } from "./ExtensionSourceGroups";
+import { PluginDependencyStatus } from "./PluginDependencyStatus";
 import { Badge, EmptyBox, PageHeader, ResourceState, SectionHeader, SettingsCard } from "./parts";
+import { importPluginFile } from "./plugin-actions";
 
 const PLUGINS_PATH = "/api/v1/settings/plugins";
 const MARKETPLACES_PATH = "/api/v1/settings/marketplaces";
@@ -27,6 +32,53 @@ function PluginMark({ name }: { readonly name: string }) {
 		<span className={cx("settings-row-icon plugin-mark", `hue-${hue}`)} aria-hidden="true">
 			{name.slice(0, 1).toUpperCase()}
 		</span>
+	);
+}
+
+/** One installed plugin: the enable/disable gate plus the shared overflow menu (trial, uninstall). */
+function PluginRow({
+	plugin,
+	busy,
+	onToggle,
+}: {
+	readonly plugin: SettingsPluginCatalog["installed"][number];
+	readonly busy: boolean;
+	readonly onToggle: (enabled: boolean) => void;
+}) {
+	const t = useT();
+	const [menuOpen, setMenuOpen] = useState(false);
+	return (
+		<div className="settings-list-row" data-plugin={plugin.id}>
+			<PluginMark name={plugin.name} />
+			<div className="settings-list-main">
+				<div className="settings-list-title">
+					<strong>{plugin.name}</strong>
+					{plugin.version ? <Badge>v{plugin.version}</Badge> : null}
+					{plugin.mcpServers.length ? (
+						<Badge>{t("settingsPluginMcpCount", { count: plugin.mcpServers.length })}</Badge>
+					) : null}
+				</div>
+				<div className="settings-list-desc">{plugin.description || t("settingsNoDescription")}</div>
+				<PluginDependencyStatus id={plugin.id} dependency={plugin.dependency} />
+			</div>
+			<div className="settings-list-actions visible">
+				<ExtensionRowMenu
+					resource={{ kind: "plugins", id: plugin.id, name: plugin.name, enabled: plugin.enabled }}
+					name={plugin.name}
+					open={menuOpen}
+					onOpenChange={setMenuOpen}
+					triggerClassName="settings-icon-action"
+				/>
+				<Tooltip content={t("extensionManagement.pluginToggleNote")}>
+					<Switch
+						checked={plugin.enabled !== false}
+						disabled={busy}
+						aria-label={t("settingsToggleNamed", { name: plugin.name })}
+						onChange={onToggle}
+					/>
+				</Tooltip>
+			</div>
+		</div>
 	);
 }
 
@@ -107,6 +159,7 @@ export function PluginsPage() {
 	const resource = useSettingsResource<SettingsPluginCatalog>(PLUGINS_PATH, true);
 	const [tab, setTab] = useState<Tab>("installed");
 	const [query, setQuery] = useState("");
+	const upload = useRef<HTMLInputElement>(null);
 	const [busy, setBusy] = useState<string | null>(null);
 	const catalog = resource.data;
 	const needle = query.trim().toLowerCase();
@@ -119,17 +172,39 @@ export function PluginsPage() {
 	);
 	const marketplaces = catalog?.marketplaces ?? [];
 
-	const run = async (key: string, action: () => Promise<{ warnings?: string[] } | unknown>, done: string) => {
+	const run = async (
+		key: string,
+		action: () => Promise<{ warnings?: string[] } | unknown>,
+		done: string,
+		title?: string,
+	) => {
 		setBusy(key);
 		try {
 			const result = (await action()) as { warnings?: string[] } | undefined;
 			const warnings = result?.warnings ?? [];
-			showError(warnings.length > 0 ? `${done} ${warnings.join(" ")}` : done, false);
+			const message = warnings.length > 0 ? `${done} ${warnings.join(" ")}` : done;
+			if (title) showNotice(title, message, "success");
+			else showToast(message);
 		} catch (error) {
-			showError(errorMessage(error));
+			showNotice(
+				title ? t("extensionManagement.installFailed") : t("extensionManagement.operationFailed"),
+				errorMessage(error),
+				"danger",
+			);
 		} finally {
 			setBusy(null);
 			resource.reload();
+		}
+	};
+	const toggle = async (id: string, enabled: boolean) => {
+		setBusy(`toggle:${id}`);
+		try {
+			await apiSend(`${PLUGINS_PATH}/${encodeURIComponent(id)}`, "PATCH", { enabled });
+			invalidateExtensionResources();
+		} catch {
+			showError(t("extensionManagement.pluginToggleFailed"));
+		} finally {
+			setBusy(null);
 		}
 	};
 	const install = (name: string, marketplace: string) =>
@@ -137,15 +212,8 @@ export function PluginsPage() {
 			`install:${name}`,
 			() => apiSend(PLUGINS_PATH, "POST", { name, marketplace }),
 			t("settingsPluginInstalled", { name }),
+			t("extensionManagement.installSucceeded"),
 		);
-	const uninstall = (id: string, name: string) => {
-		if (!window.confirm(t("settingsPluginRemoveConfirm", { name }))) return;
-		void run(
-			`remove:${id}`,
-			() => apiSend(`${PLUGINS_PATH}/${encodeURIComponent(id)}`, "DELETE"),
-			t("settingsPluginRemoved", { name }),
-		);
-	};
 
 	return (
 		<>
@@ -153,66 +221,44 @@ export function PluginsPage() {
 				title={t("settingsPlugins")}
 				description={t("settingsPluginsDesc")}
 				actions={
-					<SearchInput
-						wrapperClassName="settings-search"
-						placeholder={t("settingsPluginsSearch")}
-						aria-label={t("settingsPluginsSearch")}
-						value={query}
-						onChange={(event) => setQuery(event.target.value)}
-					/>
+					<div className="extension-management-actions">
+						<Tooltip content={t("settingsRefresh")}>
+							<IconButton icon="refresh" aria-label={t("settingsRefresh")} onClick={resource.reload} />
+						</Tooltip>
+						<ExtensionCreateMenu kind="plugins" onUpload={() => upload.current?.click()} />
+					</div>
 				}
 			/>
-			<div className="settings-toolbar">
-				<SegmentedControl<Tab>
-					className="settings-tabs"
-					items={[
-						{
-							value: "installed",
-							label: (
-								<>
-									{t("settingsPluginsInstalled")}
-									<span className="settings-count">{catalog?.installed.length ?? 0}</span>
-								</>
-							),
-						},
-						{
-							value: "discover",
-							label: (
-								<>
-									{t("settingsPluginsDiscover")}
-									<span className="settings-count">{catalog?.available.length ?? 0}</span>
-								</>
-							),
-						},
-						{
-							value: "sources",
-							label: (
-								<>
-									{t("settingsMarketplaces")}
-									<span className="settings-count">{marketplaces.length}</span>
-								</>
-							),
-						},
-					]}
-					value={tab}
-					onChange={setTab}
-				/>
-				<div className="settings-section-actions">
-					<Tooltip content={t("settingsRefresh")}>
-						<IconButton
-							icon="refresh"
-							iconSize="xs"
-							className="settings-icon-action bordered"
-							aria-label={t("settingsRefresh")}
-							onClick={resource.reload}
-						/>
-					</Tooltip>
-					<button type="button" className="settings-btn" onClick={() => openSettingsDialog("marketplace")}>
-						<Icon name="store" size="xs" />
-						{t("settingsMarketplaceAdd")}
-					</button>
-				</div>
-			</div>
+			{tab !== "installed" ? (
+				<Button className="settings-link" onClick={() => setTab("installed")}>
+					<Icon name="back" size="sm" />
+					{t("extensionManagement.backToPlugins")}
+				</Button>
+			) : null}
+			<SearchInput
+				wrapperClassName="settings-search extension-management-search"
+				placeholder={t("settingsPluginsSearch")}
+				aria-label={t("settingsPluginsSearch")}
+				value={query}
+				onChange={(event) => setQuery(event.target.value)}
+			/>
+			<input
+				hidden
+				type="file"
+				ref={upload}
+				accept=".zip"
+				onChange={(event) => {
+					const file = event.currentTarget.files?.[0];
+					event.currentTarget.value = "";
+					void importPluginFile(file, t);
+				}}
+			/>
+			{tab === "sources" ? (
+				<Button className="settings-btn" onClick={() => openSettingsDialog("marketplace")}>
+					<Icon name="store" size="xs" />
+					{t("settingsMarketplaceAdd")}
+				</Button>
+			) : null}
 			<ResourceState
 				loading={resource.loading}
 				error={resource.error}
@@ -220,49 +266,19 @@ export function PluginsPage() {
 				loadingLabel={t("settingsLoading")}
 			/>
 			{catalog && tab === "installed" ? (
-				installed.length > 0 ? (
-					<SettingsCard className="settings-list">
-						{installed.map((plugin) => (
-							<div className="settings-list-row" key={plugin.id} data-plugin={plugin.id}>
-								<PluginMark name={plugin.name} />
-								<div className="settings-list-main">
-									<div className="settings-list-title">
-										<strong>{plugin.name}</strong>
-										{plugin.version ? <Badge>v{plugin.version}</Badge> : null}
-										{plugin.mcpServers.length > 0 ? (
-											<Badge>{t("settingsPluginMcpCount", { count: plugin.mcpServers.length })}</Badge>
-										) : null}
-									</div>
-									<div className="settings-list-desc">{plugin.description || t("settingsNoDescription")}</div>
-								</div>
-								<div className="settings-list-actions visible">
-									<button
-										type="button"
-										className="settings-btn danger subtle"
-										disabled={busy === `remove:${plugin.id}`}
-										onClick={() => uninstall(plugin.id, plugin.name)}
-									>
-										{busy === `remove:${plugin.id}` ? t("settingsWorking") : t("settingsUninstall")}
-									</button>
-								</div>
-							</div>
-						))}
-					</SettingsCard>
-				) : (
-					<EmptyBox
-						icon="puzzle"
-						title={needle ? t("settingsNoMatch") : t("settingsPluginsEmpty")}
-						hint={needle ? undefined : t("settingsPluginsEmptyHint")}
-						actions={
-							needle ? undefined : (
-								<button type="button" className="settings-btn primary" onClick={() => setTab("discover")}>
-									<Icon name="store" size="xs" />
-									{t("settingsPluginsBrowse")}
-								</button>
-							)
-						}
-					/>
-				)
+				<ExtensionSourceGroups
+					items={installed}
+					origins={["market", "custom", "stepcode"]}
+					originOf={(plugin) => plugin.origin ?? "custom"}
+					renderItem={(plugin) => (
+						<PluginRow
+							key={plugin.id}
+							plugin={plugin}
+							busy={busy === `toggle:${plugin.id}`}
+							onToggle={(enabled) => void toggle(plugin.id, enabled)}
+						/>
+					)}
+				/>
 			) : null}
 			{catalog && tab === "discover" ? (
 				available.length > 0 ? (
@@ -391,16 +407,6 @@ export function PluginsPage() {
 					</ul>
 				</details>
 			) : null}
-			<p className="settings-footnote">
-				{t("settingsPluginsFootnote")}{" "}
-				<button type="button" className="settings-link" onClick={() => showSettingsPage("mcp")}>
-					{t("settingsMcp")}
-				</button>
-				{" · "}
-				<button type="button" className="settings-link" onClick={() => showSettingsPage("skills")}>
-					{t("settingsSkills")}
-				</button>
-			</p>
 			<AddMarketplaceDialog onAdded={resource.reload} />
 		</>
 	);

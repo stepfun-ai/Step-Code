@@ -1,0 +1,288 @@
+.extension-market-scroll {
+	display: block;
+	min-height: 0;
+	padding: 0;
+	overflow-y: auto;
+}
+#marketClose {
+	margin-left: auto;
+}
+.extension-market-content {
+	width: min(1240px, 100%);
+	margin: 0 auto;
+	padding: 24px 32px 64px;
+}
+.extension-market-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 20px;
+}
+.extension-market-kinds {
+	flex-wrap: wrap;
+	border-radius: var(--radius-panel);
+}
+.extension-market-kinds button {
+	min-height: var(--control-h-lg);
+	padding: 0 18px;
+	border-radius: var(--radius-control);
+	font-size: 14px;
+}
+.extension-market-actions {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.extension-market-manage,
+.extension-market-trial,
+.extension-market-create {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	min-height: var(--control-h-lg);
+	padding: 0 16px;
+	border-radius: var(--radius-panel);
+	background: var(--surface-soft);
+	font-weight: 600;
+}
+.extension-market-create {
+	background: var(--action);
+	color: var(--action-ink);
+}
+.extension-market-manage:hover,
+.extension-market-trial:hover {
+	background: var(--hover);
+}
+.extension-market-body {
+	max-width: 1020px;
+	margin: 32px auto 0;
+}
+.extension-market-search {
+	width: 100%;
+	min-height: 52px;
+	padding: 0 16px;
+	gap: 12px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-search);
+	background: var(--surface);
+}
+.extension-market-search input {
+	font-size: 15px;
+}
+.extension-market-categories {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 16px;
+}
+.extension-market-category {
+	min-height: 38px;
+	padding: 0 14px;
+	border-radius: var(--radius-panel);
+	color: var(--ink-2);
+	font-size: 14px;
+}
+.extension-market-category:hover,
+.extension-market-category[aria-pressed="true"] {
+	background: var(--surface-soft);
+	color: var(--ink);
+}
+.extension-market-category[aria-pressed="true"] {
+	font-weight: 600;
+}
+.extension-market-section {
+	margin-top: 28px;
+}
+.extension-market-section h2 {
+	margin: 0 0 20px;
+	font-size: 17px;
+	font-weight: 600;
+}
+.extension-market-item-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+/* Tooltip anchor for the install button: a disabled button fires no pointer events of its own. */
+.extension-market-install-host {
+	display: flex;
+	flex-shrink: 0;
+}
+.extension-market-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	column-gap: 40px;
+	row-gap: 12px;
+}
+.extension-market-row {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	min-width: 0;
+	min-height: 86px;
+	padding: 12px;
+	margin-inline: -12px;
+	border-radius: var(--radius-panel);
+}
+.extension-market-row:hover {
+	background: var(--surface-soft);
+}
+.extension-market-placeholder {
+	flex: 0 0 52px;
+	width: 52px;
+	height: 52px;
+	display: grid;
+	place-items: center;
+	border: 1px dashed var(--line-strong);
+	border-radius: var(--radius-panel);
+	background: var(--surface-soft);
+}
+.extension-market-placeholder span {
+	width: 22px;
+	height: 22px;
+	border: 1px solid var(--line-strong);
+	border-radius: var(--radius-tiny);
+}
+.extension-market-copy {
+	flex: 1;
+	min-width: 0;
+}
+.extension-market-name {
+	font-size: 15px;
+	font-weight: 550;
+}
+.extension-market-copy p {
+	margin: 5px 0 0;
+	font-size: 13px;
+	color: var(--ink-2);
+	line-height: 1.5;
+}
+.extension-market-install {
+	flex: none;
+	min-height: 38px;
+	min-width: 72px;
+	padding: 0 16px;
+	border-radius: var(--radius-panel);
+	background: var(--surface-soft);
+	font-weight: 600;
+}
+.extension-market button:disabled {
+	cursor: not-allowed;
+}
+.extension-market-note {
+	margin-top: 36px;
+	font-size: 12px;
+	color: var(--ink-2);
+}
+.extension-market-add-popover {
+	z-index: 100;
+	width: min(400px, calc(100vw - 32px));
+	padding: 6px;
+}
+.extension-market-add-popover .extension-market-upload-item {
+	align-items: flex-start;
+	gap: 14px;
+	padding: 14px 12px;
+	white-space: normal;
+}
+.extension-market-upload-item .icon {
+	flex: none;
+	margin-top: 3px;
+	color: var(--ink-2);
+}
+.extension-market-upload-item strong,
+.extension-market-upload-item small {
+	display: block;
+}
+.extension-market-upload-item strong {
+	font-size: 15px;
+	font-weight: 550;
+}
+.extension-market-upload-item small {
+	margin-top: 5px;
+	font-size: 13px;
+	color: var(--ink-2);
+	line-height: 1.5;
+}
+.extension-market-upload-hint {
+	padding: 8px 12px;
+	border-top: 1px solid var(--line);
+	font-size: 12px;
+	color: var(--ink-2);
+}
+.extension-market-create:hover {
+	background: var(--action-hover);
+}
+.extension-market-upload-status {
+	display: block;
+	margin: 0 0 18px;
+	padding: 12px 16px;
+	border-radius: var(--radius-panel);
+	background: var(--surface-soft);
+	color: var(--ink-2);
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+@media (max-width: 1000px) {
+	.extension-market-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+@media (max-width: 680px) {
+	.extension-market-content {
+		padding: 24px 20px 48px;
+	}
+	.extension-market-toolbar {
+		align-items: flex-start;
+		flex-direction: column;
+	}
+	.extension-market-body {
+		margin-top: 24px;
+	}
+}
+
+/* Market row actions: check when idle, overflow menu on hover. */
+.extension-market-row-actions {
+	position: relative;
+	flex: none;
+	display: grid;
+	place-items: center;
+	width: 40px;
+	height: 40px;
+}
+.extension-market-check {
+	display: grid;
+	place-items: center;
+	width: 24px;
+	height: 24px;
+	color: var(--success);
+	transition: opacity var(--fast);
+}
+.extension-market-more,
+.extension-market-add {
+	position: absolute;
+	inset: 0;
+	margin: auto;
+	width: 34px;
+	height: 34px;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity var(--fast);
+}
+.extension-market-row:hover .extension-market-check,
+.extension-market-row:focus-within .extension-market-check {
+	opacity: 0;
+}
+.extension-market-row:hover .extension-market-more,
+.extension-market-row:hover .extension-market-add,
+.extension-market-row:focus-within .extension-market-more,
+.extension-market-row:focus-within .extension-market-add,
+.extension-market-row-actions[data-actions-open="true"] .extension-market-more {
+	opacity: 1;
+	pointer-events: auto;
+}
+.extension-market-row-actions[data-actions-open="true"] .extension-market-check {
+	opacity: 0;
+}

@@ -4,7 +4,7 @@ import { createReadStream, existsSync } from "node:fs";
 import { readdir, realpath, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
-import { dirname, extname, join, normalize, relative, resolve } from "node:path";
+import { delimiter, dirname, extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { StepPermissionPresetId } from "@step-harness/coding-agent";
 import {
@@ -16,6 +16,7 @@ import {
 	getStepLoginStatus,
 	MigrationService,
 	openBrowser,
+	PluginInstallError,
 	resolveStepAgentDir,
 	resolveStepCodeVersion,
 	resolveStepConfigRoot,
@@ -62,6 +63,7 @@ import {
 	testProviderModel,
 } from "./model-providers.ts";
 import { openFolder } from "./open-folder.ts";
+import { importPluginArchive, installCuratedPlugin, previewCuratedPlugin } from "./plugin-market.ts";
 import {
 	classifyAttachment,
 	defaultWorkspace,
@@ -84,16 +86,19 @@ import {
 	listMcpServers,
 	listPlugins,
 	listSkills,
+	prepareInstalledPluginDependency,
 	removeMarketplace,
 	removePlugin,
 	SettingsError,
 	saveMcpServer,
 	saveMcpServerPatch,
 	setMcpServerEnabled,
+	setPluginEnabled,
 	setSkillEnabled,
 	updateMarketplace,
 } from "./settings.ts";
 import { SitePreviewServer } from "./site-preview.ts";
+import { importSkillArchive, installCuratedSkill, previewCuratedSkill } from "./skill-market.ts";
 import { SseSessionWriter } from "./sse-writer.ts";
 import { WebTerminals } from "./terminal.ts";
 import { terminalRoute } from "./terminal-routes.ts";
@@ -139,6 +144,10 @@ const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
 	".ico": "image/x-icon",
 	".woff2": "font/woff2",
 };
+const managedCliBin = join(resolveStepAgentDir(), "bin");
+const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+const hostPath = (process.env[pathKey] ?? "").split(delimiter).filter(Boolean);
+if (!hostPath.includes(managedCliBin)) process.env[pathKey] = [managedCliBin, ...hostPath].join(delimiter);
 const port = Number.parseInt(process.env.STEPCODE_WEB_PORT ?? "3077", 10);
 /** Where the launch link points: this host, or the Vite dev server in `pnpm web:watch`. */
 const launchPort = resolveLaunchPort(process.env, port);
@@ -263,9 +272,14 @@ function authorized(request: IncomingMessage): boolean {
 	return auth.authorize(cookie, request.headers.origin, typeof fetchSite === "string" ? fetchSite : undefined);
 }
 
-async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function body(request: IncomingMessage, maxBytes = Number.POSITIVE_INFINITY): Promise<Record<string, unknown>> {
 	let content = "";
-	for await (const chunk of request) content += String(chunk);
+	let bytes = 0;
+	for await (const chunk of request) {
+		bytes += Buffer.byteLength(chunk);
+		if (bytes > maxBytes) throw new PluginInstallError("Request body is too large", 413);
+		content += String(chunk);
+	}
 	if (!content) return {};
 	const value: unknown = JSON.parse(content);
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Request body must be an object");
@@ -609,7 +623,7 @@ async function settingsRoute(
 	response: ServerResponse,
 ): Promise<void> {
 	const [area, name, action] = parts;
-	const changesMcp = method !== "GET" && (area === "mcp" || area === "plugins" || area === "marketplaces");
+	let changesMcp = method !== "GET" && (area === "mcp" || area === "plugins" || area === "marketplaces");
 	try {
 		if (area === "mcp") {
 			if (!name && method === "GET") return json(response, 200, { servers: await listMcpServers() });
@@ -639,12 +653,35 @@ async function settingsRoute(
 			}
 		}
 		if (area === "plugins") {
+			if (name === "catalog" && action && method === "GET")
+				return json(response, 200, await previewCuratedPlugin(action));
+			if (name === "import" && !action && method === "POST") {
+				changesMcp = false;
+				const result = await importPluginArchive(await body(request, 45 * 1024 * 1024));
+				changesMcp = result.installed;
+				return json(response, result.installed ? 201 : 200, result);
+			}
 			if (!name && method === "GET") return json(response, 200, await listPlugins());
 			if (!name && method === "POST") {
-				const input = await body(request);
+				const input = await body(request, 64 * 1024);
+				if (typeof input.catalogId === "string")
+					return json(
+						response,
+						201,
+						await installCuratedPlugin(input.catalogId, input.fingerprint, input.confirmed),
+					);
 				if (typeof input.name !== "string" || !input.name.trim()) return error(response, 400, "name is required");
 				const marketplace = typeof input.marketplace === "string" ? input.marketplace : undefined;
 				return json(response, 201, await installPlugin(input.name.trim(), marketplace));
+			}
+			if (name && action === "prepare" && method === "POST")
+				return json(response, 200, { dependency: await prepareInstalledPluginDependency(name) });
+			if (name && !action && method === "PATCH") {
+				const input = await body(request);
+				if (typeof input.enabled !== "boolean" || Object.keys(input).some((key) => key !== "enabled"))
+					return error(response, 400, "enabled must be a boolean");
+				await setPluginEnabled(name, input.enabled);
+				return json(response, 200, { ok: true });
 			}
 			if (name && !action && method === "DELETE") {
 				await removePlugin(name);
@@ -667,9 +704,21 @@ async function settingsRoute(
 			}
 		}
 		if (area === "skills") {
+			if (name === "catalog" && action && method === "GET")
+				return json(response, 200, await previewCuratedSkill(action));
+			if (name === "upload" && !action && method === "POST") {
+				const result = await importSkillArchive(await body(request, 45 * 1024 * 1024));
+				return json(response, result.installed ? 201 : 200, result);
+			}
 			if (!name && method === "GET") return json(response, 200, { skills: await listSkills() });
 			if (!name && method === "POST") {
-				const input = await body(request);
+				const input = await body(request, 64 * 1024);
+				if (typeof input.catalogId === "string")
+					return json(
+						response,
+						201,
+						await installCuratedSkill(input.catalogId, input.fingerprint, input.confirmed),
+					);
 				await createSkill({ name: input.name, description: input.description, instructions: input.instructions });
 				return json(response, 201, { ok: true });
 			}
@@ -729,7 +778,8 @@ async function settingsRoute(
 		}
 		return error(response, 404, "Not found");
 	} catch (caught) {
-		if (caught instanceof SettingsError) return error(response, caught.status, caught.message);
+		if (caught instanceof SettingsError || caught instanceof PluginInstallError)
+			return error(response, caught.status, caught.message);
 		throw caught;
 	} finally {
 		// Connect what was added or enabled now; what was removed closes once no chat uses it.

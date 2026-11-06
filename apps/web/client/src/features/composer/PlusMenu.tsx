@@ -19,16 +19,17 @@ import { type ModeId, useAppStore } from "../../state/store";
 import { Icon, IconButton, type IconName, Popover } from "../../ui";
 import { ControlOption, PopoverGroupLabel } from "./ControlOption";
 import { PICKABLE_MODES } from "./modes";
-import { PluginsPanel, SessionsPanel, SkillsPanel } from "./PlusSubPanels";
+import { ConnectorsPanel, PluginsPanel, SessionsPanel, SkillsPanel } from "./PlusSubPanels";
 import type { ComposerMenuProps } from "./PolicyMenu";
 
 /** The 更多 entries that carry a secondary panel. */
-type SubKey = "plugins" | "skills" | "sessions";
+type SubKey = "plugins" | "skills" | "connectors" | "sessions";
 
 const SUB_ENTRIES: ReadonlyArray<{ key: SubKey; labelKey: string; icon: IconName }> = [
 	{ key: "plugins", labelKey: "settingsPlugins", icon: "puzzle" },
 	// The wrench is the skill mark everywhere: the panel's rows, the staged chip and the sent badge.
 	{ key: "skills", labelKey: "slashSkills", icon: "wrench" },
+	{ key: "connectors", labelKey: "extensionReference.connectors", icon: "mcp" },
 	{ key: "sessions", labelKey: "otherSessionContext", icon: "conversation" },
 ];
 
@@ -39,6 +40,7 @@ export interface PlusMenuProps extends ComposerMenuProps {
 	readonly onPickSkill: (name: string) => void;
 	/** Stages a plugin pick in the composer; `installed` picks ride as a note (see `Composer`). */
 	readonly onPickPlugin: (name: string, installed: boolean) => void;
+	readonly onPickConnector: (name: string) => void;
 	/** Packages the picked session's context into `#prompt` (see `Composer`). */
 	readonly onPickSession: (id: string) => void;
 	/** Stages files picked through `#attachInput` the same way as pasted or dropped ones (see `PromptInput`). */
@@ -52,6 +54,7 @@ export function PlusMenu({
 	onPickMode,
 	onPickSkill,
 	onPickPlugin,
+	onPickConnector,
 	onPickSession,
 	onFiles: stageFiles,
 }: PlusMenuProps) {
@@ -162,6 +165,7 @@ export function PlusMenu({
 							{SUB_ENTRIES.map((entry) => (
 								<button
 									key={entry.key}
+									data-plus-sub={entry.key}
 									type="button"
 									className={sub === entry.key ? "plus-row plus-row--open" : "plus-row"}
 									role="option"
@@ -188,6 +192,7 @@ export function PlusMenu({
 								>
 									{sub === "plugins" ? (
 										<PluginsPanel
+											onManage={closeAll}
 											onPick={(name, installed) => {
 												onPickPlugin(name, installed);
 												closeAll();
@@ -196,8 +201,18 @@ export function PlusMenu({
 									) : null}
 									{sub === "skills" ? (
 										<SkillsPanel
+											onManage={closeAll}
 											onPick={(name) => {
 												onPickSkill(name);
+												closeAll();
+											}}
+										/>
+									) : null}
+									{sub === "connectors" ? (
+										<ConnectorsPanel
+											onManage={closeAll}
+											onPick={(name) => {
+												onPickConnector(name);
 												closeAll();
 											}}
 										/>

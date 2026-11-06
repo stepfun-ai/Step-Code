@@ -1877,11 +1877,14 @@ paths:
                       type: object
                       properties:
                         id: { type: string }
+                        enabled: { type: boolean }
                         name: { type: string }
                         version: { type: string }
                         description: { type: string }
                         mcpServers: { type: array, items: { type: string } }
+                        origin: { $ref: "#/components/schemas/ExtensionOrigin" }
                         warnings: { type: array, items: { type: string } }
+                        dependency: { $ref: '#/components/schemas/PluginDependencyState' }
                   available:
                     type: array
                     items:
@@ -1890,28 +1893,120 @@ paths:
                         name: { type: string }
                         description: { type: string }
                         marketplace: { type: string }
+                        origin: { $ref: "#/components/schemas/ExtensionOrigin" }
                         installed: { type: boolean }
                   marketplaces:
                     type: array
                     items: { $ref: "#/components/schemas/SettingsMarketplace" }
                   warnings: { type: array, items: { type: string } }
     post:
-      description: Install a marketplace plugin into the user plugin root.
+      description: Install a configured marketplace plugin by name, or a bundled curated plugin after fingerprint-bound validation. Curated installations attempt known CLI preparation and return readiness/first-use setup information; unknown declarations cannot execute arbitrary installers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [name]
+                  properties:
+                    name: { type: string }
+                    marketplace: { type: string }
+                - type: object
+                  required: [catalogId, fingerprint, confirmed]
+                  properties:
+                    catalogId: { type: string }
+                    fingerprint: { type: string, pattern: '^[a-f0-9]{64}$' }
+                    confirmed: { type: boolean, enum: [true] }
+      responses:
+        "201": { description: Installed, with warnings; curated installs return PluginInstallPreview }
+        "400": { description: Invalid plugin payload }
+        "404": { description: No such marketplace plugin }
+        "409": { description: Consent changed or plugin already installed }
+  /api/v1/settings/plugins/catalog/{catalogId}:
+    get:
+      description: Preview bundled plugin metadata without installing, connecting MCP or reading credentials.
+      parameters:
+        - { name: catalogId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Content-bound installation preview
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PluginInstallPreview' }
+        "404": { description: Plugin not in bundled catalog }
+  /api/v1/settings/plugins/import:
+    post:
+      description: >-
+        Validate a base64 ZIP (maximum 32 MiB compressed, 64 MiB expanded, 6000 entries).
+        Supports one flat or wrapped Step/Claude plugin, stored or deflated files; rejects links,
+        traversal, duplicate names, encryption and ZIP64. Without confirmed, returns a read-only
+        preview. Installation requires confirmed true and the matching preview fingerprint.
+        Preview never reconciles MCP; successful installation does.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [name]
+              required: [data]
               properties:
-                name: { type: string }
-                marketplace: { type: string }
+                data: { type: string, description: Canonical base64 ZIP bytes }
+                fingerprint: { type: string }
+                confirmed: { type: boolean, default: false }
       responses:
-        "201": { description: Installed, with the installer's warnings }
-        "404": { description: No such marketplace plugin }
-        "409": { description: Already installed, or the copy failed }
+        "200":
+          description: Preview only
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  preview: { $ref: '#/components/schemas/PluginInstallPreview' }
+                  installed: { type: boolean }
+        "201": { description: Installed, same envelope with installed true }
+        "400": { description: Invalid ZIP or plugin manifest/contributions }
+        "409": { description: Changed consent, duplicate or concurrent install }
+        "413": { description: Request exceeds body size limit }
+  /api/v1/settings/plugins/{id}/prepare:
+    post:
+      description: >-
+        Prepare the declared CLI of an existing user plugin. Reuses existing known CLIs or
+        attempts a fixed trusted private npm installation; never executes installer commands
+        from a manifest, reads auth state or grants credentials. Returns setup_required with
+        a safe reason when unsupported, unavailable or verification fails.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: CLI preparation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dependency: { $ref: '#/components/schemas/PluginDependencyState' }
+        "404": { description: User plugin does not exist }
   /api/v1/settings/plugins/{id}:
+    patch:
+      description: Enable or disable an installed plugin without uninstalling it. Gates its MCP servers, skills and commands; skill/command changes apply to new or reloaded sessions.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200": { description: Updated }
+        "400": { description: Invalid enabled value }
+        "404": { description: Plugin is not installed }
+        "409": { description: Existing plugin configuration is invalid }
     delete:
       description: Uninstall a user plugin by its manifest id.
       parameters:
@@ -1970,22 +2065,30 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/SettingsSkill" }
     post:
-      description: Create `SKILL.md` in `<agentDir>/skills/<name>`.
+      description: Create a skill manually, or install a bundled skill after fingerprint-bound consent.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [name, description]
-              properties:
-                name: { type: string }
-                description: { type: string }
-                instructions: { type: string }
+              oneOf:
+                - type: object
+                  required: [name, description]
+                  properties:
+                    name: { type: string }
+                    description: { type: string }
+                    instructions: { type: string }
+                - type: object
+                  required: [catalogId, fingerprint, confirmed]
+                  properties:
+                    catalogId: { type: string }
+                    fingerprint: { type: string, pattern: '^[a-f0-9]{64}$' }
+                    confirmed: { type: boolean, enum: [true] }
       responses:
-        "201": { description: Created }
-        "400": { description: Invalid name, or a missing description }
-        "409": { description: A skill with that name already exists }
+        "201": { description: Created or installed; catalog installation returns PluginInstallPreview }
+        "400": { description: Invalid skill metadata }
+        "404": { description: No such bundled skill }
+        "409": { description: Existing skill or changed consent }
     patch:
       description: >-
         Turn a user skill on or off by writing a `+path` / `-path` entry into the global `skills` setting.
@@ -2012,6 +2115,53 @@ paths:
         "200": { description: Deleted }
         "403": { description: Outside StepCode's own skill folders }
         "404": { description: Not a user skill }
+  /api/v1/settings/skills/catalog/{catalogId}:
+    get:
+      description: Preview a bundled skill without writing files, executing scripts or reading credentials.
+      parameters:
+        - { name: catalogId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Content-bound skill preview; uses the shared resource preview shape
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PluginInstallPreview' }
+        "404": { description: Skill not in current catalog }
+  /api/v1/settings/skills/upload:
+    post:
+      description: >-
+        Validate a canonical base64 SKILL.md or ZIP/.skill package. The root must contain
+        a valid SKILL.md with name and description. Limits are 32 MiB upload, 128 MiB expanded,
+        16000 archive entries, and 512 KiB root SKILL.md. ZIP paths/records/CRC are checked;
+        links, traversal, duplicates, encryption and ZIP64 are rejected. First request previews
+        only; confirmed true plus matching fingerprint publishes to user skills atomically.
+        Does not execute scripts or start MCP. New or reloaded sessions load the skill.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data, format]
+              properties:
+                data: { type: string, description: Canonical base64 file bytes }
+                format: { type: string, enum: [markdown, zip] }
+                confirmed: { type: boolean, default: false }
+                fingerprint: { type: string }
+      responses:
+        "200":
+          description: Preview only
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  preview: { $ref: '#/components/schemas/PluginInstallPreview' }
+                  installed: { type: boolean }
+        "201": { description: Installed, same envelope with installed true }
+        "400": { description: Invalid archive or skill metadata }
+        "409": { description: Conflict or changed consent }
+        "413": { description: Request body too large }
   /api/v1/settings/skills/import:
     post:
       description: Copy a local folder containing `SKILL.md` into the user skill folder.
@@ -2565,6 +2715,35 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/DesktopOnboardingError" }
   schemas:
+    PluginInstallPreview:
+      type: object
+      required: [id, name, fingerprint, skills, commands, mcpServers, requiresEnv, warnings]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        fingerprint: { type: string, pattern: '^[a-f0-9]{64}$' }
+        skills: { type: array, items: { type: string } }
+        commands: { type: array, items: { type: string } }
+        mcpServers: { type: array, items: { type: string } }
+        requiresEnv: { type: array, items: { type: string } }
+        provisionCommand: { type: string }
+        dependency: { $ref: '#/components/schemas/PluginDependencyState' }
+        warnings: { type: array, items: { type: string } }
+    PluginDependencyState:
+      type: object
+      required: [command, status, firstUseConfiguration]
+      properties:
+        command: { type: string }
+        status: { type: string, enum: [ready, installed, setup_required] }
+        reason:
+          type: string
+          enum: [unsupported, missing, platform, npm_missing, install_failed, timeout, unsafe_installer, verification_failed, conflict]
+        setupCommand: { type: string, description: Fixed first-use auth command; no credential values }
+        firstUseConfiguration: { type: boolean, description: Setup guidance, not an auth-state inspection }
+    ExtensionOrigin:
+      type: string
+      enum: [market, custom, stepcode, plugin]
+      description: Source grouping only, not a safety or permission verdict. Unmatched resources are custom; StepCode means built-in resources, not AI-generated ones.
     CompletedSubagentResponse:
       type: object
       required: [laneId, agent, task, taskIndex, sessionId, timestamp, output]
@@ -3414,12 +3593,24 @@ components:
         status: { type: string, enum: [connecting, connected, failed, disabled] }
         toolCount: { type: integer }
         error: { type: string, description: Generic safe connection diagnostic }
+        pluginEnabled: { type: boolean, description: Owning plugin gate; false prevents connector reactivation until the plugin is enabled }
+        origin: { $ref: "#/components/schemas/ExtensionOrigin" }
     SettingsMarketplace:
       type: object
       properties:
         name: { type: string }
         kind: { type: string, enum: [builtin, git, local] }
         origin: { type: string, nullable: true }
+    SkillInstallation:
+      type: object
+      description: Local source receipt matched to current SKILL.md. Display only, not a safety or permission verdict.
+      required: [source, registryId, sourceUrl, version, skillSha256]
+      properties:
+        source: { type: string, enum: [skillhub] }
+        registryId: { type: string }
+        sourceUrl: { type: string, format: uri }
+        version: { type: string }
+        skillSha256: { type: string, pattern: "^[a-f0-9]{64}$" }
     SettingsSkill:
       type: object
       properties:
@@ -3427,6 +3618,9 @@ components:
         name: { type: string }
         description: { type: string }
         source: { type: string, enum: [user, plugin] }
+        origin: { $ref: "#/components/schemas/ExtensionOrigin" }
+        installation: { $ref: "#/components/schemas/SkillInstallation" }
+        catalogId: { type: string, description: Present only when actual installed resources match a bundled skill }
         pluginName: { type: string }
         location: { type: string, description: Display path, with the home directory shortened to `~` }
         enabled: { type: boolean }

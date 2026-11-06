@@ -833,6 +833,28 @@ form:has(#prompt:empty):not(:has(.attachment-chip)) #sendButton:not(:disabled) {
 .slash-item.active {
 	background: var(--selected);
 }
+.slash-reference-shortcuts {
+	display: flex;
+	gap: 8px;
+	padding: 8px;
+	border-bottom: 1px solid var(--line);
+}
+.slash-reference-shortcuts button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 10px;
+	border-radius: var(--radius-control);
+	background: var(--surface-soft);
+	color: var(--ink-2);
+	font-size: 12px;
+}
+.slash-reference-shortcuts button:not(:disabled):hover { background: var(--hover); color: var(--ink); }
+.slash-reference-shortcuts span { color: var(--ink-3); font-size: 11px; }
+.slash-item.disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
 .slash-item > .icon:first-child {
 	flex: none;
 	color: var(--ink);

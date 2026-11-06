@@ -10,11 +10,12 @@
 	"scripts": {
 		"dev": "tsx --tsconfig ../../tsconfig.json src/server.ts",
 		"dev:client": "vite",
-		"build": "shx rm -rf dist && tsgo -p tsconfig.json && vite build && shx cp openapi.yaml dist/openapi.yaml",
+		"build": "shx rm -rf dist && tsgo -p tsconfig.json && vite build && shx cp openapi.yaml dist/openapi.yaml && node scripts/copy-market-payload.mjs",
 		"build:client": "vite build",
 		"test": "tsx --tsconfig ../../tsconfig.json --test test/*.test.ts",
 		"test:e2e": "vite build && node --test test/e2e/*.e2e.mjs",
-		"typecheck": "tsgo -p tsconfig.json --noEmit && tsgo -p tsconfig.client.json --noEmit"
+		"typecheck": "tsgo -p tsconfig.json --noEmit && tsgo -p tsconfig.client.json --noEmit",
+		"walkthrough": "node scripts/market-walkthrough.mjs"
 	},
 	"dependencies": {
 		"@fontsource-variable/geist": "5.3.0",

@@ -37,6 +37,7 @@ import type {
 	UploadedFile,
 } from "../../state/types";
 import { openSettings } from "../settings/actions";
+import { composerDraft } from "./drafts";
 import { modelConfigurationRequired } from "./model-readiness";
 import { draftModelSource } from "./models";
 import { commandLeadIcon, MODES, modeFromCommand } from "./modes";
@@ -423,11 +424,34 @@ export function applyLeadingCommand(editor: HTMLElement, stageMode = true): void
  * one), `note` picks ride at its tail.
  */
 export interface StagedPick {
-	readonly kind: "skill" | "plugin";
+	readonly kind: "skill" | "plugin" | "connector";
 	readonly name: string;
-	readonly icon: "wrench" | "puzzle";
+	readonly icon: "wrench" | "puzzle" | "mcp";
 	readonly prefix?: string;
 	readonly note?: string;
+}
+
+/** Seed a fresh main draft through the same staged references used by the plus picker. */
+export function seedExtensionReference(kind: StagedPick["kind"], name: string): void {
+	const draft = composerDraft(getState().composerDraftId);
+	const pick: StagedPick =
+		kind === "skill"
+			? { kind, name, icon: "wrench", prefix: `/skill:${name}` }
+			: kind === "connector"
+				? connectorPick(name)
+				: { kind, name, icon: "puzzle", note: `（使用插件「${name}」提供的 MCP 服务器与技能完成本次任务。）` };
+	draft.stagedPicks = [pick];
+	draft.refresh?.();
+	draft.editor?.focus();
+}
+
+export function connectorPick(name: string): StagedPick {
+	return {
+		kind: "connector",
+		name,
+		icon: "mcp",
+		note: t("extensionReference.connectorNote", { name: JSON.stringify(name) }),
+	};
 }
 
 /**

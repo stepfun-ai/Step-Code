@@ -10,8 +10,43 @@ import { slashGroups, slashSections, slashTokenAt } from "../client/src/features
 import type { TranslateFn } from "../client/src/i18n/index.ts";
 
 const t = ((key: string) => key) as TranslateFn;
-const LABELS = { commands: "命令", prompts: "插件命令", skills: "技能" };
+const LABELS = { commands: "命令", prompts: "插件命令", skills: "技能", plugins: "插件", connectors: "连接器" };
 const SKILLS = [{ name: "pdf", description: "PDF tools" }];
+
+const REFERENCES = {
+	plugins: [{ id: "gh-plugin", name: "GitHub", description: "Repository tools", mcpServers: [], warnings: [] }],
+	connectors: [
+		{ name: "git-server", source: "user", transport: "http", enabled: true, status: "connected" },
+		{ name: "off-server", source: "user", transport: "stdio", enabled: false, status: "disabled" },
+	],
+} as const;
+
+test("slash references include installed plugins and connectors in continuous groups", () => {
+	const groups = slashGroups("", SKILLS, t, [], REFERENCES);
+	const sections = slashSections(groups, LABELS);
+	assert.deepEqual(sections.map((section) => section.id), ["commands", "plugins", "skills", "connectors"]);
+	assert.equal(groups.plugins[0].kind, "plugin");
+	assert.equal(groups.connectors[0].kind, "connector");
+	assert.equal(groups.connectors.find((item) => item.key === "off-server")?.disabled, true);
+	let offset = 0;for (const section of sections) { assert.equal(section.offset, offset);offset += section.items.length; }
+});
+
+test("disabled plugins cannot be selected as slash references", () => {
+	const groups = slashGroups("", SKILLS, t, [], { plugins: REFERENCES.plugins.map((plugin) => ({ ...plugin, enabled: false })) });
+	assert.deepEqual(groups.plugins, []);
+});
+
+test("resource prefixes search only the requested reference kind", () => {
+	const plugin = slashGroups("plugin:github", SKILLS, t, [], REFERENCES);
+	assert.equal(plugin.plugins[0]?.key, "gh-plugin");
+	assert.equal(plugin.commands.length + plugin.skills.length + plugin.connectors.length, 0);
+	const connector = slashGroups("connector:git", SKILLS, t, [], REFERENCES);
+	assert.equal(connector.connectors[0]?.key, "git-server");
+	assert.equal(connector.commands.length + connector.skills.length + connector.plugins.length, 0);
+	const skill = slashGroups("skill:pdf", SKILLS, t, [], REFERENCES);
+	assert.equal(skill.skills[0]?.key, "pdf");
+	assert.equal(skill.commands.length + skill.plugins.length + skill.connectors.length, 0);
+});
 
 test("with no prompt commands the group is not rendered", () => {
 	const sections = slashSections(slashGroups("", SKILLS, t, []), LABELS);

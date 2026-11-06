@@ -13,6 +13,7 @@ import type {
 	DirectoryListing,
 	DraftModels,
 	LoginReport,
+	McpServerConfig,
 	NoticeItem,
 	PlanReview,
 	PolicyPreset,
@@ -159,7 +160,14 @@ export type SettingsPage = "general" | "account" | "appearance" | "models" | "pl
  * creates a server; `json` opens it on the JSON tab (the "import" entry).
  */
 export type SettingsEditor =
-	| { readonly kind: "mcp"; readonly name?: string; readonly json?: boolean }
+	| {
+			readonly kind: "mcp";
+			readonly name?: string;
+			readonly json?: boolean;
+			readonly initialName?: string;
+			readonly initialConfig?: McpServerConfig;
+			readonly evidence?: string;
+	  }
 	| { readonly kind: "model"; readonly id?: string }
 	| { readonly kind: "skill" };
 
@@ -287,6 +295,8 @@ export interface ToastAction {
 
 export interface ToastState {
 	readonly message: string;
+	/** Bold headline above the message; legacy toasts carry none. */
+	readonly title?: string;
 	readonly tone: "danger" | "neutral" | "success";
 	/** Distinguishes two identical consecutive messages. */
 	readonly seq: number;

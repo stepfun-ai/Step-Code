@@ -927,11 +927,15 @@ export interface McpServerConfig {
 	readonly enabled?: boolean;
 }
 
+export type ExtensionOrigin = "market" | "custom" | "stepcode" | "plugin";
+
 /** `GET /api/v1/settings/mcp` entry (src/settings.ts `WebMcpServer`). */
 export interface SettingsMcpServer {
 	readonly name: string;
 	readonly source: "user" | "plugin";
+	readonly origin?: ExtensionOrigin;
 	readonly pluginName?: string;
+	readonly pluginEnabled?: boolean;
 	readonly transport: "stdio" | "http";
 	readonly enabled: boolean;
 	readonly config?: McpServerConfig;
@@ -944,10 +948,44 @@ export interface SettingsMcpServer {
 	readonly error?: string;
 }
 
+export interface SettingsPluginDependency {
+	readonly command: string;
+	readonly status: "ready" | "installed" | "setup_required";
+	readonly reason?:
+		| "unsupported"
+		| "missing"
+		| "platform"
+		| "npm_missing"
+		| "install_failed"
+		| "timeout"
+		| "unsafe_installer"
+		| "verification_failed"
+		| "conflict";
+	readonly setupCommand?: string;
+	readonly firstUseConfiguration: boolean;
+}
+
+/** Plugin import/catalog preview: safe metadata plus content fingerprint for explicit consent. */
+export interface SettingsPluginInstallPreview {
+	readonly id: string;
+	readonly name: string;
+	readonly fingerprint: string;
+	readonly skills: readonly string[];
+	readonly commands: readonly string[];
+	readonly mcpServers: readonly string[];
+	readonly requiresEnv: readonly string[];
+	readonly provisionCommand?: string;
+	readonly dependency?: SettingsPluginDependency;
+	readonly warnings: readonly string[];
+}
+
 /** `GET /api/v1/settings/plugins` (src/settings.ts `WebPluginCatalog`). */
 export interface SettingsPluginCatalog {
 	readonly installed: ReadonlyArray<{
+		readonly dependency?: SettingsPluginDependency;
 		readonly id: string;
+		readonly enabled?: boolean;
+		readonly origin?: ExtensionOrigin;
 		readonly name: string;
 		readonly version?: string;
 		readonly description?: string;
@@ -956,6 +994,7 @@ export interface SettingsPluginCatalog {
 	}>;
 	readonly available: ReadonlyArray<{
 		readonly name: string;
+		readonly origin?: ExtensionOrigin;
 		readonly description?: string;
 		readonly marketplace: string;
 		readonly installed: boolean;
@@ -997,12 +1036,24 @@ export interface DiscoveredModelEntry {
 	readonly maxTokens?: number;
 }
 
+/** Display provenance; not a permission or safety decision. */
+export interface SkillInstallation {
+	readonly source: "skillhub";
+	readonly registryId: string;
+	readonly sourceUrl: string;
+	readonly version: string;
+	readonly skillSha256: string;
+}
+
 /** `GET /api/v1/settings/skills` entry (src/settings.ts `WebSkillEntry`). */
 export interface SettingsSkill {
 	readonly id: string;
 	readonly name: string;
 	readonly description: string;
 	readonly source: "user" | "plugin";
+	readonly origin?: ExtensionOrigin;
+	readonly installation?: SkillInstallation;
+	readonly catalogId?: string;
 	readonly pluginName?: string;
 	readonly location: string;
 	readonly enabled: boolean;

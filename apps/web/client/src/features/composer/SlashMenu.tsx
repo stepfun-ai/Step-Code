@@ -1,8 +1,7 @@
 /**
  * The composer's slash menu. Typing `/word` as the whole prompt — or after the
- * command chips already staged, since commands stack — lists, in two
- * groups, the commands and the skills that fuzzy-match it, scored like the
- * CLI's autocomplete:
+ * command chips already staged, since commands stack — lists command,
+ * template, plugin, skill and connector groups that fuzzy-match the query.
  *
  * - a command inserts `/<name> ` so the user can add arguments; the kernel
  *   runs it when the prompt is sent;
@@ -12,17 +11,35 @@
  *   project's prompt templates) inserts `/<name> `, which the kernel expands
  *   into the template when the prompt is sent;
  * - each skill inserts `/skill:<name> `, which the kernel expands into the
- *   skill's instructions when the prompt is sent.
+ *   skill's instructions when the prompt is sent;
+ * - installed plugins and configured connectors stage removable usage references,
+ *   never an implicit installation or authorization change.
  */
 
-import { Fragment, type ReactNode, type RefObject, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+	Fragment,
+	type ReactNode,
+	type RefObject,
+	useEffect,
+	useImperativeHandle,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import { useT } from "../../i18n";
 import { api, errorMessage, workspaceApi } from "../../lib/api";
 import { cx } from "../../lib/format";
 import { activeCwd } from "../../state/session";
 import { setUi, useAppStore } from "../../state/store";
-import type { McpServerStatus, WebPromptCommand, WebSkill } from "../../state/types";
+import type {
+	McpServerStatus,
+	SettingsMcpServer,
+	SettingsPluginCatalog,
+	WebPromptCommand,
+	WebSkill,
+} from "../../state/types";
 import { Icon, useDismiss } from "../../ui";
+import { extensionResourceSnapshot, subscribeExtensionResources } from "../settings/actions";
 import { matchText, type SlashItem, slashGroups, slashSections } from "./slash-groups";
 
 export { type SlashItem, slashQuery } from "./slash-groups";
@@ -51,35 +68,54 @@ function Highlighted({ text, query }: { readonly text: string; readonly query: s
 	return <span className="slash-item-title">{parts}</span>;
 }
 
-/** What the menu lists beyond its own commands: skills and prompt commands. */
+/** Session skills/templates plus the user's installed plugins and configured connectors. */
 interface SlashResources {
 	readonly skills: readonly WebSkill[];
 	readonly commands: readonly WebPromptCommand[];
+	readonly plugins: SettingsPluginCatalog["installed"];
+	readonly connectors: readonly SettingsMcpServer[];
+	readonly failed: boolean;
 }
 
-const EMPTY_RESOURCES: SlashResources = { skills: [], commands: [] };
+const EMPTY_RESOURCES: SlashResources = { skills: [], commands: [], plugins: [], connectors: [], failed: false };
 const resourceCache = new Map<string, SlashResources>();
 
 /** Skills and prompt commands of the current session, or of the draft's folder; cached per session / folder. */
 function useSlashResources(open: boolean): SlashResources {
 	const sessionId = useAppStore((state) => state.current?.id ?? "");
 	const cwd = useAppStore((state) => activeCwd(state));
-	const key = sessionId ? `session:${sessionId}` : `cwd:${cwd}`;
+	const revision = useSyncExternalStore(subscribeExtensionResources, extensionResourceSnapshot, () => 0);
+	const key = `${sessionId ? `session:${sessionId}` : `cwd:${cwd}`}:${revision}`;
 	const [resources, setResources] = useState<SlashResources>(() => resourceCache.get(key) ?? EMPTY_RESOURCES);
 	useEffect(() => {
 		if (!open) return;
 		setResources(resourceCache.get(key) ?? EMPTY_RESOURCES);
 		let live = true;
+		const controller = new AbortController();
+		const timeout = window.setTimeout(() => controller.abort(), 8000);
 		const path = sessionId ? `/api/v1/sessions/${sessionId}/skills` : workspaceApi(cwd, "/skills");
-		api<{ skills?: WebSkill[]; commands?: WebPromptCommand[] }>(path)
-			.then((data) => {
-				const next = { skills: data.skills ?? [], commands: data.commands ?? [] };
-				resourceCache.set(key, next);
-				if (live) setResources(next);
-			})
-			.catch(() => {});
+		void Promise.allSettled([
+			api<{ skills?: WebSkill[]; commands?: WebPromptCommand[] }>(path, { signal: controller.signal }),
+			api<SettingsPluginCatalog>("/api/v1/settings/plugins", { signal: controller.signal }),
+			api<{ servers?: SettingsMcpServer[] }>("/api/v1/settings/mcp", { signal: controller.signal }),
+		]).then(([skills, plugins, connectors]) => {
+			window.clearTimeout(timeout);
+			if (!live) return;
+			const previous = resourceCache.get(key) ?? EMPTY_RESOURCES;
+			const next: SlashResources = {
+				skills: skills.status === "fulfilled" ? (skills.value?.skills ?? []) : previous.skills,
+				commands: skills.status === "fulfilled" ? (skills.value?.commands ?? []) : previous.commands,
+				plugins: plugins.status === "fulfilled" ? (plugins.value?.installed ?? []) : previous.plugins,
+				connectors: connectors.status === "fulfilled" ? (connectors.value?.servers ?? []) : previous.connectors,
+				failed: [skills, plugins, connectors].some((result) => result.status === "rejected"),
+			};
+			resourceCache.set(key, next);
+			setResources(next);
+		});
 		return () => {
 			live = false;
+			window.clearTimeout(timeout);
+			controller.abort();
 		};
 	}, [open, key, sessionId, cwd]);
 	return resources;
@@ -183,18 +219,24 @@ export function SlashMenu({ handle, promptRef, query, onPick }: SlashMenuProps) 
 	const view = useAppStore((state) => state.ui.slashMenu);
 	const resources = useSlashResources(view === "commands");
 	const groups =
-		view === "commands" && query !== null ? slashGroups(query, resources.skills, t, resources.commands) : null;
+		view === "commands" && query !== null
+			? slashGroups(query, resources.skills, t, resources.commands, resources)
+			: null;
 	// Keyboard selection runs through every group as one list.
-	const items = groups ? [...groups.commands, ...groups.prompts, ...groups.skills] : [];
-	const [active, setActive] = useState(0);
+	const items = groups
+		? [...groups.commands, ...groups.prompts, ...groups.plugins, ...groups.skills, ...groups.connectors]
+		: [];
+	const [activeKey, setActiveKey] = useState<string | null>(null);
 	const listRef = useRef<HTMLDivElement>(null);
 	const rootRef = useRef<HTMLDivElement>(null);
-	const selected = Math.min(active, Math.max(0, items.length - 1));
+	const available = items.map((item, index) => ({ item, index })).filter(({ item }) => !item.disabled);
+	const matched = available.find(({ item }) => `${item.kind}:${item.key}` === activeKey);
+	const selected = matched?.index ?? available[0]?.index ?? 0;
 	const highlight = matchText(query ?? "");
 
 	// A new query starts from the best match.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the query is the trigger.
-	useEffect(() => setActive(0), [query]);
+	useEffect(() => setActiveKey(null), [query]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the selection is the trigger.
 	useEffect(() => {
 		listRef.current?.querySelector(".slash-item.active")?.scrollIntoView({ block: "nearest" });
@@ -207,20 +249,24 @@ export function SlashMenu({ handle, promptRef, query, onPick }: SlashMenuProps) 
 				if (view !== "commands" || !items.length) return false;
 				if (key === "ArrowDown" || key === "ArrowUp") {
 					const step = key === "ArrowDown" ? 1 : -1;
-					setActive((selected + step + items.length) % items.length);
+					if (available.length) {
+						const position = available.findIndex(({ index }) => index === selected);
+						const next = available[(position + step + available.length) % available.length].item;
+						setActiveKey(`${next.kind}:${next.key}`);
+					}
 					return true;
 				}
 				if (key === "Enter" || key === "Tab") {
-					onPick(items[selected]);
+					if (!items[selected].disabled) onPick(items[selected]);
 					return true;
 				}
 				return false;
 			},
 		}),
-		[view, items, selected, onPick],
+		[view, items, selected, available, onPick],
 	);
 
-	const open = view === "mcp" || (view === "commands" && items.length > 0);
+	const open = view === "mcp" || (view === "commands" && (items.length > 0 || resources.failed));
 	useDismiss({
 		enabled: view !== null,
 		insideRefs: [rootRef, promptRef],
@@ -232,16 +278,29 @@ export function SlashMenu({ handle, promptRef, query, onPick }: SlashMenuProps) 
 			key={`${item.kind}:${item.key}`}
 			role="option"
 			tabIndex={-1}
-			aria-selected={index === selected}
-			className={cx("slash-item", item.kind, index === selected && "active")}
-			onMouseEnter={() => setActive(index)}
+			aria-selected={index === selected && !item.disabled}
+			aria-disabled={item.disabled || undefined}
+			data-slash-kind={item.kind}
+			data-slash-key={item.key}
+			className={cx(
+				"slash-item",
+				item.kind,
+				index === selected && !item.disabled && "active",
+				item.disabled && "disabled",
+			)}
+			onMouseEnter={() => {
+				if (!item.disabled) setActiveKey(`${item.kind}:${item.key}`);
+			}}
 			// Keep focus in the prompt.
 			onMouseDown={(event) => event.preventDefault()}
-			onClick={() => onPick(item)}
+			onClick={() => {
+				if (!item.disabled) onPick(item);
+			}}
 			onKeyDown={() => {}}
 		>
 			{item.kind === "skill" ? <Icon name="cube" size="sm" /> : null}
-			{item.kind === "prompt" ? <Icon name="puzzle" size="sm" /> : null}
+			{item.kind === "prompt" || item.kind === "plugin" ? <Icon name="puzzle" size="sm" /> : null}
+			{item.kind === "connector" ? <Icon name="mcp" size="sm" /> : null}
 			<Highlighted text={item.title} query={highlight} />
 			<span className="slash-item-desc">{item.description}</span>
 			{item.kind === "mcp" ? <Icon className="slash-item-more" name="chevronRight" size="sm" /> : null}
@@ -249,7 +308,13 @@ export function SlashMenu({ handle, promptRef, query, onPick }: SlashMenuProps) 
 	);
 	// Groups with no items are not rendered: no heading over an empty list.
 	const sections = groups
-		? slashSections(groups, { commands: t("slashCommands"), prompts: t("slashPrompts"), skills: t("slashSkills") })
+		? slashSections(groups, {
+				commands: t("slashCommands"),
+				prompts: t("slashPrompts"),
+				skills: t("slashSkills"),
+				plugins: t("settingsPlugins"),
+				connectors: t("extensionReference.connectors"),
+			})
 		: [];
 
 	return (
@@ -257,16 +322,53 @@ export function SlashMenu({ handle, promptRef, query, onPick }: SlashMenuProps) 
 			{view === "mcp" ? (
 				<McpServers />
 			) : (
-				<div className="slash-list" role="listbox" aria-label={t("slashCommands")} ref={listRef}>
-					{sections.map((section) => (
-						<Fragment key={section.id}>
-							<div className="slash-group" role="presentation">
-								{section.label}
+				<>
+					<nav className="slash-reference-shortcuts" aria-label={t("extensionReference.shortcuts")}>
+						{(["plugins", "skills", "connectors"] as const).map((id) => {
+							const section = sections.find((section) => section.id === id);
+							const label =
+								id === "plugins"
+									? t("settingsPlugins")
+									: id === "skills"
+										? t("slashSkills")
+										: t("extensionReference.connectors");
+							return (
+								<button
+									type="button"
+									key={id}
+									data-slash-jump={id}
+									disabled={!section?.items.length}
+									onMouseDown={(event) => event.preventDefault()}
+									onClick={() => {
+										listRef.current
+											?.querySelector(`[data-slash-group="${id}"]`)
+											?.scrollIntoView({ block: "start" });
+										const first = section?.items.find((item) => !item.disabled);
+										if (first) setActiveKey(`${first.kind}:${first.key}`);
+									}}
+								>
+									{label}
+									<span>{section?.items.length ?? 0}</span>
+								</button>
+							);
+						})}
+					</nav>
+					<div className="slash-list" role="listbox" aria-label={t("slashCommands")} ref={listRef}>
+						{resources.failed ? (
+							<div className="slash-empty" role="alert">
+								{t("extensionReference.slashLoadFailed")}
 							</div>
-							{section.items.map((item, index) => renderItem(item, section.offset + index))}
-						</Fragment>
-					))}
-				</div>
+						) : null}
+						{sections.map((section) => (
+							<Fragment key={section.id}>
+								<div className="slash-group" role="presentation" data-slash-group={section.id}>
+									{section.label}
+								</div>
+								{section.items.map((item, index) => renderItem(item, section.offset + index))}
+							</Fragment>
+						))}
+					</div>
+				</>
 			)}
 		</div>
 	);

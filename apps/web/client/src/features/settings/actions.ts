@@ -4,10 +4,36 @@
  * lists themselves are fetched per page (see `useSettingsResource`).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { api, errorMessage } from "../../lib/api";
-import { refreshModelCatalog } from "../../state/session";
+import { activeCwd, refreshModelCatalog, startDraft } from "../../state/session";
 import { getState, type SettingsEditor, type SettingsPage, setUi } from "../../state/store";
+import { extensionResourceSnapshot, subscribeExtensionResources } from "./extension-removal";
+
+export {
+	canRemoveExtension,
+	type ExtensionRemoval,
+	extensionResourceSnapshot,
+	invalidateExtensionResources,
+	removeExtension,
+	subscribeExtensionResources,
+} from "./extension-removal";
+
+export const EXTENSION_CREATE_PROMPTS = {
+	plugins: "我想要创建一个新的插件，请引导我补充细节，并在信息完整后帮我创建和安装",
+	skills: "我想要创建一个新的技能，请引导我补充细节，并在信息完整后帮我创建和安装",
+} as const;
+
+export function createExtensionWithStepCode(kind: "plugins" | "skills"): void {
+	const seq = (getState().ui.promptDraftRequest?.seq ?? 0) + 1;
+	startDraft(activeCwd(), { listed: true });
+	setUi({
+		settingsPage: null,
+		settingsEditor: null,
+		settingsDialog: null,
+		promptDraftRequest: { text: EXTENSION_CREATE_PROMPTS[kind], seq },
+	});
+}
 
 export function openSettings(page: SettingsPage = "general"): void {
 	setUi({ settingsPage: page, settingsEditor: null, settingsDialog: null });
@@ -65,6 +91,11 @@ export interface SettingsResource<T> {
  * last good data on screen next to the error.
  */
 export function useSettingsResource<T>(path: string, active: boolean): SettingsResource<T> {
+	const extensionRevision = useSyncExternalStore(
+		subscribeExtensionResources,
+		() => (/^\/api\/v1\/settings\/(plugins|skills|mcp)(?:\/|\?|$)/.test(path) ? extensionResourceSnapshot() : 0),
+		() => 0,
+	);
 	const [data, setData] = useState<T>();
 	const [error, setError] = useState<string>();
 	const [loading, setLoading] = useState(false);
@@ -90,6 +121,6 @@ export function useSettingsResource<T>(path: string, active: boolean): SettingsR
 		return () => {
 			current = false;
 		};
-	}, [path, active, generation]);
+	}, [path, active, generation, extensionRevision]);
 	return { data, error, loading, reload };
 }

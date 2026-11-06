@@ -41,6 +41,7 @@ import {
 	type ContextPackage,
 	chooseMode,
 	clearModes,
+	connectorPick,
 	modePrefix,
 	packageSessionContext,
 	type StagedPick,
@@ -418,61 +419,6 @@ function ComposerInput({
 		[syncFileQuery, cwd],
 	);
 
-	const pickSlash = useCallback(
-		(item: SlashItem) => {
-			const editor = prompt.current;
-			if (!editor) return;
-			setQuery(null);
-			setPathQuery(null);
-			lastPathQuery.current = null;
-			setUi({ fileCompletionOpen: false });
-			// The `/word` being completed, at the caret; without one (a programmatic
-			// fill) the body as a whole was the query.
-			const token = promptSlashToken(editor);
-			/** Remove only the typed `/word`; true when the rest of the prompt keeps text. */
-			const dropTypedWord = (): boolean => {
-				if (!token || !removeSlashToken(editor, token)) clearPromptBody(editor);
-				return Boolean(promptBodyText(editor).trim());
-			};
-			if (item.kind === "mcp" || item.kind === "feedback") {
-				// A status view or the product's own feedback dialog: nothing is sent.
-				// What the user wrote around a mid-text `/mcp` stays; a prompt that was
-				// only the command is cleared, as before.
-				if (!dropTypedWord()) {
-					setPromptText(editor, "");
-					clearModes();
-				}
-				syncHasText();
-				setUi({ slashMenu: item.kind === "mcp" ? "mcp" : null });
-				if (item.kind === "feedback") openFeedback();
-			} else {
-				// The kernel runs `/<command> [args]`, expands a prompt command
-				// `/<name> [args]` into its template and `/skill:<name> [request]` into
-				// the skill's instructions on send — only at the start of the message.
-				// A `/word` typed mid-text after a leading command stays where it was
-				// typed (only the first command runs, so moving it would only reorder
-				// the words); otherwise the pick becomes the prompt's lead chip, and the
-				// text typed before it (as in `fix /commit`) becomes its arguments.
-				const command = item.kind === "skill" ? `/skill:${item.key}` : `/${item.key}`;
-				const placed = token ? stageCommandAtSlashToken(editor, token, command) : false;
-				if (!placed) {
-					clearPromptBody(editor);
-					stageCommandLead(editor, command);
-				}
-				syncHasText();
-				setUi({ slashMenu: null });
-				// The caret stays just after the chip it placed, where typing continues.
-				if (placed) {
-					editor.focus();
-					return;
-				}
-			}
-			editor.focus();
-			placeCaretAtEnd(editor);
-		},
-		[syncHasText],
-	);
-
 	/** True from Enter until the prompt is cleared, so a second Enter while uploads finish sends nothing. */
 	const sending = useRef(false);
 	const submit = async (steer: boolean) => {
@@ -647,6 +593,56 @@ function ComposerInput({
 		[stagePick],
 	);
 
+	const pickConnector = useCallback((name: string) => stagePick(connectorPick(name)), [stagePick]);
+
+	const pickSlash = useCallback(
+		(item: SlashItem) => {
+			const editor = prompt.current;
+			if (!editor || item.disabled) return;
+			setQuery(null);
+			setPathQuery(null);
+			lastPathQuery.current = null;
+			setUi({ fileCompletionOpen: false });
+			const token = promptSlashToken(editor);
+			const dropTypedWord = (): boolean => {
+				if (!token || !removeSlashToken(editor, token)) clearPromptBody(editor);
+				return Boolean(promptBodyText(editor).trim());
+			};
+			if (item.kind === "plugin" || item.kind === "connector") {
+				dropTypedWord();
+				if (item.kind === "plugin") pickPlugin(item.title, true);
+				else pickConnector(item.key);
+				syncHasText();
+				setUi({ slashMenu: null });
+			} else if (item.kind === "mcp" || item.kind === "feedback") {
+				if (!dropTypedWord()) {
+					setPromptText(editor, "");
+					clearModes();
+				}
+				syncHasText();
+				setUi({ slashMenu: item.kind === "mcp" ? "mcp" : null });
+				if (item.kind === "feedback") openFeedback();
+			} else {
+				// Keep existing leading and mid-text command/skill insertion semantics.
+				const command = item.kind === "skill" ? `/skill:${item.key}` : `/${item.key}`;
+				const placed = token ? stageCommandAtSlashToken(editor, token, command) : false;
+				if (!placed) {
+					clearPromptBody(editor);
+					stageCommandLead(editor, command);
+				}
+				syncHasText();
+				setUi({ slashMenu: null });
+				if (placed) {
+					editor.focus();
+					return;
+				}
+			}
+			editor.focus();
+			placeCaretAtEnd(editor);
+		},
+		[syncHasText, pickPlugin, pickConnector],
+	);
+
 	/** A session picked in `#plusMenu`: package its context into a chip above the prompt. */
 	const pickSession = useCallback(
 		async (id: string) => {
@@ -782,6 +778,7 @@ function ComposerInput({
 										? "attachment-chip pick-chip pick-chip--skill"
 										: "attachment-chip pick-chip"
 								}
+								data-pick-kind={pick.kind}
 								key={`${pick.kind}:${pick.name}`}
 								title={pick.note ?? pick.prefix ?? pick.name}
 							>
@@ -878,6 +875,7 @@ function ComposerInput({
 							onPickMode={pickMode}
 							onPickSkill={pickSkill}
 							onPickPlugin={pickPlugin}
+							onPickConnector={pickConnector}
 							onPickSession={(id) => void pickSession(id)}
 							onFiles={(picked) => stageFiles.current?.(picked)}
 						/>

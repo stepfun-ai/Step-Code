@@ -106,21 +106,33 @@ function isWebDestination(destination: string): boolean {
 	}
 }
 
-/** Local references are buttons, never browser navigation to a file URL. */
+const InteractiveDestinationContext = createContext(false);
+
+/** Local references are buttons; linked images inherit their outer destination without nesting controls. */
 function Destination({ destination, children }: { readonly destination: string; readonly children?: ReactNode }) {
 	const { localFiles } = useSettings();
+	const insideDestination = useContext(InteractiveDestinationContext);
+	if (insideDestination) return h(Fragment, null, children);
 	if (localFileReference(destination)) {
 		return localFiles
 			? h(
-					"button",
-					{ type: "button", className: "md-file-reference", "data-file-path": destination },
-					FILE_ICON,
-					children,
+					InteractiveDestinationContext.Provider,
+					{ value: true },
+					h(
+						"button",
+						{ type: "button", className: "md-file-reference", "data-file-path": destination },
+						FILE_ICON,
+						children,
+					),
 				)
 			: h(Fragment, null, children);
 	}
 	if (isWebDestination(destination)) {
-		return h("a", { href: destination, target: "_blank", rel: "noopener noreferrer" }, LINK_ICON, children);
+		return h(
+			InteractiveDestinationContext.Provider,
+			{ value: true },
+			h("a", { href: destination, target: "_blank", rel: "noopener noreferrer" }, LINK_ICON, children),
+		);
 	}
 	return h(Fragment, null, children);
 }

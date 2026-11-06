@@ -4,22 +4,21 @@
  * (`SKILL.md` from a form) and importing a local skill folder.
  */
 
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, useId, useRef, useState } from "react";
 import { useT } from "../../i18n";
 import { apiSend, errorMessage } from "../../lib/api";
 import { getDesktopBridge } from "../../platform/host";
-import { showError } from "../../state/session";
+import { showError, showNotice } from "../../state/session";
 import { useAppStore } from "../../state/store";
 import type { SettingsSkill } from "../../state/types";
 import { Icon, IconButton, Modal, SearchInput, Switch, Tooltip } from "../../ui";
-import {
-	closeSettingsDialog,
-	closeSettingsEditor,
-	openSettingsDialog,
-	openSettingsEditor,
-	useSettingsResource,
-} from "./actions";
-import { EmptyBox, PageHeader, ResourceState, SectionHeader, SettingsCard } from "./parts";
+import { chooseResourceDirectory } from "../workspace/actions";
+import { closeSettingsDialog, closeSettingsEditor, invalidateExtensionResources, useSettingsResource } from "./actions";
+import { ExtensionCreateMenu } from "./ExtensionCreateMenu";
+import { ExtensionRowMenu } from "./ExtensionRowMenu";
+import { ExtensionSourceGroups } from "./ExtensionSourceGroups";
+import { PageHeader, ResourceState } from "./parts";
+import { importSkillFile } from "./skill-actions";
 
 const SKILLS_PATH = "/api/v1/settings/skills";
 const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
@@ -34,13 +33,12 @@ const INSTRUCTIONS_PLACEHOLDER = `## When to use
 function SkillRow({
 	skill,
 	onToggle,
-	onDelete,
 }: {
 	readonly skill: SettingsSkill;
 	readonly onToggle: (enabled: boolean) => void;
-	readonly onDelete: () => void;
 }) {
 	const t = useT();
+	const [menuOpen, setMenuOpen] = useState(false);
 	return (
 		<div className="settings-list-row" data-skill={skill.name}>
 			<span className="settings-row-icon">
@@ -58,17 +56,13 @@ function SkillRow({
 				</div>
 			</div>
 			<div className="settings-list-actions">
-				{skill.deletable ? (
-					<Tooltip content={t("settingsDelete")}>
-						<IconButton
-							icon="trash"
-							iconSize="xs"
-							className="settings-icon-action danger"
-							aria-label={t("settingsDelete")}
-							onClick={onDelete}
-						/>
-					</Tooltip>
-				) : null}
+				<ExtensionRowMenu
+					resource={{ kind: "skills", skill }}
+					name={skill.name}
+					open={menuOpen}
+					onOpenChange={setMenuOpen}
+					triggerClassName="settings-icon-action"
+				/>
 				{skill.toggleable ? (
 					<Switch
 						checked={skill.enabled}
@@ -76,7 +70,15 @@ function SkillRow({
 						aria-label={t("settingsToggleNamed", { name: skill.name })}
 					/>
 				) : (
-					<span className="settings-readonly">{t("settingsAlwaysOn")}</span>
+					<span className="settings-readonly">
+						{t(
+							skill.source === "plugin"
+								? skill.enabled
+									? "settingsAlwaysOn"
+									: "extensionManagement.pluginDisabled"
+								: "extensionManagement.packageSkill",
+						)}
+					</span>
 				)}
 			</div>
 		</div>
@@ -99,7 +101,7 @@ function SkillEditor({ onDone }: { readonly onDone: (saved: boolean) => void }) 
 		setError(undefined);
 		try {
 			await apiSend(SKILLS_PATH, "POST", { name, description, instructions });
-			showError(t("settingsSkillCreated", { name }), false);
+			showNotice(t("extensionManagement.createSucceeded"), t("settingsSkillCreated", { name }), "success");
 			onDone(true);
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -191,10 +193,7 @@ function SkillEditor({ onDone }: { readonly onDone: (saved: boolean) => void }) 
  * chooser when it has one; undefined when neither exists or the pick is cancelled.
  */
 async function pickFolder(title: string): Promise<string | undefined> {
-	const bridge = getDesktopBridge();
-	if (bridge) return (await bridge.pickDirectory({ title })) ?? undefined;
-	const { path } = await apiSend<{ path?: string | null }>("/api/v1/workspaces/pick", "POST", { title });
-	return path ?? undefined;
+	return (await chooseResourceDirectory(title)) ?? undefined;
 }
 
 function ImportSkillDialog({ onImported }: { readonly onImported: () => void }) {
@@ -224,7 +223,11 @@ function ImportSkillDialog({ onImported }: { readonly onImported: () => void }) 
 		setError(undefined);
 		try {
 			const result = await apiSend<{ name: string }>(`${SKILLS_PATH}/import`, "POST", { path: path.trim() });
-			showError(t("settingsSkillImported", { name: result.name }), false);
+			showNotice(
+				t("extensionManagement.importSucceeded"),
+				t("settingsSkillImported", { name: result.name }),
+				"success",
+			);
 			setPath("");
 			closeSettingsDialog();
 			onImported();
@@ -288,21 +291,18 @@ export function SkillsPage() {
 	const editor = useAppStore((state) => state.ui.settingsEditor);
 	const resource = useSettingsResource<{ skills: SettingsSkill[] }>(SKILLS_PATH, true);
 	const [query, setQuery] = useState("");
+	const upload = useRef<HTMLInputElement>(null);
 	const needle = query.trim().toLowerCase();
 	const skills = (resource.data?.skills ?? []).filter(
 		(skill) => !needle || `${skill.name} ${skill.description}`.toLowerCase().includes(needle),
 	);
-	const mine = skills.filter((skill) => skill.source === "user");
-	const fromPlugins = skills.filter((skill) => skill.source === "plugin");
-	const groups = [...new Set(fromPlugins.map((skill) => skill.pluginName ?? ""))];
-	const enabledCount = mine.filter((skill) => skill.enabled).length;
 
 	if (editor?.kind === "skill") {
 		return (
 			<SkillEditor
 				onDone={(saved) => {
 					closeSettingsEditor();
-					if (saved) resource.reload();
+					if (saved) invalidateExtensionResources();
 				}}
 			/>
 		);
@@ -311,28 +311,14 @@ export function SkillsPage() {
 	const toggle = async (skill: SettingsSkill, enabled: boolean) => {
 		try {
 			await apiSend(SKILLS_PATH, "PATCH", { id: skill.id, enabled });
-		} catch (error) {
-			showError(errorMessage(error));
-		}
-		resource.reload();
-	};
-	const remove = async (skill: SettingsSkill) => {
-		if (!window.confirm(t("settingsSkillDeleteConfirm", { name: skill.name, location: skill.location }))) return;
-		try {
-			await apiSend(`${SKILLS_PATH}?${new URLSearchParams({ id: skill.id })}`, "DELETE");
-			showError(t("settingsSkillDeleted", { name: skill.name }), false);
+			invalidateExtensionResources();
 		} catch (error) {
 			showError(errorMessage(error));
 		}
 		resource.reload();
 	};
 	const row = (skill: SettingsSkill) => (
-		<SkillRow
-			key={skill.id}
-			skill={skill}
-			onToggle={(enabled) => void toggle(skill, enabled)}
-			onDelete={() => void remove(skill)}
-		/>
+		<SkillRow key={skill.id} skill={skill} onToggle={(enabled) => void toggle(skill, enabled)} />
 	);
 
 	return (
@@ -341,49 +327,31 @@ export function SkillsPage() {
 				title={t("settingsSkills")}
 				description={t("settingsSkillsDesc")}
 				actions={
-					<SearchInput
-						wrapperClassName="settings-search"
-						placeholder={t("settingsSkillsSearch")}
-						aria-label={t("settingsSkillsSearch")}
-						value={query}
-						onChange={(event) => setQuery(event.target.value)}
-					/>
+					<div className="extension-management-actions">
+						<Tooltip content={t("settingsRefresh")}>
+							<IconButton icon="refresh" aria-label={t("settingsRefresh")} onClick={resource.reload} />
+						</Tooltip>
+						<ExtensionCreateMenu kind="skills" onUpload={() => upload.current?.click()} />
+					</div>
 				}
 			/>
-			<SectionHeader
-				title={t("settingsSkillsMine")}
-				count={mine.length}
-				hint={
-					resource.data
-						? t("settingsSkillsEnabledCount", { enabled: enabledCount, total: mine.length })
-						: undefined
-				}
-				actions={
-					<>
-						<Tooltip content={t("settingsRefresh")}>
-							<IconButton
-								icon="refresh"
-								iconSize="xs"
-								className="settings-icon-action bordered"
-								aria-label={t("settingsRefresh")}
-								onClick={resource.reload}
-							/>
-						</Tooltip>
-						<button type="button" className="settings-btn" onClick={() => openSettingsDialog("skillImport")}>
-							<Icon name="download" size="xs" />
-							{t("settingsImport")}
-						</button>
-						<button
-							type="button"
-							className="settings-btn primary"
-							id="settingsSkillNew"
-							onClick={() => openSettingsEditor({ kind: "skill" })}
-						>
-							<Icon name="plus" size="xs" />
-							{t("settingsNew")}
-						</button>
-					</>
-				}
+			<SearchInput
+				wrapperClassName="settings-search extension-management-search"
+				placeholder={t("settingsSkillsSearch")}
+				aria-label={t("settingsSkillsSearch")}
+				value={query}
+				onChange={(event) => setQuery(event.target.value)}
+			/>
+			<input
+				hidden
+				type="file"
+				ref={upload}
+				accept=".zip,.skill,.md"
+				onChange={(event) => {
+					const file = event.currentTarget.files?.[0];
+					event.currentTarget.value = "";
+					void importSkillFile(file, t);
+				}}
 			/>
 			<ResourceState
 				loading={resource.loading}
@@ -392,42 +360,14 @@ export function SkillsPage() {
 				loadingLabel={t("settingsLoading")}
 			/>
 			{resource.data ? (
-				mine.length > 0 ? (
-					<SettingsCard className="settings-list">{mine.map(row)}</SettingsCard>
-				) : (
-					<EmptyBox
-						icon="wand"
-						title={needle ? t("settingsNoMatch") : t("settingsSkillsEmpty")}
-						hint={needle ? undefined : t("settingsSkillsEmptyHint")}
-						actions={
-							needle ? undefined : (
-								<button
-									type="button"
-									className="settings-btn primary"
-									onClick={() => openSettingsEditor({ kind: "skill" })}
-								>
-									<Icon name="plus" size="xs" />
-									{t("settingsSkillNew")}
-								</button>
-							)
-						}
-					/>
-				)
+				<ExtensionSourceGroups
+					items={skills}
+					origins={["market", "custom", "stepcode", "plugin"]}
+					originOf={(skill) => skill.origin ?? (skill.source === "plugin" ? "plugin" : "custom")}
+					renderItem={row}
+				/>
 			) : null}
-			{groups.map((group) => {
-				const members = fromPlugins.filter((skill) => (skill.pluginName ?? "") === group);
-				return (
-					<section key={group} className="settings-group">
-						<SectionHeader
-							title={t("settingsFromPlugin", { plugin: group || t("settingsPlugins") })}
-							count={members.length}
-							hint={t("settingsSkillsPluginHint")}
-						/>
-						<SettingsCard className="settings-list">{members.map(row)}</SettingsCard>
-					</section>
-				);
-			})}
-			<ImportSkillDialog onImported={resource.reload} />
+			<ImportSkillDialog onImported={invalidateExtensionResources} />
 		</>
 	);
 }

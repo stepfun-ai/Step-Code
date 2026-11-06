@@ -26,6 +26,7 @@ export interface StepMcpServerConfig {
 }
 
 export interface StepConfigDocument {
+	plugins?: Record<string, { enabled?: boolean }>;
 	mcp_servers?: Record<string, StepMcpServerConfig>;
 	[key: string]: unknown;
 }

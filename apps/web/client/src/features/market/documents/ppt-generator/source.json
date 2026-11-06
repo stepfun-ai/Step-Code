@@ -1,0 +1,12 @@
+{
+  "filename": "SKILL.md",
+  "version": "1.0.2",
+  "publisher": "user_3b34947d",
+  "sourceLabel": "SkillHub · @user_3b34947d/ppt-generator-skill",
+  "sourceUrl": "https://skillhub.cn/skills/user_3b34947d/ppt-generator-skill",
+  "registryId": "@user_3b34947d/ppt-generator-skill",
+  "skillSha256": "cf6dc641d042334d344038e683cb4a680c1ebd09dde949b9f9ff6dfa617ccf92",
+  "archiveSha256": "c83b8afbf87b1869f353635838515cbdd65908c9cc845d01e832076d00412d97",
+  "name": "ppt-generator",
+  "description": "智能 PPT 生成助手。根据用户描述的主题、行业、风格，自动生成漂亮的 PPT 文件。支持所有行业（商务、教育、科技、医疗、金融、创意等），支持中英文双语，支持用户提供的模板或 AI 自动配色。触发词：做PPT、生成PPT、制作幻灯片、make ppt、create presentation、帮我做个PPT。"
+}

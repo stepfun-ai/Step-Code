@@ -212,23 +212,32 @@ export function showError(message: string, danger = true): void {
 const TOAST_MS = 4200;
 const TOAST_ACTION_MS = 6000;
 
-/** A short, self-dismissing announcement. State the UI already draws says nothing else. */
-export function showToast(message: string, tone: ToastState["tone"] = "neutral", action?: ToastState["action"]): void {
+function presentToast(toast: Omit<ToastState, "seq">): void {
 	toastSeq += 1;
 	const seq = toastSeq;
-	setState({ toast: { message, tone, seq, ...(action ? { action } : {}) } });
+	setState({ toast: { ...toast, seq } });
 	if (toastTimer !== undefined) clearTimeout(toastTimer);
 	toastTimer = setTimeout(
 		() => {
 			if (getState().toast?.seq === seq) setState({ toast: null });
 		},
-		action ? TOAST_ACTION_MS : TOAST_MS,
+		toast.action ? TOAST_ACTION_MS : TOAST_MS,
 	);
 }
 
 /** Close the toast now (its action ran); a newer toast is left alone. */
 export function dismissToast(seq: number): void {
 	if (getState().toast?.seq === seq) setState({ toast: null });
+}
+
+/** A short, self-dismissing announcement. State the UI already draws says nothing else. */
+export function showToast(message: string, tone: ToastState["tone"] = "neutral", action?: ToastState["action"]): void {
+	presentToast({ message, tone, ...(action ? { action } : {}) });
+}
+
+/** A titled toast: a bold headline plus the detail, the way install and upload results are reported. */
+export function showNotice(title: string, message?: string, tone: ToastState["tone"] = "neutral"): void {
+	presentToast({ title, message: message ?? "", tone });
 }
 
 /**

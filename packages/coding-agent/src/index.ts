@@ -861,6 +861,18 @@ export {
 	type StepToolPermissionMode,
 	stepPermissionStateForPreset,
 } from "./step/permissions.ts";
+export { MAX_PLUGIN_ARCHIVE_BYTES, type PluginFile, PluginInstallError, readPluginZip } from "./step/plugin-archive.ts";
+export {
+	ensurePluginDependency,
+	inspectPluginDependency,
+	type PluginDependencyState,
+} from "./step/plugin-dependencies.ts";
+export {
+	installPreparedPlugin,
+	type PluginInstallPreview,
+	pluginPackageMatchesDirectory,
+	preparePluginPackage,
+} from "./step/plugin-install.ts";
 export {
 	addMarketplaceSource,
 	defaultMarketplaceRoots,
@@ -916,6 +928,7 @@ export {
 	type StepSettingsPaths,
 } from "./step/settings-manager.ts";
 export { ensureStepShellPath } from "./step/shell-path.ts";
+export { installPreparedSkill, prepareSkillPackage, SKILL_ARCHIVE_LIMITS } from "./step/skill-install.ts";
 export {
 	flushStderrDevLog,
 	installProcessStderrDevLogCapture,

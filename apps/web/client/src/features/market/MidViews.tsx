@@ -1,10 +1,10 @@
-import { useState } from "react";
 import { useT } from "../../i18n";
 import { cx } from "../../lib/format";
 import { activeCwd, startDraft } from "../../state/session";
 import { setUi, useAppStore } from "../../state/store";
-import { Icon, IconButton, type IconName, SearchInput } from "../../ui";
-import { CRON_DEMO, type DemoCard, MARKET_DEMO } from "./demo";
+import { Icon, IconButton, type IconName } from "../../ui";
+import { CRON_DEMO, type DemoCard } from "./demo";
+import { ExtensionMarketPage } from "./ExtensionMarketPage";
 
 /** Open one mid-pane view; the two are exclusive. */
 export function openMidView(view: "cron" | "market"): void {
@@ -94,40 +94,18 @@ export function CronView() {
 	);
 }
 
-/** `#marketView`: searchable plugin cards covering the conversation (demo data). */
+/** `#marketView`: the extension catalog opened below New conversation in the sidebar. */
 export function MarketView() {
 	const t = useT();
 	const open = useAppStore((state) => state.ui.midView === "market");
-	const [query, setQuery] = useState("");
-	const needle = query.trim().toLowerCase();
-	const cards = MARKET_DEMO.filter(
-		(card) => !needle || card.title.toLowerCase().includes(needle) || card.desc.toLowerCase().includes(needle),
-	);
 	return (
-		<div className={cx("market-view", open && "open")} id="marketView">
+		<div className={cx("market-view", open && "open")} id="marketView" hidden={!open}>
 			<header className="market-header">
-				<strong>{t("pluginMarket")}</strong>
-				<SearchInput
-					wrapperClassName="market-search"
-					iconSize="sm"
-					id="marketSearch"
-					placeholder={t("searchPlugins")}
-					aria-label={t("searchPlugins")}
-					value={query}
-					onChange={(event) => setQuery(event.target.value)}
-				/>
-				<IconButton
-					id="marketClose"
-					icon="close"
-					title={t("backToConversation")}
-					aria-label={t("backToConversation")}
-					onClick={closeMidView}
-				/>
+				<strong>{t("extensionMarket.title")}</strong>
 			</header>
-			<div className="market-grid" id="marketGrid">
-				{open ? cards.map((card) => <Card key={card.title} card={card} offLabel={t("install")} />) : null}
+			<div className="market-grid extension-market-scroll" id="marketGrid">
+				<div className="extension-market-content">{open ? <ExtensionMarketPage /> : null}</div>
 			</div>
-			<footer className="market-note">{t("marketNote")}</footer>
 		</div>
 	);
 }

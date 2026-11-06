@@ -53,6 +53,16 @@ export function SidebarActions() {
 			</button>
 			<button
 				className="sidebar-action"
+				id="marketButton"
+				type="button"
+				aria-current={midView === "market" ? "page" : undefined}
+				onClick={() => openMidView("market")}
+			>
+				<Icon name="pluginMarket" />
+				<span>{t("extensionMarket.title")}</span>
+			</button>
+			<button
+				className="sidebar-action"
 				id="cronButton"
 				type="button"
 				// Scheduled tasks are still demo data; keep the entry hidden on every host for now.
@@ -63,19 +73,6 @@ export function SidebarActions() {
 			>
 				<Icon name="clock" />
 				<span>{t("cronTasks")}</span>
-			</button>
-			<button
-				className="sidebar-action"
-				id="marketButton"
-				type="button"
-				// The plugin market is hidden on every host for now; plugins stay manageable in Settings.
-				hidden
-				aria-current={midView === "market" ? "page" : undefined}
-				title={t("pluginMarket")}
-				onClick={() => openMidView("market")}
-			>
-				<Icon name="pluginMarket" />
-				<span>{t("pluginMarket")}</span>
 			</button>
 			<button
 				className="sidebar-search"

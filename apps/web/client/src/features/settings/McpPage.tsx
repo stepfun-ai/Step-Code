@@ -12,9 +12,11 @@ import { showError } from "../../state/session";
 import { useAppStore } from "../../state/store";
 import type { SettingsMcpServer } from "../../state/types";
 import { Button, Icon, IconButton, SearchInput, Switch, Tooltip } from "../../ui";
-import { closeSettingsEditor, openSettingsEditor, useSettingsResource } from "./actions";
+import { closeSettingsEditor, invalidateExtensionResources, openSettingsEditor, useSettingsResource } from "./actions";
+import { ExtensionRowMenu } from "./ExtensionRowMenu";
+import { ExtensionSourceGroups } from "./ExtensionSourceGroups";
 import { McpEditor } from "./McpEditor";
-import { Badge, EmptyBox, PageHeader, ResourceState, SectionHeader, SettingsCard, StatusDot } from "./parts";
+import { Badge, PageHeader, ResourceState, StatusDot } from "./parts";
 
 const MCP_PATH = "/api/v1/settings/mcp";
 
@@ -42,14 +44,13 @@ function status(t: TranslateFn, server: SettingsMcpServer): { tone: string; labe
 function McpRow({
 	server,
 	onToggle,
-	onDelete,
 }: {
 	readonly server: SettingsMcpServer;
 	readonly onToggle: (enabled: boolean) => void;
-	readonly onDelete: () => void;
 }) {
 	const t = useT();
 	const state = status(t, server);
+	const [menuOpen, setMenuOpen] = useState(false);
 	return (
 		<div className="settings-list-row" data-mcp-server={server.name}>
 			<span className="settings-row-icon">
@@ -69,32 +70,31 @@ function McpRow({
 			</div>
 			<div className="settings-list-actions">
 				{server.source === "user" ? (
-					<>
-						<Tooltip content={t("settingsEdit")}>
-							<IconButton
-								icon="pencil"
-								iconSize="xs"
-								className="settings-icon-action"
-								aria-label={t("settingsEdit")}
-								onClick={() => openSettingsEditor({ kind: "mcp", name: server.name })}
-							/>
-						</Tooltip>
-						<Tooltip content={t("settingsDelete")}>
-							<IconButton
-								icon="trash"
-								iconSize="xs"
-								className="settings-icon-action danger"
-								aria-label={t("settingsDelete")}
-								onClick={onDelete}
-							/>
-						</Tooltip>
-					</>
+					<Tooltip content={t("settingsEdit")}>
+						<IconButton
+							icon="pencil"
+							iconSize="xs"
+							className="settings-icon-action"
+							aria-label={t("settingsEdit")}
+							onClick={() => openSettingsEditor({ kind: "mcp", name: server.name })}
+						/>
+					</Tooltip>
 				) : null}
-				<Switch
-					checked={server.enabled}
-					onChange={onToggle}
-					aria-label={t("settingsToggleNamed", { name: server.name })}
+				<ExtensionRowMenu
+					resource={{ kind: "connectors", server }}
+					name={server.name}
+					open={menuOpen}
+					onOpenChange={setMenuOpen}
+					triggerClassName="settings-icon-action"
 				/>
+				<Tooltip content={server.pluginEnabled === false ? t("extensionManagement.enablePluginFirst") : null}>
+					<Switch
+						checked={server.enabled}
+						disabled={server.pluginEnabled === false}
+						onChange={onToggle}
+						aria-label={t("settingsToggleNamed", { name: server.name })}
+					/>
+				</Tooltip>
 			</div>
 		</div>
 	);
@@ -112,9 +112,6 @@ export function McpPage() {
 			? servers.filter((server) => `${server.name} ${server.pluginName ?? ""}`.toLowerCase().includes(needle))
 			: servers;
 	}, [servers, query]);
-	const users = filtered.filter((server) => server.source === "user");
-	const plugins = filtered.filter((server) => server.source === "plugin");
-	const pluginGroups = [...new Set(plugins.map((server) => server.pluginName ?? ""))];
 
 	if (editor?.kind === "mcp") {
 		return (
@@ -123,7 +120,7 @@ export function McpPage() {
 				existing={servers.find((server) => server.name === editor.name && server.source === "user")}
 				onDone={(saved) => {
 					closeSettingsEditor();
-					if (saved) resource.reload();
+					if (saved) invalidateExtensionResources();
 				}}
 			/>
 		);
@@ -132,28 +129,14 @@ export function McpPage() {
 	const toggle = async (server: SettingsMcpServer, enabled: boolean) => {
 		try {
 			await apiSend(`${MCP_PATH}/${encodeURIComponent(server.name)}`, "PATCH", { enabled });
-		} catch {
-			showError(t("settingsMcpPatchFailed"));
-		}
-		resource.reload();
-	};
-	const remove = async (server: SettingsMcpServer) => {
-		if (!window.confirm(t("settingsMcpDeleteConfirm", { name: server.name }))) return;
-		try {
-			await apiSend(`${MCP_PATH}/${encodeURIComponent(server.name)}`, "DELETE");
-			showError(t("settingsMcpDeleted", { name: server.name }), false);
+			invalidateExtensionResources();
 		} catch {
 			showError(t("settingsMcpPatchFailed"));
 		}
 		resource.reload();
 	};
 	const row = (server: SettingsMcpServer) => (
-		<McpRow
-			key={server.name}
-			server={server}
-			onToggle={(enabled) => void toggle(server, enabled)}
-			onDelete={() => void remove(server)}
-		/>
+		<McpRow key={server.name} server={server} onToggle={(enabled) => void toggle(server, enabled)} />
 	);
 
 	return (
@@ -162,39 +145,11 @@ export function McpPage() {
 				title={t("settingsMcp")}
 				description={t("settingsMcpDesc")}
 				actions={
-					<SearchInput
-						wrapperClassName="settings-search"
-						placeholder={t("settingsMcpSearch")}
-						aria-label={t("settingsMcpSearch")}
-						value={query}
-						onChange={(event) => setQuery(event.target.value)}
-					/>
-				}
-			/>
-			<SectionHeader
-				title={t("settingsMcpMine")}
-				count={users.length}
-				actions={
-					<>
+					<div className="extension-management-actions">
 						<Tooltip content={t("settingsRefresh")}>
-							<IconButton
-								icon="refresh"
-								iconSize="xs"
-								className="settings-icon-action bordered"
-								aria-label={t("settingsRefresh")}
-								onClick={resource.reload}
-							/>
+							<IconButton icon="refresh" aria-label={t("settingsRefresh")} onClick={resource.reload} />
 						</Tooltip>
 						<Button
-							type="button"
-							className="settings-btn"
-							onClick={() => openSettingsEditor({ kind: "mcp", json: true })}
-						>
-							<Icon name="download" size="xs" />
-							{t("settingsImport")}
-						</Button>
-						<Button
-							type="button"
 							className="settings-btn primary"
 							id="settingsMcpNew"
 							onClick={() => openSettingsEditor({ kind: "mcp" })}
@@ -202,8 +157,15 @@ export function McpPage() {
 							<Icon name="plus" size="xs" />
 							{t("settingsNew")}
 						</Button>
-					</>
+					</div>
 				}
+			/>
+			<SearchInput
+				wrapperClassName="settings-search extension-management-search"
+				placeholder={t("settingsMcpSearch")}
+				aria-label={t("settingsMcpSearch")}
+				value={query}
+				onChange={(event) => setQuery(event.target.value)}
 			/>
 			<ResourceState
 				loading={resource.loading}
@@ -212,51 +174,13 @@ export function McpPage() {
 				loadingLabel={t("settingsLoading")}
 			/>
 			{resource.data ? (
-				users.length > 0 ? (
-					<SettingsCard className="settings-list">{users.map(row)}</SettingsCard>
-				) : (
-					<EmptyBox
-						icon="mcp"
-						title={query ? t("settingsNoMatch") : t("settingsMcpEmpty")}
-						hint={query ? undefined : t("settingsMcpEmptyHint")}
-						actions={
-							query ? undefined : (
-								<>
-									<Button
-										type="button"
-										className="settings-btn primary"
-										onClick={() => openSettingsEditor({ kind: "mcp" })}
-									>
-										<Icon name="plus" size="xs" />
-										{t("settingsMcpNew")}
-									</Button>
-									<Button
-										type="button"
-										className="settings-btn"
-										onClick={() => openSettingsEditor({ kind: "mcp", json: true })}
-									>
-										<Icon name="download" size="xs" />
-										{t("settingsMcpImportJson")}
-									</Button>
-								</>
-							)
-						}
-					/>
-				)
+				<ExtensionSourceGroups
+					items={filtered}
+					origins={["custom", "stepcode", "plugin"]}
+					originOf={(server) => server.origin ?? (server.source === "plugin" ? "plugin" : "custom")}
+					renderItem={row}
+				/>
 			) : null}
-			{pluginGroups.map((group) => {
-				const members = plugins.filter((server) => (server.pluginName ?? "") === group);
-				return (
-					<section key={group} className="settings-group">
-						<SectionHeader
-							title={t("settingsFromPlugin", { plugin: group })}
-							count={members.length}
-							hint={t("settingsMcpPluginHint")}
-						/>
-						<SettingsCard className="settings-list">{members.map(row)}</SettingsCard>
-					</section>
-				);
-			})}
 		</>
 	);
 }

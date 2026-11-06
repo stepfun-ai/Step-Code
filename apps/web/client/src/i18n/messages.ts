@@ -6,6 +6,8 @@
  * `policy.*` / `feedbackTopic.*` families. Adding a key: add it to both locales.
  */
 
+import { extensionDetailMessages } from "./extension-detail-messages";
+import { extensionManagementMessages } from "./extension-management-messages";
 import { mcpSettingsMessages } from "./mcp-settings-messages";
 import { migrationMessages } from "./migration-messages";
 
@@ -14,6 +16,8 @@ export type Locale = "zh-CN" | "en-US";
 export const LOCALES: readonly Locale[] = ["zh-CN", "en-US"];
 
 const zhCN = {
+	...extensionDetailMessages.zh,
+	...extensionManagementMessages.zh,
 	...mcpSettingsMessages.zh,
 	...migrationMessages.zh,
 	migrationUseTarget: "使用此目标文件夹",
@@ -784,7 +788,53 @@ const zhCN = {
 	copyAccountId: "复制 ID",
 	settingsBack: "返回工作区",
 	settingsGroupBasics: "通用",
-	settingsGroupAgent: "Agent 扩展",
+	settingsGroupAgent: "拓展管理",
+	"extensionMarket.title": "拓展市场",
+	"extensionMarket.plugins": "插件",
+	"extensionMarket.skills": "技能",
+	"extensionMarket.connectors": "连接器",
+	"extensionMarket.connectorsEmpty": "暂无已配置的连接器，点击新建添加 MCP 连接器。",
+	"extensionMarket.connectorsNote":
+		"展示本机配置及插件提供的 MCP 连接器，未标注分类的归入其他。暂无远程连接器目录；浏览不会自动启用或授权。",
+	"extensionMarket.connectorMetadataOnly":
+		"仅展示真实注册信息，不展示端点、环境变量、请求头或原始错误。点击管理查看或修改本机配置；当前接口未提供上游说明文档。",
+	"extensionMarket.connectorSource": "来源",
+	"extensionMarket.connectorTransport": "传输协议",
+	"extensionMarket.connectorStatus": "连接状态",
+	"extensionMarket.connectorTools": "工具数量",
+	"extensionMarket.types": "拓展类型",
+	"extensionMarket.categories": "分类标签",
+	"extensionMarket.all": "全部",
+	"extensionMarket.selfMade": "自制",
+	"extensionMarket.selfMadeExample": "自制标识占位示例，真实资料的发布者不作推断。",
+	"extensionMarket.official": "StepFun 官方",
+	"extensionMarket.officialHint": "由 StepFun 官方维护的拓展",
+	"extensionMarket.office": "办公效率",
+	"extensionMarket.creative": "创意设计",
+	"extensionMarket.code": "代码开发",
+	"extensionMarket.other": "其他",
+	"extensionMarket.name": "{kind}名称占位 {number}",
+	"extensionMarket.description": "这里是{kind}描述占位，简要介绍能力与使用场景。",
+	"extensionMarket.search": "搜索名称、描述或关键词…",
+	"extensionMarket.manage": "管理",
+	"extensionMarket.add": "添加",
+	"extensionMarket.upload.plugins": "上传 Plugin",
+	"extensionMarket.upload.skills": "上传 Skill",
+	"extensionMarket.uploadDesc.plugins": "导入 Plugin ZIP，仅安装到本机",
+	"extensionMarket.uploadDesc.skills": "导入 .zip、.skill 或 SKILL.md，仅安装到本机",
+	"extensionMarket.refresh": "刷新",
+	"extensionMarket.install": "安装",
+	"extensionMarket.installed": "已安装",
+	"extensionMarket.notInstalled": "未安装",
+	"extensionMarket.try": "试用",
+	"extensionMarket.moreActions": "更多操作",
+	"extensionMarket.trialPrompt": "我想试用「{name}」，请先说明它能做什么，再等待我确认具体任务。",
+	"extensionMarket.catalogInstallPending":
+		"来自本地拓展市场，仅展示真实文档与元数据；安装接口尚未接入，不会自动安装或运行。",
+	"extensionMarket.statusUnavailable": "暂时无法读取安装状态，请刷新重试。",
+	"extensionMarket.empty": "没有匹配的拓展，试试其他关键词。",
+	"extensionMarket.preview":
+		"拓展市场包含插件、技能与连接器。SkillHub 条目同步本机安装状态，连接器展示本机真实配置；其他示例的在线安装暂未接入。",
 	settingsGeneral: "常规",
 	settingsGeneralDesc: "应用的基础偏好。",
 	settingsBuildDev: "从源码启动，没有安装包的构建时间。",
@@ -930,7 +980,7 @@ const zhCN = {
 	"settingsMarketplaceKind.builtin": "内置",
 	"settingsMarketplaceKind.git": "Git",
 	"settingsMarketplaceKind.local": "本地",
-	settingsMcp: "MCP 服务器",
+	settingsMcp: "连接器",
 	settingsModels: "模型",
 	modelConfigurationNeeded: "发起对话前，请配置并选择一个可用模型。输入与附件已保留；也可以在账号设置中登录。",
 	settingsModelsDesc: "填入各提供商的 API 密钥即可使用其模型。",
@@ -1108,6 +1158,8 @@ const zhCN = {
 export type MessageKey = keyof typeof zhCN;
 
 const enUS: Record<MessageKey, string> = {
+	...extensionDetailMessages.en,
+	...extensionManagementMessages.en,
 	...mcpSettingsMessages.en,
 	...migrationMessages.en,
 	migrationUseTarget: "Use this target folder",
@@ -1897,7 +1949,55 @@ const enUS: Record<MessageKey, string> = {
 	copyAccountId: "Copy ID",
 	settingsBack: "Back to workspace",
 	settingsGroupBasics: "General",
-	settingsGroupAgent: "Agent extensions",
+	settingsGroupAgent: "Extension management",
+	"extensionMarket.title": "Extension Market",
+	"extensionMarket.plugins": "Plugins",
+	"extensionMarket.skills": "Skills",
+	"extensionMarket.connectors": "Connectors",
+	"extensionMarket.connectorsEmpty": "No connectors are configured. Choose New to add an MCP connector.",
+	"extensionMarket.connectorsNote":
+		"Local and plugin-provided MCP connectors. Untagged connectors belong to Other. No remote catalog is connected; browsing never enables or authorizes connectors.",
+	"extensionMarket.connectorMetadataOnly":
+		"Only registered metadata is shown; endpoints, environment variables, headers and raw errors are hidden. Open management to inspect or change local configuration. No upstream documentation is supplied by this API.",
+	"extensionMarket.connectorSource": "Source",
+	"extensionMarket.connectorTransport": "Transport",
+	"extensionMarket.connectorStatus": "Connection status",
+	"extensionMarket.connectorTools": "Tool count",
+	"extensionMarket.types": "Extension type",
+	"extensionMarket.categories": "Category tags",
+	"extensionMarket.all": "All",
+	"extensionMarket.selfMade": "In-house",
+	"extensionMarket.selfMadeExample":
+		"In-house badge example; no publisher attribution is inferred for sourced documents.",
+	"extensionMarket.official": "StepFun Official",
+	"extensionMarket.officialHint": "An extension maintained by StepFun",
+	"extensionMarket.office": "Office productivity",
+	"extensionMarket.creative": "Creative design",
+	"extensionMarket.code": "Code development",
+	"extensionMarket.other": "Other",
+	"extensionMarket.name": "{kind} name placeholder {number}",
+	"extensionMarket.description": "{kind} description placeholder for capabilities and use cases.",
+	"extensionMarket.search": "Search names, descriptions or keywords…",
+	"extensionMarket.manage": "Manage",
+	"extensionMarket.add": "Add",
+	"extensionMarket.upload.plugins": "Upload Plugin",
+	"extensionMarket.upload.skills": "Upload Skill",
+	"extensionMarket.uploadDesc.plugins": "Import a Plugin ZIP, installed locally only",
+	"extensionMarket.uploadDesc.skills": "Import .zip, .skill or SKILL.md, installed locally only",
+	"extensionMarket.refresh": "Refresh",
+	"extensionMarket.install": "Install",
+	"extensionMarket.installed": "Installed",
+	"extensionMarket.notInstalled": "Not installed",
+	"extensionMarket.try": "Try",
+	"extensionMarket.moreActions": "More actions",
+	"extensionMarket.trialPrompt":
+		"I want to try {name}. First explain what it can do, then wait for me to confirm the task.",
+	"extensionMarket.catalogInstallPending":
+		"From the local extension catalog: real documents and metadata only. Installation is not integrated; nothing is installed or run automatically.",
+	"extensionMarket.statusUnavailable": "Installation status is unavailable. Refresh to try again.",
+	"extensionMarket.empty": "No matching extensions. Try another keyword.",
+	"extensionMarket.preview":
+		"Plugins, skills and connectors. SkillHub entries reflect local installations and connectors show real local configuration; online installation for other samples is not integrated.",
 	settingsGeneral: "General",
 	settingsGeneralDesc: "Basic preferences for the app.",
 	settingsBuildDev: "Running from source; an installed build would show its build time.",
@@ -2045,7 +2145,7 @@ const enUS: Record<MessageKey, string> = {
 	"settingsMarketplaceKind.builtin": "Built-in",
 	"settingsMarketplaceKind.git": "Git",
 	"settingsMarketplaceKind.local": "Local",
-	settingsMcp: "MCP servers",
+	settingsMcp: "Connectors",
 	settingsModels: "Models",
 	modelConfigurationNeeded:
 		"Configure and select an available model before sending. Your input and attachments are kept; you can also sign in from Account settings.",

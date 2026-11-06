@@ -21,8 +21,10 @@ import {
 	defaultStepPluginsDir,
 	discoverStepPluginResourcePaths,
 	ensureBuiltinMarketplace,
+	ensurePluginDependency,
 	getMcpSettingsView,
 	getStepMcpStatuses,
+	inspectPluginDependency,
 	installMarketplacePlugin,
 	listInstalledStepPlugins,
 	listMarketplacePlugins,
@@ -31,6 +33,7 @@ import {
 	loadSkillsFromDir,
 	type McpSettingsField,
 	McpSettingsPatchError,
+	type PluginDependencyState,
 	parseFrontmatter,
 	parseMcpSettingsServerConfig,
 	readGlobalStepConfig,
@@ -42,8 +45,13 @@ import {
 	type StepMcpStatus,
 	uninstallPlugin,
 	updateGlobalMcpConfig,
+	updateGlobalStepConfig,
 	updateMarketplaceSource,
 } from "@step-harness/coding-agent";
+import { curatedPluginOrigin } from "./plugin-market.ts";
+import { marketplaceOrigin, type ResourceOrigin, resolvePluginOrigins } from "./settings-origins.ts";
+import { readSkillInstallation, type SkillInstallation } from "./skill-installation.ts";
+import { curatedSkillCatalogId } from "./skill-market.ts";
 
 /** A caller mistake the server answers with 4xx (`status`), not 500. */
 export class SettingsError extends Error {
@@ -61,7 +69,9 @@ export interface WebMcpServer {
 	readonly name: string;
 	/** `user`: an entry of `mcp_servers` in config.toml. `plugin`: declared by an installed plugin. */
 	readonly source: "user" | "plugin";
+	readonly origin: ResourceOrigin;
 	readonly pluginName?: string;
+	readonly pluginEnabled?: boolean;
 	readonly transport: "stdio" | "http";
 	readonly enabled: boolean;
 	/** Non-secret metadata only; omitted protected fields must never be treated as empty values. */
@@ -83,6 +93,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Parse a replacement declaration through the product API and translate caller errors. */
 export function parseMcpServerConfig(input: unknown): StepMcpServerConfig {
+	if (
+		isRecord(input) &&
+		Array.isArray(input.args) &&
+		input.args.some((arg) => arg === "<WORKSPACE_DIR>" || arg === "<UNREAL_MCP_PYTHON_DIR>")
+	)
+		throw new SettingsError(400, "Replace the template directory placeholder with an explicit local directory");
 	try {
 		return parseMcpSettingsServerConfig(input);
 	} catch (error) {
@@ -122,6 +138,7 @@ export async function listMcpServers(): Promise<WebMcpServer[]> {
 			withStatus({
 				name,
 				source: "user",
+				origin: "custom",
 				transport: view.transport,
 				enabled: config.enabled !== false,
 				config: view.configuration,
@@ -131,18 +148,31 @@ export async function listMcpServers(): Promise<WebMcpServer[]> {
 		);
 	}
 	users.sort((left, right) => left.name.localeCompare(right.name));
-	const plugins = (await listStepPluginMcpServers(resolveStepHomeDir(), false))
+	const [declaredServers, pluginCatalog] = await Promise.all([
+		listStepPluginMcpServers(resolveStepHomeDir(), false),
+		listPlugins(),
+	]);
+	const pluginOrigins = new Map(pluginCatalog.installed.map((plugin) => [plugin.id, plugin.origin]));
+	const plugins = declaredServers
 		.filter((server) => !users.some((user) => user.name === server.name))
 		.map((server) =>
 			withStatus({
 				name: server.name,
 				source: "plugin",
+				origin: pluginOrigins.get(server.pluginId) === "stepcode" ? "stepcode" : "plugin",
 				pluginName: server.pluginName,
+				pluginEnabled: server.pluginEnabled,
 				transport: server.transport,
 				enabled: server.enabled,
 			}),
 		);
-	return [...users, ...plugins];
+	const blocked = new Set(declaredServers.filter((server) => !server.pluginEnabled).map((server) => server.name));
+	return [
+		...users.map((server) =>
+			blocked.has(server.name) ? { ...server, enabled: false, pluginEnabled: false } : server,
+		),
+		...plugins,
+	];
 }
 
 /** Add a server (`replace: false`, 409 when the name is taken) or replace an existing one (404 when missing). */
@@ -188,9 +218,10 @@ export function deleteMcpServer(name: string): void {
  * honours; turning it back on removes the override instead of leaving an empty table.
  */
 export async function setMcpServerEnabled(name: string, enabled: boolean): Promise<void> {
-	const pluginServer = (await listStepPluginMcpServers(resolveStepHomeDir(), false)).some(
+	const pluginServer = (await listStepPluginMcpServers(resolveStepHomeDir(), false)).find(
 		(server) => server.name === name,
 	);
+	if (enabled && pluginServer?.pluginEnabled === false) throw new SettingsError(409, "Enable the owning plugin first");
 	updateGlobalMcpConfig(process.env, (servers) => {
 		const existing = servers[name];
 		if (!existing && !pluginServer) throw new SettingsError(404, `MCP server '${name}' does not exist`);
@@ -207,7 +238,10 @@ export async function setMcpServerEnabled(name: string, enabled: boolean): Promi
 // ── Plugins and marketplaces ─────────────────────────────────────────────────
 
 export interface WebPlugin {
+	readonly dependency?: PluginDependencyState;
 	readonly id: string;
+	readonly enabled: boolean;
+	readonly origin: ResourceOrigin;
 	readonly name: string;
 	readonly version?: string;
 	readonly description?: string;
@@ -217,6 +251,7 @@ export interface WebPlugin {
 
 export interface WebMarketplacePlugin {
 	readonly name: string;
+	readonly origin: ResourceOrigin;
 	readonly description?: string;
 	readonly marketplace: string;
 	readonly installed: boolean;
@@ -244,10 +279,23 @@ export async function listPlugins(): Promise<WebPluginCatalog> {
 		listMarketplaceSources(),
 	]);
 	const userPlugins = installed.plugins.filter((plugin) => plugin.source === "user");
+	const origins = await resolvePluginOrigins(userPlugins, available.entries, sources, builtin.warnings.length === 0);
+	for (const plugin of userPlugins) {
+		if (origins.get(plugin.id) !== "stepcode" && (await curatedPluginOrigin(plugin.id, plugin.rootPath)))
+			origins.set(plugin.id, "market");
+	}
+	const dependencies = new Map<string, PluginDependencyState>();
+	for (const plugin of userPlugins) {
+		if (plugin.provision?.command && plugin.provision.command !== "steppage-mcp")
+			dependencies.set(plugin.id, await inspectPluginDependency(plugin.provision.command));
+	}
 	const installedNames = new Set(userPlugins.flatMap((plugin) => [plugin.id, basename(plugin.rootPath)]));
 	return {
 		installed: userPlugins.map((plugin) => ({
+			...(dependencies.has(plugin.id) ? { dependency: dependencies.get(plugin.id) } : {}),
 			id: plugin.id,
+			enabled: plugin.enabled,
+			origin: origins.get(plugin.id) ?? "custom",
 			name: plugin.name,
 			version: plugin.version,
 			description: plugin.description,
@@ -256,6 +304,7 @@ export async function listPlugins(): Promise<WebPluginCatalog> {
 		})),
 		available: available.entries.map((entry) => ({
 			name: entry.name,
+			origin: marketplaceOrigin(entry, sources, builtin.warnings.length === 0),
 			description: entry.description,
 			marketplace: entry.marketplace,
 			installed: installedNames.has(entry.name),
@@ -281,13 +330,42 @@ export async function installPlugin(name: string, marketplace?: string): Promise
 	}
 }
 
+export async function prepareInstalledPluginDependency(id: string): Promise<PluginDependencyState | undefined> {
+	const { plugins } = await listInstalledStepPlugins();
+	const plugin = plugins.find((entry) => entry.source === "user" && entry.id === id);
+	if (!plugin) throw new SettingsError(404, "Plugin does not exist");
+	return plugin.provision?.command ? ensurePluginDependency(plugin.provision.command) : undefined;
+}
+
+export async function setPluginEnabled(id: string, enabled: boolean): Promise<void> {
+	const { plugins } = await listInstalledStepPlugins();
+	if (!plugins.some((plugin) => plugin.source === "user" && plugin.id === id))
+		throw new SettingsError(404, "Plugin does not exist");
+	updateGlobalStepConfig(process.env, (document) => {
+		if (document.plugins !== undefined && !isRecord(document.plugins))
+			throw new SettingsError(409, "Invalid plugin settings");
+		const current = document.plugins?.[id];
+		if (current !== undefined && !isRecord(current)) throw new SettingsError(409, "Invalid plugin settings");
+		return { ...document, plugins: { ...document.plugins, [id]: { ...current, enabled } } };
+	});
+}
+
 export async function removePlugin(name: string): Promise<void> {
 	// The id in a manifest may differ from its folder; uninstall addresses the folder.
 	const { plugins } = await listInstalledStepPlugins();
 	const plugin = plugins.find((candidate) => candidate.source === "user" && candidate.id === name);
-	const folder = plugin ? basename(plugin.rootPath) : name;
+	if (!plugin) throw new SettingsError(404, "Plugin does not exist");
+	const folder = basename(plugin.rootPath);
 	try {
 		await uninstallPlugin(defaultStepPluginsDir(), folder);
+		updateGlobalStepConfig(process.env, (document) => {
+			const next = { ...document };
+			if (isRecord(document.plugins)) {
+				const { [plugin.id]: _removed, ...remaining } = document.plugins;
+				next.plugins = remaining;
+			}
+			return next;
+		});
 	} catch (error) {
 		throw new SettingsError(404, error instanceof Error ? error.message : String(error));
 	}
@@ -320,6 +398,9 @@ export interface WebSkillEntry {
 	readonly name: string;
 	readonly description: string;
 	readonly source: "user" | "plugin";
+	readonly origin: ResourceOrigin;
+	readonly installation?: SkillInstallation;
+	readonly catalogId?: string;
 	readonly pluginName?: string;
 	/** Display location, with the home directory shortened to `~`. */
 	readonly location: string;
@@ -395,11 +476,24 @@ export async function listSkills(): Promise<WebSkillEntry[]> {
 	for (const resource of resolved.skills) {
 		if (resource.metadata.scope !== "user") continue;
 		const metadata = await readSkillMetadata(resource.path);
+		const installation = await readSkillInstallation(resource.path, metadata.name);
+		const catalogId =
+			basename(resource.path) === "SKILL.md"
+				? await curatedSkillCatalogId(metadata.name, dirname(resource.path))
+				: undefined;
 		const topLevel = resource.metadata.origin === "top-level";
 		users.push({
 			id: resource.path,
 			...metadata,
 			source: "user",
+			origin:
+				installation ||
+				catalogId ||
+				(resource.metadata.origin === "package" && resource.metadata.source.startsWith("npm:"))
+					? "market"
+					: "custom",
+			...(catalogId ? { catalogId } : {}),
+			...(installation ? { installation } : {}),
 			location: displayPath(home, resource.path),
 			enabled: resource.enabled,
 			toggleable: topLevel,
@@ -410,8 +504,9 @@ export async function listSkills(): Promise<WebSkillEntry[]> {
 
 	const [{ plugins }, { skillPaths }] = await Promise.all([
 		listInstalledStepPlugins(),
-		discoverStepPluginResourcePaths({}),
+		discoverStepPluginResourcePaths({ includeDisabled: true }),
 	]);
+	const pluginOrigins = new Map((await listPlugins()).installed.map((plugin) => [plugin.id, plugin.origin]));
 	const fromPlugins: WebSkillEntry[] = [];
 	for (const dir of skillPaths) {
 		const owner = plugins.find((plugin) => isInside(plugin.rootPath, dir) || resolve(plugin.rootPath) === dir);
@@ -421,9 +516,10 @@ export async function listSkills(): Promise<WebSkillEntry[]> {
 				name: skill.name,
 				description: skill.description,
 				source: "plugin",
+				origin: owner && pluginOrigins.get(owner.id) === "stepcode" ? "stepcode" : "plugin",
 				pluginName: owner?.name,
 				location: displayPath(home, skill.filePath),
-				enabled: true,
+				enabled: owner?.enabled !== false,
 				toggleable: false,
 				deletable: false,
 			});
@@ -496,7 +592,7 @@ export async function createSkill(input: {
 	if (await exists(target)) throw new SettingsError(409, `Skill '${name}' already exists`);
 	await mkdir(target, { recursive: true });
 	// JSON string syntax is valid YAML, so quoting through JSON keeps colons and quotes safe.
-	const body = `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n${instructions}\n`;
+	const body = `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n\n${instructions}\n`;
 	await writeFile(join(target, SKILL_FILE), body, { encoding: "utf8", flag: "wx" });
 }
 

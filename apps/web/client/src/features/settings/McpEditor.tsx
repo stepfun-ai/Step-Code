@@ -500,9 +500,13 @@ function CreateMcpEditor({
 	const t = useT();
 	const ids = useId();
 	const [mode, setMode] = useState<"form" | "json">(editor.json ? "json" : "form");
-	const [form, setForm] = useState<FormState>(() => formFromConfig("", undefined));
+	const [form, setForm] = useState<FormState>(() => formFromConfig(editor.initialName ?? "", editor.initialConfig));
 	const [json, setJson] = useState(() =>
-		editor.json ? IMPORT_SAMPLE : JSON.stringify({ "my-server": { command: "", args: [] } }, null, 2),
+		editor.initialConfig
+			? JSON.stringify({ [editor.initialName ?? "my-server"]: editor.initialConfig }, null, 2)
+			: editor.json
+				? IMPORT_SAMPLE
+				: JSON.stringify({ "my-server": { command: "", args: [] } }, null, 2),
 	);
 	const [error, setError] = useState<string>();
 	const [saving, setSaving] = useState(false);
@@ -535,6 +539,18 @@ function CreateMcpEditor({
 			setError(t("settingsJsonInvalid", { reason: t("settingsMcpPatchInvalid") }));
 			return;
 		}
+		if (
+			entries.some(
+				([, config]) =>
+					isRecord(config) &&
+					Array.isArray(config.args) &&
+					config.args.some((arg) => arg === "<WORKSPACE_DIR>" || arg === "<UNREAL_MCP_PYTHON_DIR>"),
+			)
+		) {
+			setError(t("connectorInstall.pathRequired"));
+			return;
+		}
+		if (!window.confirm(t("connectorInstall.confirm", { names: entries.map(([name]) => name).join(", ") }))) return;
 		setSaving(true);
 		const added: string[] = [];
 		try {

@@ -100,6 +100,7 @@ export const ICON_NAMES = [
 	"tree",
 	"open",
 	"plus",
+	"play",
 	"more",
 	"tool",
 	"copy",
@@ -852,6 +853,10 @@ export function IconSprite() {
 					fill="currentColor"
 				/>
 				\n \n
+			</symbol>
+			{/* icon-library.html: Play */}
+			<symbol id="i-play" viewBox="0 0 24 24" fill="none">
+				<path d="M7 4.5L19 12L7 19.5V4.5Z" fill="currentColor" />
 			</symbol>
 			{/* icon-library.html: More */}
 			<symbol id="i-more" viewBox="0 0 24 24" fill="none">

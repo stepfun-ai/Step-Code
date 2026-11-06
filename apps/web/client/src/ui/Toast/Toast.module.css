@@ -5,8 +5,10 @@
  * (`--titlebar-inset`). A caller may anchor it elsewhere with inline
  * `left` / `top` (the shell centres it under the conversation header).
  *
- * Every tone is the same inverse dark pill (`--toast-*` tokens, dark in every
+ * Every tone is the same inverse dark card (`--toast-*` tokens, dark in every
  * theme, lifted by a hairline on the dark one); the tone only picks the icon.
+ * A titled toast reads as a card: icon, headline, detail, optional action and
+ * dismiss.
  */
 .root {
 	position: fixed;
@@ -14,12 +16,11 @@
 	left: 50%;
 	z-index: 120;
 	display: flex;
-	align-items: center;
+	align-items: flex-start;
 	gap: 8px;
 	width: max-content;
-	max-width: min(420px, calc(100% - 32px));
-	min-height: 40px;
-	padding: 9px 16px;
+	max-width: min(420px, calc(100vw - 32px));
+	padding: 10px 16px;
 	transform: translateX(-50%);
 	border: 1px solid var(--toast-line);
 	border-radius: var(--radius-surface);
@@ -33,6 +34,7 @@
 
 .icon {
 	flex: none;
+	margin-top: 2px;
 }
 
 .root[data-tone="success"] .icon {
@@ -43,19 +45,37 @@
 	color: var(--toast-danger);
 }
 
+.copy {
+	display: grid;
+	gap: 3px;
+	min-width: 0;
+}
+
+.title {
+	color: var(--toast-ink);
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1.4;
+}
+
 .message {
 	min-width: 0;
 	overflow-wrap: anywhere;
 }
 
+.root:not(:has(.title)) .message {
+	font-size: 12.5px;
+}
+
 .action {
-	flex: none;
-	margin: 0 0 0 -4px;
+	justify-self: start;
+	margin-top: 2px;
 	padding: 0;
 	border: 0;
 	background: none;
 	color: var(--toast-link);
 	font: inherit;
+	line-height: inherit;
 	cursor: pointer;
 }
 
@@ -68,6 +88,19 @@
 	border-radius: var(--radius-tiny);
 	outline: 2px solid var(--toast-link);
 	outline-offset: 2px;
+}
+
+.close {
+	flex: none;
+	margin: -2px -8px -2px 0;
+	color: var(--toast-ink);
+	opacity: 0.6;
+}
+
+.close:hover {
+	background: color-mix(in srgb, var(--toast-ink) 14%, transparent);
+	color: var(--toast-ink);
+	opacity: 1;
 }
 
 @keyframes enter {

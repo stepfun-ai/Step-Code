@@ -7,14 +7,15 @@
 
 import type { MessageKey, TranslateFn } from "../../i18n";
 import { fuzzyFilter } from "../../lib/fuzzy";
-import type { WebPromptCommand, WebSkill } from "../../state/types";
+import type { SettingsMcpServer, SettingsPluginCatalog, WebPromptCommand, WebSkill } from "../../state/types";
 
 export interface SlashItem {
 	/**
 	 * `command` and `prompt` insert `/<key> `, `mcp` opens the MCP view,
 	 * `feedback` opens the feedback dialog, `skill` inserts `/skill:<key> `.
 	 */
-	readonly kind: "command" | "mcp" | "feedback" | "prompt" | "skill";
+	readonly kind: "command" | "mcp" | "feedback" | "prompt" | "skill" | "plugin" | "connector";
+	readonly disabled?: boolean;
 	readonly key: string;
 	readonly title: string;
 	readonly description: string;
@@ -76,13 +77,15 @@ export function slashTokenAt(text: string, cursor: number): SlashToken | null {
 
 /** The part of a slash query the items are matched against. */
 export function matchText(query: string): string {
-	return query.replace(/^skill:/i, "");
+	return query.replace(/^(skill|plugin|connector):/i, "");
 }
 
 export interface SlashGroups {
 	readonly commands: readonly SlashItem[];
 	readonly prompts: readonly SlashItem[];
 	readonly skills: readonly SlashItem[];
+	readonly plugins: readonly SlashItem[];
+	readonly connectors: readonly SlashItem[];
 }
 
 /**
@@ -96,11 +99,15 @@ export function slashGroups(
 	skills: readonly WebSkill[],
 	t: TranslateFn,
 	prompts: readonly WebPromptCommand[] = [],
+	references: {
+		readonly plugins?: SettingsPluginCatalog["installed"];
+		readonly connectors?: readonly SettingsMcpServer[];
+	} = {},
 ): SlashGroups {
 	const wanted = matchText(query);
-	const skillsOnly = /^skill:/i.test(query);
+	const referenceKind = /^(skill|plugin|connector):/i.exec(query)?.[1]?.toLowerCase();
 	const builtIn = new Set(SLASH_COMMANDS.map((command) => command.name));
-	const promptItems = skillsOnly
+	const promptItems = referenceKind
 		? []
 		: prompts
 				.filter((prompt) => !builtIn.has(prompt.name))
@@ -114,7 +121,7 @@ export function slashGroups(
 							: prompt.description,
 					}),
 				);
-	const commands = skillsOnly
+	const commands = referenceKind
 		? []
 		: SLASH_COMMANDS.map(
 				(command): SlashItem => ({
@@ -132,16 +139,41 @@ export function slashGroups(
 			description: skill.description,
 		}),
 	);
+	const pluginItems: SlashItem[] = (references.plugins ?? [])
+		.filter((plugin) => plugin.enabled !== false)
+		.map((plugin) => ({
+			kind: "plugin",
+			key: plugin.id,
+			title: plugin.name,
+			description: plugin.description ?? t("settingsNoDescription"),
+		}));
+	const connectorItems: SlashItem[] = (references.connectors ?? []).map((server) => ({
+		kind: "connector",
+		key: server.name,
+		title: server.name,
+		disabled: !server.enabled,
+		description: !server.enabled
+			? t("settingsMcpOff")
+			: server.status
+				? t(`mcpStatus.${server.status}`)
+				: t("settingsMcpIdle"),
+	}));
 	return {
 		commands: fuzzyFilter(commands, wanted, (item) => item.key),
 		prompts: fuzzyFilter(promptItems, wanted, (item) => item.key),
-		skills: fuzzyFilter(skillItems, wanted, (item) => item.key),
+		skills: !referenceKind || referenceKind === "skill" ? fuzzyFilter(skillItems, wanted, (item) => item.key) : [],
+		plugins:
+			!referenceKind || referenceKind === "plugin"
+				? fuzzyFilter(pluginItems, wanted, (item) => `${item.key} ${item.title}`)
+				: [],
+		connectors:
+			!referenceKind || referenceKind === "connector" ? fuzzyFilter(connectorItems, wanted, (item) => item.key) : [],
 	};
 }
 
 /** One rendered group: its items and where they start in the keyboard order. */
 export interface SlashSection {
-	readonly id: "commands" | "prompts" | "skills";
+	readonly id: "commands" | "prompts" | "skills" | "plugins" | "connectors";
 	readonly label: string;
 	readonly items: readonly SlashItem[];
 	/** Index of the first item in the one list keyboard selection runs through. */
@@ -155,14 +187,20 @@ export interface SlashSection {
  */
 export function slashSections(
 	groups: SlashGroups,
-	labels: { readonly commands: string; readonly prompts: string; readonly skills: string },
+	labels: {
+		readonly commands: string;
+		readonly prompts: string;
+		readonly skills: string;
+		readonly plugins?: string;
+		readonly connectors?: string;
+	},
 ): SlashSection[] {
 	const sections: SlashSection[] = [];
 	let offset = 0;
-	for (const id of ["commands", "prompts", "skills"] as const) {
+	for (const id of ["commands", "prompts", "plugins", "skills", "connectors"] as const) {
 		const items = groups[id];
 		if (items.length === 0) continue;
-		sections.push({ id, label: labels[id], items, offset });
+		sections.push({ id, label: labels[id] ?? id, items, offset });
 		offset += items.length;
 	}
 	return sections;

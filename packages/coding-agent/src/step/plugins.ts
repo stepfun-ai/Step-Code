@@ -21,9 +21,11 @@ import type {
 	ExtensionFactory,
 } from "../core/extensions/types.ts";
 import { execFileText } from "../utils/child-process.ts";
+import { readGlobalStepConfig } from "./config-toml.ts";
 import { resolveStepConfigDir } from "./environment.ts";
 import { resolveStepMcpEnvironment, STEP_LOGIN_SUPPLIED_ENV } from "./mcp-environment.ts";
 import { isPathContained } from "./path-containment.ts";
+import { isStepPluginEnabled } from "./plugin-state.ts";
 import { ensureStepPageReady, stepPageInstallerUrl } from "./steppage-provision.ts";
 import { resolveStepStorageRoot } from "./storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
@@ -146,10 +148,12 @@ export interface StepPluginDiagnostics {
 
 export interface InstalledStepPlugin {
 	id: string;
+	enabled: boolean;
 	name: string;
 	version?: string;
 	description?: string;
 	rootPath: string;
+	provision?: StepPluginProvision;
 	source: "user" | "project";
 	mcpServers: string[];
 	warnings: string[];
@@ -730,7 +734,10 @@ export async function discoverStepPluginResourcePaths(input: {
 	/** Project plugins are read only when the project is trusted, as MCP discovery does. */
 	projectTrusted?: boolean;
 	onSkillOwner?: (root: string, owner: string) => void;
+	/** Metadata-only hosts may list contributions from disabled plugins. */
+	includeDisabled?: boolean;
 }): Promise<{ skillPaths: string[]; promptPaths: string[]; warnings: string[] }> {
+	const config = readGlobalStepConfig();
 	const warnings: string[] = [];
 	const seenByKind = { skills: new Set<string>(), commands: new Set<string>() };
 	const collected = { skills: [] as string[], commands: [] as string[] };
@@ -747,6 +754,7 @@ export async function discoverStepPluginResourcePaths(input: {
 			const read = await readStepPluginManifest(pluginDir);
 			if (!read.manifest) continue;
 			const manifest = read.manifest;
+			if (!input.includeDisabled && !isStepPluginEnabled(manifest.id, config)) continue;
 			for (const key of ["skills", "commands"] as const) {
 				const declared = manifest[key];
 				// A declared empty array means "this plugin contributes none": honor
@@ -783,6 +791,7 @@ export async function listInstalledStepPlugins(
 	input: { userDir?: string; projectDir?: string } = {},
 ): Promise<{ plugins: InstalledStepPlugin[]; warnings: string[] }> {
 	const warnings: string[] = [];
+	const config = readGlobalStepConfig();
 	const byId = new Map<string, InstalledStepPlugin>();
 	const userDir = input.userDir ?? defaultStepPluginsDir();
 	const [userRoot, projectRoot] = await Promise.all([
@@ -806,10 +815,12 @@ export async function listInstalledStepPlugins(
 			const diagnostics = await diagnoseStepPlugin(pluginDir);
 			const plugin: InstalledStepPlugin = {
 				id: read.manifest.id,
+				enabled: isStepPluginEnabled(read.manifest.id, config),
 				name: read.manifest.name ?? read.manifest.id,
 				version: read.manifest.version,
 				description: read.manifest.description,
 				rootPath: pluginDir,
+				...(read.manifest.provision ? { provision: read.manifest.provision } : {}),
 				source: root.source,
 				mcpServers: diagnostics.mcpServers,
 				warnings: diagnostics.warnings,
