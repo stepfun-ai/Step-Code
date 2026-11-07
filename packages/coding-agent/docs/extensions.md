@@ -1405,6 +1405,16 @@ Register a custom tool callable by the LLM. See [Custom Tools](#custom-tools) fo
 
 Use `pi.setActiveTools()` to enable or disable tools (including dynamically added tools) at runtime.
 
+Set `exposure` on a definition to control how it reaches the model:
+
+| `exposure` | Behavior |
+| --- | --- |
+| `direct` (default) | Declared like any other tool, and active at session start. |
+| `deferred` | Registered but not declared. The Step tool profile's `find_tools` loads it, and naming it in the tool settings, `--tools`, or `pi.setActiveTools()` activates it. |
+| `hidden` | Registered but unreachable: left out of `pi.getAllTools()` and never activated automatically. |
+
+The tools of MCP servers are `deferred` by default, so a session can keep a large catalogue out of the prompt; `find_tools` loads the ones a turn needs. An extension that publishes deferred tools should also make the deferred list discoverable, as the MCP extension does with its system-prompt section.
+
 Use `promptSnippet` to opt a custom tool into a one-line entry in `Available tools`, and `promptGuidelines` to append tool-specific bullets to the default `Guidelines` section when the tool is active.
 
 **Important:** `promptGuidelines` bullets are appended flat to the `Guidelines` section with no tool name prefix. Each guideline must name the tool it refers to — avoid "Use this tool when..." because the LLM cannot tell which tool "this" means. Write "Use my_tool when..." instead.

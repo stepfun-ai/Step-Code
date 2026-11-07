@@ -78,7 +78,7 @@ describe("Step tool profile", () => {
 			},
 			find_tools: {
 				description:
-					"Search registered tools by natural-language intent, tool name, description, and parameter names.",
+					"Search registered tools by natural-language intent, tool name, description, and parameter names. Tools that are not loaded yet, such as the tools of MCP servers, are loaded by this call and become callable on your next turn.",
 				promptSnippet: "Find a tool by describing the operation you need",
 			},
 		};

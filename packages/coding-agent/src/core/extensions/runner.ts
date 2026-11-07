@@ -856,6 +856,18 @@ export class ExtensionRunner {
 				const active = new Set(runner.runtime.getActiveTools());
 				return runner.runtime.getAllTools().filter((tool) => active.has(tool.name));
 			},
+			getActiveTools: () => {
+				runner.assertActive();
+				return runner.runtime.getActiveTools();
+			},
+			getAllTools: () => {
+				runner.assertActive();
+				return runner.runtime.getAllTools();
+			},
+			setActiveTools: (toolNames) => {
+				runner.assertActive();
+				runner.runtime.setActiveTools(toolNames);
+			},
 			get autoRetryEnabled() {
 				runner.assertActive();
 				return runner.getAutoRetryEnabledFn?.();
