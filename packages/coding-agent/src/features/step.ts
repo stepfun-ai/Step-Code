@@ -8,6 +8,7 @@ import type {
 	ExtensionUIContext,
 	InlineExtension,
 } from "../core/extensions/types.ts";
+import { releaseOwnerGracefully } from "../core/process-registry.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../core/slash-commands.ts";
 import type { FeedbackIdentity } from "../step/feedback/types.ts";
 import { STEP_INIT_PROMPT } from "../step/init-prompt.ts";
@@ -346,6 +347,11 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 			// A "this session" Full Access grant must not carry into the next
 			// session; only the persisted acknowledgment does.
 			fullAccessAcknowledged = false;
+			// Background commands belong to the session that started them. A session switch or a
+			// fork never reaches this handler (it keeps the same session object and the old one
+			// stays open), so reaching here means the session is really going away: release exactly
+			// its own trees, and leave every other session's dev servers running.
+			releaseSessionProcesses(ctx);
 			if (nativeRetryOverridden && nativeRetryPreference !== undefined && ctx.setAutoRetryEnabled) {
 				try {
 					ctx.setAutoRetryEnabled(nativeRetryPreference);
@@ -522,6 +528,32 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
  * persisted preset as `initialPreset` would otherwise outrank env aliases in
  * Pi's resolver, so only inject it when no policy override is present.
  */
+/**
+ * Release the background process trees one session owns.
+ *
+ * Called from `session_shutdown`, which fires only when the session is really going away: `/new`,
+ * resume, a deleted session, and quit. A session switch or a fork reuses the same session object
+ * and never reaches this handler, so a dev server the user is watching keeps running while they
+ * look at another conversation. That is the intended difference between "not visible" and "closed".
+ *
+ * Failure is reported, not thrown: a session that cannot stop one tree must still finish shutting
+ * down, and the host-exit sweep is the backstop.
+ */
+function releaseSessionProcesses(ctx: ExtensionContext): void {
+	let ownerId: string;
+	try {
+		ownerId = ctx.sessionManager.getSessionId();
+	} catch {
+		// A context from an already-replaced session cannot name its owner; the host sweep covers it.
+		return;
+	}
+	if (!ownerId) return;
+	void releaseOwnerGracefully(ownerId).catch(() => {
+		// The registry already marked the trees releasing; a failed wait must not surface as an
+		// unhandled rejection during teardown.
+	});
+}
+
 function resolvePermissionOptions(options: StepExtensionOptions): StepPermissionControllerOptions | undefined {
 	const explicit: StepPermissionControllerOptions = {
 		...options.permission,

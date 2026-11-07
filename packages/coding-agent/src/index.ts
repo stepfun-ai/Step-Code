@@ -287,6 +287,21 @@ export type {
 	ResolvedResource,
 } from "./core/package-manager.ts";
 export { DefaultPackageManager } from "./core/package-manager.ts";
+export {
+	forgetProcess,
+	HOST_OWNER,
+	isUnfinishedWork,
+	listProcesses,
+	listUnfinishedWork,
+	PROCESS_TERM_GRACE_MS,
+	type ProcessKind,
+	type ProcessRegistration,
+	registerProcess,
+	releaseAllProcessesSync,
+	releaseOwnerGracefully,
+	releaseOwnerProcessesSync,
+	subscribeToProcessRegistry,
+} from "./core/process-registry.ts";
 export type { AppMode } from "./core/project-trust.ts";
 export type {
 	ResourceCollision,
@@ -898,6 +913,7 @@ export {
 } from "./utils/image-resize.ts";
 export { detectSupportedImageMimeTypeFromFile } from "./utils/mime.ts";
 export { openBrowser } from "./utils/open-browser.ts";
+export { armParentDeathGuard, type ParentDeathGuard } from "./utils/parent-death-guard.ts";
 export { canonicalizePath, getCwdRelativePath, isLocalPath, resolvePath } from "./utils/paths.ts";
 export { getPiUserAgent } from "./utils/pi-user-agent.ts";
 // Shell utilities

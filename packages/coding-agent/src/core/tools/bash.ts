@@ -7,12 +7,14 @@ import { keyHint } from "../../render/keybinding-hints.ts";
 import { truncateToVisualLines } from "../../render/visual-truncate.ts";
 import { theme } from "../../theme/theme.ts";
 import { waitForChildProcess } from "../../utils/child-process.ts";
+import { armParentDeathGuard } from "../../utils/parent-death-guard.ts";
 import {
 	getShellConfig,
 	getShellEnv,
-	killProcessTree,
+	INTERRUPTED_COMMAND_GRACE_MS,
 	type ShellConfig,
 	spawnShellChild,
+	terminateProcessTreeGracefully,
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
@@ -137,10 +139,31 @@ export function createLocalShellOperations(
 				stderr: "pipe",
 			});
 			if (child.pid) trackDetachedChildPid(child.pid);
+			// The child is spawned detached (its own process group), so it survives a host that dies
+			// without running its handlers. Arm the same guard a background command uses: one shared
+			// supervisor per host, so a foreground command costs a lease, not a process. Without this
+			// a `SIGKILL`ed host leaves the command — and everything it started — running.
+			const guard = child.pid ? armParentDeathGuard(child.pid, INTERRUPTED_COMMAND_GRACE_MS) : undefined;
+			void guard?.ready.catch(() => {});
 			let timedOut = false;
 			let timeoutHandle: NodeJS.Timeout | undefined;
+			// Stop and timeout send SIGTERM to the process group and escalate to SIGKILL after a
+			// grace window, so a shell `trap ... TERM` handler gets to run its own cleanup. The
+			// escalation is cancelled once the child actually exits; a late SIGKILL must never land
+			// on a reused pid. Re-arming (timeout then abort) replaces the previous escalation
+			// instead of leaking it.
+			//
+			// A foreground command uses a short window: the user pressed Escape, or the deadline
+			// already elapsed, so anything longer reads as a hang. The call still waits for the tree
+			// to exit, which is where a cleanup handler's time actually goes.
+			let cancelEscalation: (() => void) | undefined;
+			const stopGracefully = () => {
+				if (!child.pid) return;
+				cancelEscalation?.();
+				cancelEscalation = terminateProcessTreeGracefully(child.pid, INTERRUPTED_COMMAND_GRACE_MS);
+			};
 			const onAbort = () => {
-				if (child.pid) killProcessTree(child.pid);
+				stopGracefully();
 			};
 
 			try {
@@ -148,13 +171,13 @@ export function createLocalShellOperations(
 				if (timeoutMs !== undefined) {
 					timeoutHandle = setTimeout(() => {
 						timedOut = true;
-						if (child.pid) killProcessTree(child.pid);
+						stopGracefully();
 					}, timeoutMs);
 				}
 				// Stream stdout and stderr.
 				child.stdout?.on("data", onData);
 				child.stderr?.on("data", onData);
-				// Handle abort signal by killing the entire process tree.
+				// Handle abort signal by stopping the entire process tree.
 				if (signal) {
 					if (signal.aborted) onAbort();
 					else signal.addEventListener("abort", onAbort, { once: true });
@@ -170,6 +193,11 @@ export function createLocalShellOperations(
 					...(timeout === undefined ? {} : { timeoutSeconds: timeout }),
 				};
 			} finally {
+				// Disarm a pending escalation first: the process is gone, and its pid may be reused.
+				cancelEscalation?.();
+				// Release the guard lease too. A command that exited on its own must not be reported
+				// as a parent death, and the lease must not outlive the pid it names.
+				void guard?.disarm();
 				if (child.pid) untrackDetachedChildPid(child.pid);
 				if (timeoutHandle) clearTimeout(timeoutHandle);
 				if (signal) signal.removeEventListener("abort", onAbort);

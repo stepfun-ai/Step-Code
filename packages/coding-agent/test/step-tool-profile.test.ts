@@ -76,6 +76,16 @@ describe("Step tool profile", () => {
 					"Run a non-interactive shell command from the initial working directory by default. Use for tests, builds, formatters, git, and project scripts; prefer dedicated file/search tools for reading and searching.",
 				promptSnippet: "Run a non-interactive shell command",
 			},
+			bash_list: {
+				description:
+					"List the background commands this session started, with pid, status, and log path. Background commands keep running across a session switch and stop when the session is deleted or the app exits.",
+				promptSnippet: "List this session's background commands",
+			},
+			bash_kill: {
+				description:
+					"Stop background commands this session started. Accepts one pid or `all`. Sends SIGTERM, then SIGKILL after a short grace period. Only the caller's own session's commands can be stopped.",
+				promptSnippet: "Stop a background command started by this session",
+			},
 			find_tools: {
 				description:
 					"Search registered tools by natural-language intent, tool name, description, and parameter names.",
