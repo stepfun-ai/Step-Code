@@ -981,6 +981,25 @@ export class SessionManager {
 		return this.persist;
 	}
 
+	/**
+	 * Persist a newly created session before its first turn. Host-created task
+	 * sessions need a file that can be reopened after a restart.
+	 */
+	persistNewSessionHeader(): string | undefined {
+		if (!this.persist || !this.sessionFile || this.flushed) return this.sessionFile;
+		const fd = openSync(this.sessionFile, "wx");
+		try {
+			for (const entry of this.fileEntries) {
+				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+			}
+		} finally {
+			closeSync(fd);
+		}
+		this.flushed = true;
+		this._notifyFilePersisted(this.sessionFile, "create");
+		return this.sessionFile;
+	}
+
 	getCwd(): string {
 		return this.cwd;
 	}

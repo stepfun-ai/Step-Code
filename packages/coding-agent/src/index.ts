@@ -508,11 +508,19 @@ export {
 } from "./features/step.ts";
 export { createStepCapabilitiesExtensionInline } from "./features/step-capabilities.ts";
 export {
+	CRON_MAX_PROMPT_LENGTH,
+	CRON_MAX_TITLE_LENGTH,
+	type CronCreateOptions,
 	type CronCreateResult,
 	type CronDelivery,
 	CronFileStore,
 	type CronFileStoreOptions,
 	type CronJob,
+	type CronJobStatus,
+	type CronRunStatus,
+	type CronRuntimeLike,
+	type CronStatusReason,
+	type CronUpdatePatch,
 	createStepCronExtension,
 	SimpleCronExpression,
 	type StepCronExtensionOptions,

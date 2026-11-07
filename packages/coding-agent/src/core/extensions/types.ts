@@ -115,6 +115,15 @@ export interface ExtensionUIDialogOptions {
 	 */
 	overlay?: boolean;
 	/**
+	 * Ask about one action and forget the answer.
+	 *
+	 * A host grants standing permissions by tool name ("allow for this session").
+	 * A dialog that manages a durable object — a scheduled task, say — must not
+	 * join that grant: one approval would otherwise silently cover every later
+	 * change of the same kind.
+	 */
+	once?: boolean;
+	/**
 	 * Reference lines for an input dialog, rendered under the title and above the
 	 * editable row. Use them to show the accepted spellings of an answer that has
 	 * more than one (a git URL, an owner/repo pair, a local path), so the accepted
