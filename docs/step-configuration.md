@@ -120,15 +120,15 @@ Step screens pass the Step agent directory; generic TUI callers default to the
 system temporary directory. Rendering equivalence tests select the uncached
 renderer through a test-process argument.
 
-### Background subagents
+### Subagents
 
-The `[subagent]` table controls background subagent lanes:
+The `[subagent]` table controls subagent concurrency and background lanes:
 
 ```toml
 [subagent]
 background = true                  # false runs run_in_background calls in the foreground
 background_timeout_seconds = 3600  # default per-turn wall-clock limit of a lane
-max_concurrency = 8                # children running at once in a parallel batch
+max_concurrency = 8                # children running at once across parallel batches
 ```
 
 A trusted project's `config.toml` overrides the global values.
@@ -136,12 +136,20 @@ A trusted project's `config.toml` overrides the global values.
 value is reported as a settings warning and ignored, so the 3,600-second default
 applies. A call's own `timeout_seconds` takes precedence.
 
-`max_concurrency` sets how many child processes a parallel subagent batch runs
-at once. It defaults to 8 and must be a positive integer; there is no upper
-bound, so a configured value may raise the limit above the default. The value is
-read on every call, so a config reload takes effect without a restart. When
-`STEPCODE_CONFIG_PATH` selects a StepCode JSON config, the same settings live
-under `subagent.background` and `subagent.backgroundTimeoutSeconds`;
+`max_concurrency` sets how many child processes run at once across parallel
+subagent batches. It applies to foreground and print batches too, not only to
+background lanes, and is a different limit from the at most eight running lanes
+per session described in the [orchestration
+lifecycle](orchestration-lifecycle.md#background-subagent-lanes). It defaults to
+8 and must be a positive integer; there is no separate upper bound, so a
+configured value may raise the limit above the default, and the batch itself is
+still capped by `maxParallelTasks` (1,000 by default). Batches take slots from
+the same process-wide admission window as workflow nodes, whose capacity is the
+smallest ceiling among the runs currently attached: a concurrent workflow with a
+lower ceiling also lowers a batch, and a 429 seen by either lowers both. The
+value is read on every call, so a config reload takes effect without a restart.
+When `STEPCODE_CONFIG_PATH` selects a StepCode JSON config, the same settings
+live under `subagent.background` and `subagent.backgroundTimeoutSeconds`;
 `max_concurrency` lives under `subagent.maxConcurrency`.
 `STEP_DISABLE_SUBAGENT_BACKGROUND=1` disables background lanes regardless of the
 file. Print and JSON runs never start lanes. See the [orchestration

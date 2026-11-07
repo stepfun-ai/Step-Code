@@ -250,14 +250,44 @@ describe("StepCode config compatibility", () => {
 		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
 		const manager = decorateStepCodeSettingsManager(createStepSettingsManager(root, agentDir), config!);
 		expect(manager.getStepSettings().subagentMaxConcurrency).toBeUndefined();
-		// The ignored value must surface as a settings warning, not fail silently.
+		// The ignored value must surface as a settings warning naming the JSON key,
+		// not fail silently and not point the user at the TOML key.
 		const errors = manager.drainErrors();
-		expect(errors.some((entry) => /max_concurrency/.test(entry.error.message))).toBe(true);
+		expect(errors.some((entry) => /subagent\.maxConcurrency/u.test(entry.error.message))).toBe(true);
 		expect(errors.some((entry) => entry.path === configPath)).toBe(true);
 		expect(manager.drainErrors()).toEqual([]);
 	});
 
-	test("ignores an out-of-range subagent timeout in the injected config", async () => {
+	test("drops stale max_concurrency warnings on reload", async () => {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-config-subagent-concurrency-reload-"));
+		roots.push(root);
+		const configPath = join(root, "config.json");
+		const agentDir = join(root, "agent");
+		await mkdir(agentDir, { recursive: true });
+		const write = (maxConcurrency: number) =>
+			writeFile(
+				configPath,
+				JSON.stringify({
+					providers: {
+						p: { api: "anthropic-messages", baseUrl: "https://proxy.example/v1", models: [{ id: "m" }] },
+					},
+					activeModel: "m",
+					subagent: { maxConcurrency },
+				}),
+			);
+		await write(2.5);
+		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
+		const manager = decorateStepCodeSettingsManager(createStepSettingsManager(root, agentDir), config!);
+		expect(manager.drainErrors()).toHaveLength(1);
+
+		await write(12);
+		await manager.reload();
+		// The fixed value produces no new diagnostics, and the old one is gone.
+		expect(manager.drainErrors()).toEqual([]);
+		expect(manager.getStepSettings().subagentMaxConcurrency).toBe(12);
+	});
+
+	test("warns about an invalid subagent timeout in the injected config", async () => {
 		const root = await mkdtemp(join(tmpdir(), "stepcode-config-subagent-bad-"));
 		roots.push(root);
 		const configPath = join(root, "config.json");
@@ -274,6 +304,10 @@ describe("StepCode config compatibility", () => {
 		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
 		const manager = decorateStepCodeSettingsManager(createStepSettingsManager(root, agentDir), config!);
 		expect(manager.getStepSettings().subagentBackgroundTimeoutSeconds).toBeUndefined();
+		// The two adjacent keys behave the same way: an ignored value is a warning.
+		expect(
+			manager.drainErrors().some((entry) => /subagent\.backgroundTimeoutSeconds/u.test(entry.error.message)),
+		).toBe(true);
 	});
 
 	test("keeps StepCode model and permission reads and writes in the injected config", async () => {

@@ -8,6 +8,7 @@ import type {
 	StepSubagentRunResult,
 	SubagentParams,
 } from "../src/features/step-subagent.ts";
+import { createStepSubagentExtension, resolveSubagentConcurrency } from "../src/features/step-subagent.ts";
 import { executeSubagent } from "../src/features/subagent/execute.ts";
 import { resetWorkflowAdmission } from "../src/features/workflow/admission.ts";
 
@@ -110,6 +111,47 @@ async function peakConcurrency(tasks: number, expected: number, options: StepSub
 	);
 	return { peak, result };
 }
+
+test("the resolver defaults to 8 and prefers a valid configured value", () => {
+	expect(resolveSubagentConcurrency(undefined, undefined)).toBe(8);
+	expect(resolveSubagentConcurrency(undefined, 3)).toBe(3);
+	// A configured value wins over the option and may exceed the default.
+	expect(resolveSubagentConcurrency(12, 3)).toBe(12);
+	expect(resolveSubagentConcurrency(64, undefined)).toBe(64);
+});
+
+test("the resolver never returns an invalid ceiling", () => {
+	// A non-positive or non-finite capacity would wedge the process-wide admission
+	// window, so an invalid input falls through to the next valid source.
+	expect(resolveSubagentConcurrency(0, 3)).toBe(3);
+	expect(resolveSubagentConcurrency(-4, undefined)).toBe(8);
+	expect(resolveSubagentConcurrency(2.5, undefined)).toBe(8);
+	expect(resolveSubagentConcurrency(Number.NaN, 5)).toBe(5);
+	expect(resolveSubagentConcurrency(undefined, 0)).toBe(8);
+	expect(resolveSubagentConcurrency(undefined, Number.NaN)).toBe(8);
+	expect(resolveSubagentConcurrency(undefined, 2.5)).toBe(8);
+});
+
+test("an invalid host option is rejected when the extension is created", () => {
+	// The setting is validated where it is read, but a host option is a programmer
+	// error: reject it loudly instead of clamping it into an unexpected ceiling.
+	for (const invalid of [0, -1, 2.5, Number.NaN]) {
+		expect(() => createStepSubagentExtension({ agentDir: "/tmp/step-agent-test", maxConcurrency: invalid })).toThrow(
+			/maxConcurrency/u,
+		);
+	}
+	expect(() => createStepSubagentExtension({ agentDir: "/tmp/step-agent-test", maxConcurrency: 12 })).not.toThrow();
+});
+
+test("an invalid host option cannot deadlock a batch run through executeSubagent", async () => {
+	// Embedded hosts can bypass the factory; the execution path still has to fall
+	// back to a usable ceiling rather than queue every task behind a zero capacity.
+	for (const invalid of [0, -1, Number.NaN]) {
+		const { peak, result } = await peakConcurrency(8, 8, { maxConcurrency: invalid });
+		expect(peak).toBe(8);
+		expect(result.details?.results.every((record) => record.status === "completed")).toBe(true);
+	}
+});
 
 test("a parallel batch runs at the default of 8 regardless of host CPUs", async () => {
 	const { peak, result } = await peakConcurrency(8, 8, {});

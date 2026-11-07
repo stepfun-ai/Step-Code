@@ -67,8 +67,11 @@ export function isValidSubagentBackgroundTimeout(value: unknown): value is numbe
 }
 
 /** Message for a configured timeout that is ignored because it is out of bounds or not an integer. */
-export function invalidSubagentBackgroundTimeoutMessage(value: unknown): string {
-	return `[subagent] background_timeout_seconds must be an integer from ${SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS} to ${SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS}; ignoring ${JSON.stringify(value)} and using ${SUBAGENT_BACKGROUND_TIMEOUT_DEFAULT_SECONDS}`;
+export function invalidSubagentBackgroundTimeoutMessage(
+	value: unknown,
+	keyPath = "[subagent] background_timeout_seconds",
+): string {
+	return `${keyPath} must be an integer from ${SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS} to ${SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS}; ignoring ${JSON.stringify(value)} and using ${SUBAGENT_BACKGROUND_TIMEOUT_DEFAULT_SECONDS}`;
 }
 
 /** The raw configured timeout values, from the flat key and the `[subagent]` table. */
@@ -91,10 +94,10 @@ export function isValidSubagentMaxConcurrency(value: unknown): value is number {
 }
 
 /** Message for a configured concurrency that is ignored because it is not a positive integer. */
-export function invalidSubagentMaxConcurrencyMessage(value: unknown): string {
+export function invalidSubagentMaxConcurrencyMessage(value: unknown, keyPath = "[subagent] max_concurrency"): string {
 	// The effective fallback (option, then default) is resolved per call, so the
 	// load-time warning only states that the value is ignored.
-	return `[subagent] max_concurrency must be a positive integer; ignoring ${JSON.stringify(value)}`;
+	return `${keyPath} must be a positive integer; ignoring ${JSON.stringify(value)}`;
 }
 
 /** The raw configured concurrency values, from the flat key and the `[subagent]` table. */

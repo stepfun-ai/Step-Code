@@ -17,6 +17,7 @@ import {
 	type StepPermissionPresetId,
 } from "./permissions.ts";
 import {
+	invalidSubagentBackgroundTimeoutMessage,
 	invalidSubagentMaxConcurrencyMessage,
 	isValidSubagentBackgroundTimeout,
 	isValidSubagentMaxConcurrency,
@@ -295,6 +296,9 @@ class StepCodeSettingsAuthority {
 		const config = await loadStepCodeConfig({ ...process.env, STEPCODE_CONFIG_PATH: this.path });
 		this.defaultProvider = config?.defaultProvider;
 		this.defaultModel = config?.defaultModel;
+		// A reload replaces the whole snapshot: diagnostics from the previous file
+		// must not outlive a value the user has already fixed.
+		this.loadErrors.length = 0;
 		this.settings = readStepCodeSettings(readConfigRoot(this.path), (error) => this.reportLoadError(error));
 	}
 
@@ -364,9 +368,14 @@ function readStepCodeSettings(root: JsonObject, report?: (error: Error) => void)
 	const subagent = asObject(root.subagent);
 	const subagentBackground = readBoolean(subagent?.background);
 	const subagentTimeout = subagent?.backgroundTimeoutSeconds;
+	if (subagentTimeout !== undefined && !isValidSubagentBackgroundTimeout(subagentTimeout)) {
+		report?.(
+			new Error(invalidSubagentBackgroundTimeoutMessage(subagentTimeout, "subagent.backgroundTimeoutSeconds")),
+		);
+	}
 	const subagentConcurrency = subagent?.maxConcurrency;
 	if (subagentConcurrency !== undefined && !isValidSubagentMaxConcurrency(subagentConcurrency)) {
-		report?.(new Error(invalidSubagentMaxConcurrencyMessage(subagentConcurrency)));
+		report?.(new Error(invalidSubagentMaxConcurrencyMessage(subagentConcurrency, "subagent.maxConcurrency")));
 	}
 	const settings: StepSettings = {
 		...(preset ? { permissionPreset: preset } : {}),

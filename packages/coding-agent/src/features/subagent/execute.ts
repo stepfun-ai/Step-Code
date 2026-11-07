@@ -12,7 +12,6 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "@step-harness/age
 import type { Static } from "typebox";
 import { SUBAGENT_SESSION_ID_PREFIX } from "../../core/child-session.ts";
 import type { ExtensionContext } from "../../core/extensions/types.ts";
-import { SUBAGENT_MAX_CONCURRENCY_DEFAULT } from "../../step/settings-manager.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../../step/telemetry.ts";
 import {
 	cloneUsage,
@@ -20,6 +19,7 @@ import {
 	finalOutput,
 	isFailed,
 	makeToolResult,
+	resolveSubagentConcurrency,
 	resultText,
 	type StepChainItem,
 	type StepSubagentDetails,
@@ -469,8 +469,10 @@ export async function runPreparedSubagent(
 			return failed;
 		}
 		reportCreated(agent, index);
-		// A parallel batch shares the process-wide window with workflow nodes, so the
-		// two together never exceed the host ceiling. The task stays queued until admitted.
+		// A parallel batch shares the process-wide window with workflow nodes. The
+		// window's capacity is the smallest ceiling among the runs attached, so a batch
+		// and a workflow running together are bound by the more conservative of the two.
+		// The task stays queued until admitted.
 		let releaseSlot: (() => void) | undefined;
 		if (admission) {
 			try {
@@ -622,10 +624,11 @@ export async function runPreparedSubagent(
 	emit(mode);
 	if (parallel) {
 		// Plain default plus an optional configured value; no CPU- or provider-derived
-		// ceiling. `configured` is validated at the settings boundary, so it is used as-is.
+		// ceiling. Both inputs are validated here so an invalid host option cannot reach
+		// the shared window as a non-positive capacity.
 		const configured = options.maxConcurrencySettings?.()?.maxConcurrency;
 		const ceiling = Math.min(
-			configured ?? options.maxConcurrency ?? SUBAGENT_MAX_CONCURRENCY_DEFAULT,
+			resolveSubagentConcurrency(configured, options.maxConcurrency),
 			options.maxParallelTasks,
 		);
 		const lease = acquireWorkflowAdmission(ceiling);

@@ -305,6 +305,11 @@ describe("Step settings manager decorator", () => {
 
 		expect(manager.getStepSettings()).toEqual({ subagentMaxConcurrency: 12 });
 		expect(() => manager.setStepSettings({ subagentMaxConcurrency: 0 })).toThrow(/subagentMaxConcurrency/u);
+		// The ignored project value must surface as a warning, not vanish silently.
+		const errors = manager.drainErrors();
+		expect(errors.some((entry) => entry.scope === "project" && /max_concurrency/u.test(entry.error.message))).toBe(
+			true,
+		);
 	});
 
 	it("reads the flat subagentMaxConcurrency key", () => {

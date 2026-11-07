@@ -20,6 +20,7 @@ import type { NewSessionOptions } from "../core/session-manager.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "../step/environment.ts";
 import {
 	isValidSubagentBackgroundTimeout,
+	isValidSubagentMaxConcurrency,
 	SUBAGENT_BACKGROUND_TIMEOUT_DEFAULT_SECONDS,
 	SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS,
 	SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS,
@@ -243,7 +244,11 @@ export interface StepSubagentExtensionOptions {
 	includeBuiltinAgents?: boolean;
 	/** Maximum batch size accepted in one parallel call; excess tasks queue instead of running. */
 	maxParallelTasks?: number;
-	/** Number of child processes allowed to run at once; tasks beyond this stay queued. */
+	/**
+	 * Fallback number of child processes allowed to run at once, used only when
+	 * `[subagent] max_concurrency` is unset; a configured value overrides it.
+	 * Must be a positive integer.
+	 */
 	maxConcurrency?: number;
 	/** Optional isolated git worktree implementation. */
 	worktreeManager?: StepWorktreeManager;
@@ -275,6 +280,20 @@ export interface StepSubagentBackgroundSettings {
 export interface StepSubagentConcurrencySettings {
 	/** Default number of child processes a parallel batch runs at once. */
 	maxConcurrency?: number;
+}
+
+/**
+ * Resolve the parallel-batch ceiling: a validated configured value, then a
+ * validated host option, then the default. There is deliberately no CPU- or
+ * provider-derived ceiling — a child waits on a remote model, not on a local
+ * core — but an invalid value must never reach the shared admission window,
+ * where a non-positive or non-finite capacity wedges the process-wide pool
+ * instead of failing one batch.
+ */
+export function resolveSubagentConcurrency(configured?: number, option?: number): number {
+	if (isValidSubagentMaxConcurrency(configured)) return configured;
+	if (isValidSubagentMaxConcurrency(option)) return option;
+	return SUBAGENT_MAX_CONCURRENCY_DEFAULT;
 }
 
 // Keep the model-facing contract identical to Pi's subagent example. Step
@@ -749,12 +768,19 @@ async function withSubagentListWidget(
 
 /** Construct the hidden inline extension used by the Step launcher. */
 export function createStepSubagentExtension(options: StepSubagentExtensionOptions = {}): ExtensionFactory {
+	// The configured setting is validated where it is read; a host option is a
+	// programming error, so reject it here while the caller can still see it.
+	if (options.maxConcurrency !== undefined && !isValidSubagentMaxConcurrency(options.maxConcurrency)) {
+		throw new Error(
+			`Invalid Step subagent maxConcurrency option: ${String(options.maxConcurrency)} (expected a positive integer)`,
+		);
+	}
 	const resolved = {
 		agentDir: path.resolve(options.agentDir ?? resolveStepAgentDir()),
 		configDirName: options.configDirName?.trim() || resolveStepConfigDir() || CONFIG_DIR_NAME,
 		includeBuiltinAgents: options.includeBuiltinAgents !== false,
 		maxParallelTasks: Math.max(1, Math.min(MAX_PARALLEL_TASKS, options.maxParallelTasks ?? MAX_PARALLEL_TASKS)),
-		maxConcurrency: options.maxConcurrency ?? SUBAGENT_MAX_CONCURRENCY_DEFAULT,
+		maxConcurrency: resolveSubagentConcurrency(undefined, options.maxConcurrency),
 		telemetry: options.telemetry,
 		worktreeManager: options.worktreeManager ?? {
 			allocate: allocateStepWorktree,
