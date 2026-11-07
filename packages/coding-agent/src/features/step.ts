@@ -594,10 +594,10 @@ function publishBackgroundCommandStatus(ctx: ExtensionContext): () => void {
 /**
  * Release the background process trees one session owns.
  *
- * Called from `session_shutdown`, which fires only when the session is really going away: `/new`,
- * resume, a deleted session, and quit. A session switch or a fork reuses the same session object
- * and never reaches this handler, so a dev server the user is watching keeps running while they
- * look at another conversation. That is the intended difference between "not visible" and "closed".
+ * Called from `session_shutdown` when `reason === "quit"`. That handler also fires for `new`,
+ * `resume`, `fork` and `reload`, and those keep the trees running: the conversation that owns them
+ * is still on disk — and, in a multi-session host, still on screen — so stopping its dev server
+ * would look like a bug. Only a host that is exiting, or a session being deleted, ends the work.
  *
  * Failure is reported, not thrown: a session that cannot stop one tree must still finish shutting
  * down, and the host-exit sweep is the backstop.
