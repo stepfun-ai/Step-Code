@@ -361,7 +361,13 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 			fullAccessAcknowledged = false;
 			unsubscribeBackgroundStatus?.();
 			unsubscribeBackgroundStatus = undefined;
-			ctx.ui.setStatus("background-commands", undefined);
+			// A host tearing down may already have released its UI; clearing a footer line must not
+			// turn shutdown into an error.
+			try {
+				ctx.ui.setStatus("background-commands", undefined);
+			} catch {
+				// UI already gone.
+			}
 			// Background commands belong to the session that started them, and they outlive
 			// everything except the session itself. `session_shutdown` fires for five reasons, and
 			// four of them do NOT end the session: `new`, `resume` and `fork` all replace the runtime
