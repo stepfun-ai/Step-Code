@@ -131,10 +131,15 @@ export class WorkflowSemaphore {
 	}
 
 	setCeiling(ceiling: number): void {
-		if (ceiling === this.ceiling) return;
+		// The pool's capacity is the smallest ceiling among attached members, so one
+		// caller can hand over a non-positive or non-finite value. That capacity admits
+		// nothing and would wedge the process-wide window instead of failing one run, so
+		// clamp it here as the last line of defense.
+		const next = Number.isFinite(ceiling) ? Math.max(1, Math.floor(ceiling)) : 1;
+		if (next === this.ceiling) return;
 		const wasAtCeiling = this.limit === this.ceiling;
-		this.ceiling = ceiling;
-		this.limit = wasAtCeiling ? ceiling : Math.min(this.limit, ceiling);
+		this.ceiling = next;
+		this.limit = wasAtCeiling ? next : Math.min(this.limit, next);
 		this.generation++;
 		this.successes = 0;
 		this.drain();

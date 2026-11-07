@@ -19,6 +19,7 @@ import {
 	finalOutput,
 	isFailed,
 	makeToolResult,
+	resolveSubagentConcurrency,
 	resultText,
 	type StepChainItem,
 	type StepSubagentDetails,
@@ -41,11 +42,7 @@ import {
 	type StepAgentScope,
 } from "../step-subagent-agents.ts";
 import { acquireWorkflowAdmission } from "../workflow/admission.ts";
-import {
-	clampWorkflowConcurrency,
-	configuredWorkflowConcurrencyLimit,
-	type WorkflowSemaphore,
-} from "../workflow/budget.ts";
+import type { WorkflowSemaphore } from "../workflow/budget.ts";
 import { truncateText } from "./lane-events.ts";
 import type { StepSubagentLaneRuntime } from "./lane-lifecycle.ts";
 import { finalRoster, liveRoster } from "./projection.ts";
@@ -264,11 +261,12 @@ export type SubagentExecutionOptions = Required<
 		StepSubagentExtensionOptions,
 		"agentDir" | "configDirName" | "includeBuiltinAgents" | "maxParallelTasks" | "maxConcurrency"
 	>
-> & {
-	worktreeManager: StepWorktreeManager;
-	runner: StepSubagentRunner;
-	telemetry?: StepTelemetryReporter;
-};
+> &
+	Pick<StepSubagentExtensionOptions, "maxConcurrencySettings"> & {
+		worktreeManager: StepWorktreeManager;
+		runner: StepSubagentRunner;
+		telemetry?: StepTelemetryReporter;
+	};
 
 /** A validated, approved call: discovery ran, exactly one mode was selected, and project agents were confirmed. */
 export interface PreparedSubagentRun {
@@ -471,8 +469,10 @@ export async function runPreparedSubagent(
 			return failed;
 		}
 		reportCreated(agent, index);
-		// A parallel batch shares the process-wide window with workflow nodes, so the
-		// two together never exceed the host ceiling. The task stays queued until admitted.
+		// A parallel batch shares the process-wide window with workflow nodes. The
+		// window's capacity is the smallest ceiling among the runs attached, so a batch
+		// and a workflow running together are bound by the more conservative of the two.
+		// The task stays queued until admitted.
 		let releaseSlot: (() => void) | undefined;
 		if (admission) {
 			try {
@@ -623,8 +623,14 @@ export async function runPreparedSubagent(
 	// at 0s, including ones still queued behind maxConcurrency.
 	emit(mode);
 	if (parallel) {
-		// The configured provider limit caps subagent batches the same way it caps workflows.
-		const ceiling = Math.min(options.maxConcurrency, clampWorkflowConcurrency(configuredWorkflowConcurrencyLimit()));
+		// Plain default plus an optional configured value; no CPU- or provider-derived
+		// ceiling. Both inputs are validated here so an invalid host option cannot reach
+		// the shared window as a non-positive capacity.
+		const configured = options.maxConcurrencySettings?.()?.maxConcurrency;
+		const ceiling = Math.min(
+			resolveSubagentConcurrency(configured, options.maxConcurrency),
+			options.maxParallelTasks,
+		);
 		const lease = acquireWorkflowAdmission(ceiling);
 		try {
 			await mapWithConcurrency(parallel, ceiling, (task, index) => runOne(task, index, lease.semaphore));

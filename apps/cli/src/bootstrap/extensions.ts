@@ -62,6 +62,10 @@ export function createStepExtensionFactories(deps: StepExtensionFactoryDeps): In
 							}
 						: undefined;
 				},
+				maxConcurrencySettings: () => {
+					const settings = deps.stepSettings?.()?.getStepSettings();
+					return settings ? { maxConcurrency: settings.subagentMaxConcurrency } : undefined;
+				},
 			},
 		}),
 		createStepCronExtension({ telemetry: deps.telemetry }),

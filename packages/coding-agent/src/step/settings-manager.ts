@@ -45,6 +45,8 @@ export interface StepSettings {
 	subagentBackground?: boolean;
 	/** `[subagent] background_timeout_seconds`: default per-turn wall-clock limit of a background lane. */
 	subagentBackgroundTimeoutSeconds?: number;
+	/** `[subagent] max_concurrency`: default number of child processes a parallel subagent batch runs at once. */
+	subagentMaxConcurrency?: number;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -65,13 +67,42 @@ export function isValidSubagentBackgroundTimeout(value: unknown): value is numbe
 }
 
 /** Message for a configured timeout that is ignored because it is out of bounds or not an integer. */
-export function invalidSubagentBackgroundTimeoutMessage(value: unknown): string {
-	return `[subagent] background_timeout_seconds must be an integer from ${SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS} to ${SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS}; ignoring ${JSON.stringify(value)} and using ${SUBAGENT_BACKGROUND_TIMEOUT_DEFAULT_SECONDS}`;
+export function invalidSubagentBackgroundTimeoutMessage(
+	value: unknown,
+	keyPath = "[subagent] background_timeout_seconds",
+): string {
+	return `${keyPath} must be an integer from ${SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS} to ${SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS}; ignoring ${JSON.stringify(value)} and using ${SUBAGENT_BACKGROUND_TIMEOUT_DEFAULT_SECONDS}`;
 }
 
 /** The raw configured timeout values, from the flat key and the `[subagent]` table. */
 function rawSubagentTimeouts(value: JsonObject): unknown[] {
 	return [value.subagentBackgroundTimeoutSeconds, asObject(value.subagent)?.background_timeout_seconds].filter(
+		(candidate) => candidate !== undefined,
+	);
+}
+
+/** Default number of child processes a parallel subagent batch runs at once. */
+export const SUBAGENT_MAX_CONCURRENCY_DEFAULT = 8;
+
+/**
+ * Whether `value` is an accepted `[subagent] max_concurrency`: a positive
+ * integer. There is deliberately no upper bound — raising the limit above the
+ * default is the point of the setting.
+ */
+export function isValidSubagentMaxConcurrency(value: unknown): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+/** Message for a configured concurrency that is ignored because it is not a positive integer. */
+export function invalidSubagentMaxConcurrencyMessage(value: unknown, keyPath = "[subagent] max_concurrency"): string {
+	// The effective fallback (option, then default) is resolved per call, so the
+	// load-time warning only states that the value is ignored.
+	return `${keyPath} must be a positive integer; ignoring ${JSON.stringify(value)}`;
+}
+
+/** The raw configured concurrency values, from the flat key and the `[subagent]` table. */
+function rawSubagentConcurrencies(value: JsonObject): unknown[] {
+	return [value.subagentMaxConcurrency, asObject(value.subagent)?.max_concurrency].filter(
 		(candidate) => candidate !== undefined,
 	);
 }
@@ -272,6 +303,10 @@ function normalizeSettings(value: JsonObject, resetLegacy = true): StepSettings 
 		isValidSubagentBackgroundTimeout,
 	);
 	if (subagentTimeout !== undefined) result.subagentBackgroundTimeoutSeconds = subagentTimeout;
+	const subagentConcurrency = [value.subagentMaxConcurrency, subagent?.max_concurrency].find(
+		isValidSubagentMaxConcurrency,
+	);
+	if (subagentConcurrency !== undefined) result.subagentMaxConcurrency = subagentConcurrency;
 	if (resetLegacy) resetLegacyPermissionSettings(result, winningPresetCandidate, winningModeCandidate);
 	return result;
 }
@@ -299,6 +334,7 @@ const STEP_SETTING_ALIASES: Record<keyof StepSettings, readonly string[]> = {
 	feedbackEnabled: [],
 	subagentBackground: [],
 	subagentBackgroundTimeoutSeconds: [],
+	subagentMaxConcurrency: [],
 };
 
 const STEP_SETTING_NESTED_ALIASES: Record<keyof StepSettings, readonly (readonly string[])[]> = {
@@ -329,6 +365,7 @@ const STEP_SETTING_NESTED_ALIASES: Record<keyof StepSettings, readonly (readonly
 	feedbackEnabled: [["feedback", "enabled"]],
 	subagentBackground: [["subagent", "background"]],
 	subagentBackgroundTimeoutSeconds: [["subagent", "background_timeout_seconds"]],
+	subagentMaxConcurrency: [["subagent", "max_concurrency"]],
 };
 
 function deleteNestedAlias(root: JsonObject, path: readonly string[]): void {
@@ -386,6 +423,14 @@ function validatePatch(settings: Partial<StepSettings>): Partial<StepSettings> {
 	) {
 		throw new Error(
 			`Invalid Step subagentBackgroundTimeoutSeconds setting: ${String(settings.subagentBackgroundTimeoutSeconds)} (expected an integer from ${SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS} to ${SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS})`,
+		);
+	}
+	if (
+		settings.subagentMaxConcurrency !== undefined &&
+		!isValidSubagentMaxConcurrency(settings.subagentMaxConcurrency)
+	) {
+		throw new Error(
+			`Invalid Step subagentMaxConcurrency setting: ${String(settings.subagentMaxConcurrency)} (expected a positive integer)`,
 		);
 	}
 	const normalized = { ...settings };
@@ -497,6 +542,10 @@ class StepSettingsStore {
 		for (const timeout of rawSubagentTimeouts(value)) {
 			if (isValidSubagentBackgroundTimeout(timeout)) continue;
 			this.errors.push({ scope, path, error: new Error(invalidSubagentBackgroundTimeoutMessage(timeout)) });
+		}
+		for (const concurrency of rawSubagentConcurrencies(value)) {
+			if (isValidSubagentMaxConcurrency(concurrency)) continue;
+			this.errors.push({ scope, path, error: new Error(invalidSubagentMaxConcurrencyMessage(concurrency)) });
 		}
 		return value;
 	}

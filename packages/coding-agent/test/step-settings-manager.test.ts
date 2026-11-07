@@ -297,6 +297,29 @@ describe("Step settings manager decorator", () => {
 		);
 	});
 
+	it("reads the [subagent] max_concurrency setting and ignores invalid values", () => {
+		const fixture = makeRoot();
+		writeFileSync(fixture.paths.global, JSON.stringify({ subagent: { max_concurrency: 12 } }));
+		writeFileSync(fixture.paths.project, JSON.stringify({ subagent: { max_concurrency: -5 } }));
+		const { manager } = makeManager(fixture);
+
+		expect(manager.getStepSettings()).toEqual({ subagentMaxConcurrency: 12 });
+		expect(() => manager.setStepSettings({ subagentMaxConcurrency: 0 })).toThrow(/subagentMaxConcurrency/u);
+		// The ignored project value must surface as a warning, not vanish silently.
+		const errors = manager.drainErrors();
+		expect(errors.some((entry) => entry.scope === "project" && /max_concurrency/u.test(entry.error.message))).toBe(
+			true,
+		);
+	});
+
+	it("reads the flat subagentMaxConcurrency key", () => {
+		const fixture = makeRoot();
+		writeFileSync(fixture.paths.global, JSON.stringify({ subagentMaxConcurrency: 16 }));
+		const { manager } = makeManager(fixture);
+
+		expect(manager.getStepSettings()).toEqual({ subagentMaxConcurrency: 16 });
+	});
+
 	it("lets a project feedback alias override the global canonical setting", () => {
 		const fixture = makeRoot();
 		writeFileSync(fixture.paths.global, JSON.stringify({ feedbackEnabled: true }));

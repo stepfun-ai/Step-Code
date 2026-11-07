@@ -129,6 +129,21 @@ test("optional provider concurrency ignores blank and invalid environment values
 	expect(configuredWorkflowConcurrencyLimit(" 8 ")).toBe(8);
 });
 
+test("a non-positive shared ceiling cannot wedge the admission window", async () => {
+	// The pool's capacity is the smallest ceiling among attached members, so a bad
+	// value from one caller must not become a capacity that admits nothing.
+	const semaphore = new WorkflowSemaphore(4);
+	semaphore.setCeiling(0);
+	expect(semaphore.max).toBe(1);
+	const release = await semaphore.acquire();
+	release();
+	semaphore.setCeiling(Number.NaN);
+	expect(semaphore.max).toBe(1);
+	const releaseAgain = await semaphore.acquire();
+	releaseAgain();
+	semaphore.dispose();
+});
+
 test("a long server Retry-After cannot freeze the shared admission window", async () => {
 	// A node's own retry honors Retry-After verbatim, but the admission window is
 	// process-wide, so an hour-long (or far-future-date) cooldown must not stall

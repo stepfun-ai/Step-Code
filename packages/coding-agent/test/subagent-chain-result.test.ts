@@ -284,18 +284,16 @@ test("a 429 inside a parallel subagent lowers the shared window", async () => {
 	workflow.release();
 });
 
-test("parallel subagents honor the configured provider concurrency limit", async () => {
+test("parallel subagents ignore the workflow provider concurrency limit", async () => {
+	// A subagent batch's ceiling is a plain default plus [subagent] max_concurrency;
+	// STEP_WORKFLOW_CONCURRENCY_LIMIT only caps workflow agent() fan-out.
 	vi.stubEnv("STEP_WORKFLOW_CONCURRENCY_LIMIT", "1");
 	const tasks = ["a", "b", "c"].map((task) => ({ agent: "explore", task }));
 	const { result, peakActive } = await run({ tasks } as SubagentParams, () => ({ text: "ok" }), {
 		runnerDelayMs: 10,
 	});
 	expect(contentText(result)).toContain("Parallel: 3/3 succeeded");
-	expect(peakActive).toBe(1);
-
-	vi.unstubAllEnvs();
-	const unlimited = await run({ tasks } as SubagentParams, () => ({ text: "ok" }), { runnerDelayMs: 10 });
-	expect(unlimited.peakActive).toBeGreaterThan(1);
+	expect(peakActive).toBeGreaterThan(1);
 });
 
 test("admitted parallel subagents ask the runner to hold their slot until the child exits", async () => {
