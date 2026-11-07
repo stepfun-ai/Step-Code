@@ -80,10 +80,29 @@ function getLinuxDescendants(pid: number): LinuxProcessIdentity[] {
 }
 
 /**
- * Signal one process group, falling back to the single pid when the group is already gone.
+ * Snapshot of the Linux descendants observed for one tree, taken before the first signal.
+ *
+ * Re-reading `/proc` at escalation time would find nothing: by then the parent is dead and its
+ * children have been reparented, so their `ppid` no longer points at the tree. The identity
+ * snapshot is what makes the second signal able to reach a descendant that ignored the first.
+ */
+type TreeSnapshot = LinuxProcessIdentity[];
+
+function snapshotTree(pid: number): TreeSnapshot {
+	return process.platform === "linux" ? getLinuxDescendants(pid) : [];
+}
+
+/**
+ * Signal one process group plus the descendants observed in `snapshot`.
+ *
+ * A command can put a child in its own session or process group (`setsid`, `nohup ... &`), which
+ * `kill(-pid)` does not reach — those are what the snapshot covers. The identity check keeps a
+ * recycled pid from being signalled.
+ *
  * Never throws: a process that exited between the snapshot and the signal is not a failure.
  */
-function signalTree(pid: number, signal: NodeJS.Signals): void {
+function signalTree(pid: number, signal: NodeJS.Signals, snapshot?: TreeSnapshot): void {
+	const descendants = snapshot ?? snapshotTree(pid);
 	try {
 		process.kill(-pid, signal);
 	} catch {
@@ -91,6 +110,14 @@ function signalTree(pid: number, signal: NodeJS.Signals): void {
 			process.kill(pid, signal);
 		} catch {
 			// The process already exited.
+		}
+	}
+	for (const descendant of [...descendants].reverse()) {
+		if (readLinuxProcessIdentity(descendant.pid)?.startTime !== descendant.startTime) continue;
+		try {
+			process.kill(descendant.pid, signal);
+		} catch {
+			// The descendant already exited or was killed with the parent group.
 		}
 	}
 }
@@ -145,9 +172,12 @@ export function terminateProcessTreeGracefully(
 				finish();
 			}, graceMs);
 		} else {
-			signalTree(pid, "SIGTERM");
+			// One snapshot, used by both signals: after the SIGTERM the parent is usually gone, and a
+			// descendant that ignored it has already been reparented out of the tree.
+			const snapshot = snapshotTree(pid);
+			signalTree(pid, "SIGTERM", snapshot);
 			timer = setTimeout(() => {
-				signalTree(pid, "SIGKILL");
+				signalTree(pid, "SIGKILL", snapshot);
 				finish();
 			}, graceMs);
 		}
@@ -169,16 +199,6 @@ export function killProcessTree(pid: number): void {
 		spawnWindowsTaskkill(pid, true);
 		return;
 	}
-	const descendants = process.platform === "linux" ? getLinuxDescendants(pid) : [];
+	// `signalTree` already covers descendants that moved to their own group or session.
 	signalTree(pid, "SIGKILL");
-	// A detached child can have a different group/session. Target only the identities observed in
-	// this command's subtree, never all host processes.
-	for (const descendant of descendants.reverse()) {
-		if (readLinuxProcessIdentity(descendant.pid)?.startTime !== descendant.startTime) continue;
-		try {
-			process.kill(descendant.pid, "SIGKILL");
-		} catch {
-			// The descendant already exited or was killed with the parent group.
-		}
-	}
 }

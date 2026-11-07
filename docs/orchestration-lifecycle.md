@@ -309,6 +309,9 @@ Stopping goes through three layers, from narrowest to widest:
 3. A detached parent-death supervisor holds one IPC lease per armed group.
    When the channel closes — including when the host is `SIGKILL`ed — the
    supervisor signals the group. No in-process handler can cover that case.
+   Every command arms it, foreground or background: both are spawned detached,
+   so both would otherwise outlive a killed host. The supervisor is one process
+   per host, so a foreground command costs a lease, not a process.
 
 The registry also decides what the model and the UI can see. `bash_list` returns
 the calling session's own commands with pid, status, and log path; `bash_kill`
