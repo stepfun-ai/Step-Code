@@ -20,9 +20,11 @@ import type { NewSessionOptions } from "../core/session-manager.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "../step/environment.ts";
 import {
 	isValidSubagentBackgroundTimeout,
+	isValidSubagentMaxConcurrency,
 	SUBAGENT_BACKGROUND_TIMEOUT_DEFAULT_SECONDS,
 	SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS,
 	SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS,
+	SUBAGENT_MAX_CONCURRENCY_DEFAULT,
 } from "../step/settings-manager.ts";
 import type { StepTelemetryReporter } from "../step/telemetry.ts";
 import type { StepAgentConfig, StepAgentScope } from "./step-subagent-agents.ts";
@@ -49,7 +51,6 @@ import {
 } from "./subagent/rendering.ts";
 import { createSubagentRpcSession } from "./subagent/rpc-adapter.ts";
 import { buildSubagentToolDescription } from "./subagent/tool-description.ts";
-import { clampWorkflowConcurrency } from "./workflow/budget.ts";
 
 // Lane-notification primitives moved to ./subagent/lane-events.ts; re-exported
 // here to keep this module's public surface stable.
@@ -256,6 +257,12 @@ export interface StepSubagentExtensionOptions {
 	 * `config.toml`), read on every call so a reload takes effect.
 	 */
 	backgroundSettings?: () => StepSubagentBackgroundSettings | undefined;
+	/**
+	 * Host-supplied `[subagent] max_concurrency` (config.toml), read on every
+	 * call so a reload takes effect. A valid value overrides both the
+	 * `maxConcurrency` option and the built-in default, and may exceed it.
+	 */
+	maxConcurrencySettings?: () => StepSubagentConcurrencySettings | undefined;
 }
 
 export interface StepSubagentBackgroundSettings {
@@ -263,6 +270,24 @@ export interface StepSubagentBackgroundSettings {
 	enabled?: boolean;
 	/** Default per-turn wall-clock limit for background lanes, in seconds. */
 	timeoutSeconds?: number;
+}
+
+export interface StepSubagentConcurrencySettings {
+	/** Default number of child processes a parallel batch runs at once. */
+	maxConcurrency?: number;
+}
+
+/**
+ * Effective concurrency for one parallel batch: the configured
+ * `[subagent] max_concurrency` when valid, else the host-supplied option, else
+ * the built-in default. There is no CPU-derived ceiling and no upper clamp, so
+ * a configured value may raise the limit above the default; only positive
+ * integers are accepted.
+ */
+export function resolveSubagentConcurrency(configured: number | undefined, option: number | undefined): number {
+	if (isValidSubagentMaxConcurrency(configured)) return configured;
+	if (isValidSubagentMaxConcurrency(option)) return option;
+	return SUBAGENT_MAX_CONCURRENCY_DEFAULT;
 }
 
 // Keep the model-facing contract identical to Pi's subagent example. Step
@@ -742,15 +767,16 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 		configDirName: options.configDirName?.trim() || resolveStepConfigDir() || CONFIG_DIR_NAME,
 		includeBuiltinAgents: options.includeBuiltinAgents !== false,
 		maxParallelTasks: Math.max(1, Math.min(MAX_PARALLEL_TASKS, options.maxParallelTasks ?? MAX_PARALLEL_TASKS)),
-		maxConcurrency: Math.max(
-			1,
-			Math.min(clampWorkflowConcurrency(options.maxConcurrency), options.maxParallelTasks ?? MAX_PARALLEL_TASKS),
+		maxConcurrency: Math.min(
+			resolveSubagentConcurrency(undefined, options.maxConcurrency),
+			options.maxParallelTasks ?? MAX_PARALLEL_TASKS,
 		),
 		telemetry: options.telemetry,
 		worktreeManager: options.worktreeManager ?? {
 			allocate: allocateStepWorktree,
 		},
 		runner: options.runner ?? runStepSubagentProcess,
+		maxConcurrencySettings: options.maxConcurrencySettings,
 	};
 	return (pi: ExtensionAPI): void => {
 		// The child process inherits this marker. It still gets Step's provider and

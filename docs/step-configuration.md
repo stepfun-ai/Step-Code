@@ -128,14 +128,21 @@ The `[subagent]` table controls background subagent lanes:
 [subagent]
 background = true                  # false runs run_in_background calls in the foreground
 background_timeout_seconds = 3600  # default per-turn wall-clock limit of a lane
+max_concurrency = 8                # children running at once in a parallel batch
 ```
 
 A trusted project's `config.toml` overrides the global values.
 `background_timeout_seconds` must be an integer from 60 to 7,200; any other
 value is reported as a settings warning and ignored, so the 3,600-second default
-applies. A call's own `timeout_seconds` takes precedence. When
+applies. A call's own `timeout_seconds` takes precedence.
+
+`max_concurrency` sets how many child processes a parallel subagent batch runs
+at once. It defaults to 8 and must be a positive integer; there is no upper
+bound, so a configured value may raise the limit above the default. The value is
+read on every call, so a config reload takes effect without a restart. When
 `STEPCODE_CONFIG_PATH` selects a StepCode JSON config, the same settings live
-under `subagent.background` and `subagent.backgroundTimeoutSeconds`.
+under `subagent.background` and `subagent.backgroundTimeoutSeconds`;
+`max_concurrency` lives under `subagent.maxConcurrency`.
 `STEP_DISABLE_SUBAGENT_BACKGROUND=1` disables background lanes regardless of the
 file. Print and JSON runs never start lanes. See the [orchestration
 lifecycle](orchestration-lifecycle.md#background-subagent-lanes) for lane

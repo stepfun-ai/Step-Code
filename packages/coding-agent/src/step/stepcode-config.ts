@@ -7,6 +7,7 @@ import type { AnthropicMessagesCompat, Api } from "@step-harness/providers";
 import lockfile from "proper-lockfile";
 import type { ExtensionAPI, InlineExtension, ProviderConfig, ProviderModelConfig } from "../core/extensions/types.ts";
 import { normalizeProviderBaseUrl } from "../core/provider-base-url.ts";
+import type { SettingsError } from "../core/settings-manager.ts";
 import { stripBom } from "../utils/text.ts";
 import {
 	getStepPermissionPreset,
@@ -16,7 +17,9 @@ import {
 	type StepPermissionPresetId,
 } from "./permissions.ts";
 import {
+	invalidSubagentMaxConcurrencyMessage,
 	isValidSubagentBackgroundTimeout,
+	isValidSubagentMaxConcurrency,
 	resetLegacyPermissionSettings,
 	type StepSettings,
 	type StepSettingsManager,
@@ -152,6 +155,7 @@ export function decorateStepCodeSettingsManager(
 		"getStepAutoResume",
 		"setStepAutoResume",
 		"reload",
+		"drainErrors",
 	]);
 	return new Proxy(manager, {
 		get(target, property) {
@@ -174,6 +178,8 @@ class StepCodeSettingsAuthority {
 	private defaultProvider: string | undefined;
 	private defaultModel: string | undefined;
 	private settings: StepSettings;
+	/** Load-time diagnostics for values this authority ignored, drained by the host. */
+	private readonly loadErrors: SettingsError[] = [];
 
 	constructor(manager: StepSettingsManager, config: StepCodeConfig) {
 		this.manager = manager;
@@ -182,7 +188,12 @@ class StepCodeSettingsAuthority {
 		const storedDefault = findRawActiveModel(root);
 		this.defaultProvider = storedDefault?.providerId ?? config.defaultProvider;
 		this.defaultModel = storedDefault?.modelId ?? config.defaultModel;
-		this.settings = readStepCodeSettings(root);
+		this.settings = readStepCodeSettings(root, (error) => this.reportLoadError(error));
+	}
+
+	/** Record an ignored value with the config path so drainErrors can warn about it. */
+	private reportLoadError(error: Error): void {
+		this.loadErrors.push({ scope: "global", path: this.path, error });
 	}
 
 	getDefaultProvider(): string | undefined {
@@ -284,7 +295,12 @@ class StepCodeSettingsAuthority {
 		const config = await loadStepCodeConfig({ ...process.env, STEPCODE_CONFIG_PATH: this.path });
 		this.defaultProvider = config?.defaultProvider;
 		this.defaultModel = config?.defaultModel;
-		this.settings = readStepCodeSettings(readConfigRoot(this.path));
+		this.settings = readStepCodeSettings(readConfigRoot(this.path), (error) => this.reportLoadError(error));
+	}
+
+	/** Drain this authority's load diagnostics together with the wrapped manager's. */
+	drainErrors(): Array<ReturnType<StepSettingsManager["drainErrors"]>[number]> {
+		return [...this.manager.drainErrors(), ...this.loadErrors.splice(0)];
 	}
 
 	private updateConfig(update: (root: Record<string, unknown>) => void): void {
@@ -334,7 +350,7 @@ function acquireConfigLock(path: string): () => void {
 	throw (lastError as Error) ?? new Error(`Failed to lock StepCode config ${path}`);
 }
 
-function readStepCodeSettings(root: JsonObject): StepSettings {
+function readStepCodeSettings(root: JsonObject, report?: (error: Error) => void): StepSettings {
 	const approval = asObject(asObject(root.tools)?.approval) ?? asObject(root.approval);
 	const preset = getStepPermissionPreset(readString(approval?.preset))?.id;
 	const mode = normalizeStepPermissionMode(readString(approval?.mode));
@@ -348,6 +364,10 @@ function readStepCodeSettings(root: JsonObject): StepSettings {
 	const subagent = asObject(root.subagent);
 	const subagentBackground = readBoolean(subagent?.background);
 	const subagentTimeout = subagent?.backgroundTimeoutSeconds;
+	const subagentConcurrency = subagent?.maxConcurrency;
+	if (subagentConcurrency !== undefined && !isValidSubagentMaxConcurrency(subagentConcurrency)) {
+		report?.(new Error(invalidSubagentMaxConcurrencyMessage(subagentConcurrency)));
+	}
 	const settings: StepSettings = {
 		...(preset ? { permissionPreset: preset } : {}),
 		...(mode ? { approvalMode: mode } : {}),
@@ -359,6 +379,7 @@ function readStepCodeSettings(root: JsonObject): StepSettings {
 		...(isValidSubagentBackgroundTimeout(subagentTimeout)
 			? { subagentBackgroundTimeoutSeconds: subagentTimeout }
 			: {}),
+		...(isValidSubagentMaxConcurrency(subagentConcurrency) ? { subagentMaxConcurrency: subagentConcurrency } : {}),
 	};
 	resetLegacyPermissionSettings(settings, readString(approval?.preset), readString(approval?.mode));
 	return settings;
@@ -380,10 +401,15 @@ function writeStepCodeSettings(root: Record<string, unknown>, patch: Partial<Ste
 		else feedback.enabled = patch.feedbackEnabled;
 		root.feedback = feedback;
 	}
-	if (Object.hasOwn(patch, "subagentBackground") || Object.hasOwn(patch, "subagentBackgroundTimeoutSeconds")) {
+	if (
+		Object.hasOwn(patch, "subagentBackground") ||
+		Object.hasOwn(patch, "subagentBackgroundTimeoutSeconds") ||
+		Object.hasOwn(patch, "subagentMaxConcurrency")
+	) {
 		const subagent = asMutableObject(root.subagent) ?? {};
 		writeOptionalField(subagent, "background", patch, "subagentBackground");
 		writeOptionalField(subagent, "backgroundTimeoutSeconds", patch, "subagentBackgroundTimeoutSeconds");
+		writeOptionalField(subagent, "maxConcurrency", patch, "subagentMaxConcurrency");
 		root.subagent = subagent;
 	}
 }
@@ -430,6 +456,12 @@ function validateStepSettings(settings: Partial<StepSettings>): void {
 		throw new Error(
 			`Invalid Step subagentBackgroundTimeoutSeconds setting: ${String(settings.subagentBackgroundTimeoutSeconds)}`,
 		);
+	}
+	if (
+		settings.subagentMaxConcurrency !== undefined &&
+		!isValidSubagentMaxConcurrency(settings.subagentMaxConcurrency)
+	) {
+		throw new Error(`Invalid Step subagentMaxConcurrency setting: ${String(settings.subagentMaxConcurrency)}`);
 	}
 }
 

@@ -205,6 +205,58 @@ describe("StepCode config compatibility", () => {
 		).toThrow(/subagentBackgroundTimeoutSeconds/u);
 	});
 
+	test("reads and writes the subagent max_concurrency in the injected config", async () => {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-config-subagent-concurrency-"));
+		roots.push(root);
+		const configPath = join(root, "stepcode", "config.json");
+		const agentDir = join(root, "stepcode", "agent");
+		const projectDir = join(root, "project");
+		await mkdir(agentDir, { recursive: true });
+		await mkdir(projectDir, { recursive: true });
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				providers: { p: { api: "anthropic-messages", baseUrl: "https://proxy.example/v1", models: [{ id: "m" }] } },
+				activeModel: "m",
+				subagent: { maxConcurrency: 12 },
+			}),
+		);
+		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
+		const manager = decorateStepCodeSettingsManager(createStepSettingsManager(projectDir, agentDir), config!);
+		expect(manager.getStepSettings()).toMatchObject({ subagentMaxConcurrency: 12 });
+
+		manager.setEffectiveStepSettings({ ...manager.getStepSettings(), subagentMaxConcurrency: 16 });
+		const saved = JSON.parse(readFileSync(configPath, "utf8")) as { subagent: Record<string, unknown> };
+		expect(saved.subagent).toEqual({ maxConcurrency: 16 });
+		expect(() =>
+			manager.setEffectiveStepSettings({ ...manager.getStepSettings(), subagentMaxConcurrency: 0 }),
+		).toThrow(/subagentMaxConcurrency/u);
+	});
+
+	test("ignores an invalid subagent max_concurrency in the injected config", async () => {
+		const root = await mkdtemp(join(tmpdir(), "stepcode-config-subagent-concurrency-bad-"));
+		roots.push(root);
+		const configPath = join(root, "config.json");
+		const agentDir = join(root, "agent");
+		await mkdir(agentDir, { recursive: true });
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				providers: { p: { api: "anthropic-messages", baseUrl: "https://proxy.example/v1", models: [{ id: "m" }] } },
+				activeModel: "m",
+				subagent: { maxConcurrency: 2.5 },
+			}),
+		);
+		const config = await loadStepCodeConfig({ STEPCODE_CONFIG_PATH: configPath }, root);
+		const manager = decorateStepCodeSettingsManager(createStepSettingsManager(root, agentDir), config!);
+		expect(manager.getStepSettings().subagentMaxConcurrency).toBeUndefined();
+		// The ignored value must surface as a settings warning, not fail silently.
+		const errors = manager.drainErrors();
+		expect(errors.some((entry) => /max_concurrency/.test(entry.error.message))).toBe(true);
+		expect(errors.some((entry) => entry.path === configPath)).toBe(true);
+		expect(manager.drainErrors()).toEqual([]);
+	});
+
 	test("ignores an out-of-range subagent timeout in the injected config", async () => {
 		const root = await mkdtemp(join(tmpdir(), "stepcode-config-subagent-bad-"));
 		roots.push(root);
