@@ -283,8 +283,12 @@ export function notifyLaneEvent(
 			content:
 				`<agent-notification lane="${escapeXmlAttr(lane.id)}" tasks="${totalResults(lane.details)}">` +
 				`${escapeXmlAttr(body)}</agent-notification>`,
-			// Progress is for the parent model; the user already watches the lanes
-			// widget, and a transcript entry every 15s per lane buries the session.
+			// Progress is for the parent model only. A lane reports every ~15s, and an entry per lane
+			// at that rate buries the session; a user who wants live state asks with `/subagents`.
+			// Terminal and needs-input events still display, so the outcome is never silent.
+			//
+			// This is deliberate, not a gap. Suppressing only progress keeps the transcript readable
+			// while still reporting what changed.
 			display: event !== "background_progress",
 			details,
 		},

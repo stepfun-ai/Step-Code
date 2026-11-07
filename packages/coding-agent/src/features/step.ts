@@ -8,7 +8,12 @@ import type {
 	ExtensionUIContext,
 	InlineExtension,
 } from "../core/extensions/types.ts";
-import { releaseOwnerGracefully } from "../core/process-registry.ts";
+import {
+	listProcesses,
+	type ProcessRegistration,
+	releaseOwnerGracefully,
+	subscribeToProcessRegistry,
+} from "../core/process-registry.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../core/slash-commands.ts";
 import type { FeedbackIdentity } from "../step/feedback/types.ts";
 import { STEP_INIT_PROMPT } from "../step/init-prompt.ts";
@@ -146,6 +151,8 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		});
 		let permissions = new StepPermissionController(resolvePermissionOptions(options));
 		let notify: ((message: string, type?: "info" | "warning" | "error") => void) | undefined;
+		/** Live status-line subscription for this session's background commands. */
+		let unsubscribeBackgroundStatus: (() => void) | undefined;
 		let autoResumeAllowed = false;
 		let nativeRetryPreference: boolean | undefined;
 		let nativeRetryOverridden = false;
@@ -294,6 +301,11 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		pi.on("session_start", (_event, ctx) => {
 			const generation = ++permissionSessionGeneration;
 			fullAccessAcknowledged = false;
+			// The status line reports this session's background commands. Re-subscribe on every
+			// start because a replaced session gets a new id; the previous subscription is dropped in
+			// `session_shutdown`.
+			unsubscribeBackgroundStatus?.();
+			unsubscribeBackgroundStatus = publishBackgroundCommandStatus(ctx);
 			notify = ctx.ui.notify;
 			// During project-trust probing Pi loads inline extensions while the
 			// project scope is hidden. Rehydrate once the final trust decision has
@@ -337,7 +349,7 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 			publishStepPermissionStatus(ctx.ui, state);
 		});
 
-		pi.on("session_shutdown", (_event, ctx) => {
+		pi.on("session_shutdown", (event, ctx) => {
 			permissionSessionGeneration++;
 			// Timers and UI callbacks are scoped to the old session. Cancel them before
 			// Pi tears down its extension runner, and restore the native retry setting
@@ -347,11 +359,25 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 			// A "this session" Full Access grant must not carry into the next
 			// session; only the persisted acknowledgment does.
 			fullAccessAcknowledged = false;
-			// Background commands belong to the session that started them. A session switch or a
-			// fork never reaches this handler (it keeps the same session object and the old one
-			// stays open), so reaching here means the session is really going away: release exactly
-			// its own trees, and leave every other session's dev servers running.
-			releaseSessionProcesses(ctx);
+			unsubscribeBackgroundStatus?.();
+			unsubscribeBackgroundStatus = undefined;
+			// A host tearing down may already have released its UI; clearing a footer line must not
+			// turn shutdown into an error.
+			try {
+				ctx.ui.setStatus("background-commands", undefined);
+			} catch {
+				// UI already gone.
+			}
+			// Background commands belong to the session that started them, and they outlive
+			// everything except the session itself. `session_shutdown` fires for five reasons, and
+			// four of them do NOT end the session: `new`, `resume` and `fork` all replace the runtime
+			// while the old conversation stays on disk (and, in a multi-session host, on screen),
+			// and `reload` keeps the same session object. Killing on those would stop the dev server
+			// the user is watching the moment they open a new conversation or fork one.
+			//
+			// `quit` is the one reason that means gone: the host is exiting, or a session is being
+			// deleted. `process.exit` covers a host that never gets here.
+			if (event.reason === "quit") releaseSessionProcesses(ctx);
 			if (nativeRetryOverridden && nativeRetryPreference !== undefined && ctx.setAutoRetryEnabled) {
 				try {
 					ctx.setAutoRetryEnabled(nativeRetryPreference);
@@ -528,6 +554,39 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
  * persisted preset as `initialPreset` would otherwise outrank env aliases in
  * Pi's resolver, so only inject it when no policy override is present.
  */
+/**
+ * Show this session's background commands in the host's status line.
+ *
+ * The footer is where a terminal user sees state that outlives a turn: plan mode and goal state
+ * already live there. A background command belongs in that set — it is the one thing a session can
+ * leave running that the user cannot see in the transcript, and it is exactly what they need to
+ * stop before deleting the session.
+ *
+ * Returns the unsubscribe function. Subscribing per session, not globally, is what keeps a session
+ * from reporting another's commands: the registry is host-wide, the status line is not.
+ */
+function publishBackgroundCommandStatus(ctx: ExtensionContext): () => void {
+	let ownerId: string;
+	try {
+		ownerId = ctx.sessionManager.getSessionId();
+	} catch {
+		return () => {};
+	}
+	if (!ownerId) return () => {};
+	const update = (entries: readonly ProcessRegistration[]): void => {
+		const mine = entries.filter((entry) => entry.ownerId === ownerId && entry.kind === "bash");
+		if (mine.length === 0) {
+			ctx.ui.setStatus("background-commands", undefined);
+			return;
+		}
+		const stopping = mine.filter((entry) => entry.releasing).length;
+		const label = `${mine.length} background command${mine.length === 1 ? "" : "s"}`;
+		ctx.ui.setStatus("background-commands", stopping > 0 ? `${label} · stopping ${stopping}` : label);
+	};
+	update(listProcesses(ownerId));
+	return subscribeToProcessRegistry(update);
+}
+
 /**
  * Release the background process trees one session owns.
  *
