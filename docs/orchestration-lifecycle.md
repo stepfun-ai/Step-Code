@@ -292,8 +292,9 @@ Ownership decides when the tree stops:
 | --- | --- |
 | Switching which session is viewed | keeps running |
 | Forking a session | keeps running; the new session starts with none of them |
+| Starting a new session, or resuming another one | keeps running |
 | Reloading settings or extensions | keeps running |
-| The owning session is deleted, replaced, or resumed away | stopped |
+| The owning session is deleted | stopped |
 | The host exits | stopped |
 
 Stopping goes through three layers, from narrowest to widest:
