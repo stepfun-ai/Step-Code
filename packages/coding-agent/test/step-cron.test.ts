@@ -1051,25 +1051,26 @@ describe("desktop cron task fields", () => {
 		expect(deliveries.map((delivery) => delivery.job?.id)).toEqual([mine.id]);
 	});
 
-	test("prompt and title limits are shared with every host", () => {
+	test("the kernel keeps generic ceilings the persisted reader shares", () => {
 		const now = Date.UTC(2026, 0, 1, 12, 0);
 		const runtime = new StepCronRuntime({ now: () => now, jitterRatio: 0 });
 		const created = runtime.create("0 9 * * *", "x", true, false, true, { status: "enabled" }).job;
+		// 16,000 is the kernel ceiling; a host form may be stricter, but narrowing
+		// this value would make an earlier record with a longer prompt unreadable.
+		expect(CRON_MAX_PROMPT_LENGTH).toBe(16_000);
+		expect(CRON_MAX_TITLE_LENGTH).toBe(200);
 		expect(() => runtime.create("0 9 * * *", "y".repeat(CRON_MAX_PROMPT_LENGTH + 1), true, false, true)).toThrow(
-			/exceeds 8192/,
+			/exceeds 16000/,
 		);
 		expect(() => runtime.update(created.id, { prompt: "y".repeat(CRON_MAX_PROMPT_LENGTH + 1) })).toThrow(
-			/exceeds 8192/,
+			/exceeds 16000/,
 		);
-		expect(() =>
-			runtime.create("0 9 * * *", "z", true, false, true, {
-				title: "t".repeat(CRON_MAX_TITLE_LENGTH + 1),
-				status: "enabled",
-			}),
-		).toThrow(/title exceeds 30/);
-		expect(() => runtime.update(created.id, { title: "t".repeat(CRON_MAX_TITLE_LENGTH + 1) })).toThrow(
-			/title exceeds 30/,
-		);
+		// A title over the ceiling is truncated rather than rejected, as before.
+		const longTitle = runtime.create("0 9 * * *", "z", true, false, true, {
+			title: "t".repeat(CRON_MAX_TITLE_LENGTH + 10),
+			status: "enabled",
+		}).job;
+		expect(longTitle.title?.length).toBe(CRON_MAX_TITLE_LENGTH);
 	});
 
 	test("supports explicit hour intervals and absolute one-shot times", () => {

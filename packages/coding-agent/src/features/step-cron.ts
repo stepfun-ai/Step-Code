@@ -30,12 +30,19 @@ const DEFAULT_MAX_JOBS = 50;
 const AUTO_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_SEARCH_MINUTES = 366 * 24 * 60;
 /**
- * The one limit every writer shares: the desktop form, the HTTP routes and the
- * agent tools. A task the agent can create must also be editable in the UI, so
- * a host must not define a stricter cap of its own.
+ * Kernel ceilings, not a product policy. A host that shows a form may apply a
+ * stricter cap of its own; it must not narrow these, because the
+ * persisted-record reader shares them — a prompt written by an earlier build
+ * that exceeded a narrowed value would be treated as an unsupported record and
+ * silently stop being scheduled.
+ *
+ * The two behave differently on purpose, matching the original records: an
+ * oversized prompt is rejected, while an oversized title is truncated. A title
+ * is presentation; a prompt is what the task will do, so silently shortening it
+ * would change the work.
  */
-export const CRON_MAX_PROMPT_LENGTH = 8 * 1024;
-export const CRON_MAX_TITLE_LENGTH = 30;
+export const CRON_MAX_PROMPT_LENGTH = 16_000;
+export const CRON_MAX_TITLE_LENGTH = 200;
 const MAX_PROMPT_LENGTH = CRON_MAX_PROMPT_LENGTH;
 const MAX_CRON_LENGTH = 200;
 const MAX_LOCK_AGE_MS = 60_000;
@@ -418,7 +425,10 @@ function parsePersistedJob(value: unknown): CronJob | undefined {
 		return undefined;
 	if (candidate.sessionId !== undefined && (typeof candidate.sessionId !== "string" || !candidate.sessionId.trim()))
 		return undefined;
-	if (candidate.title !== undefined && (typeof candidate.title !== "string" || candidate.title.length > 200))
+	if (
+		candidate.title !== undefined &&
+		(typeof candidate.title !== "string" || candidate.title.length > CRON_MAX_TITLE_LENGTH)
+	)
 		return undefined;
 	if (candidate.sessionCreated !== undefined && typeof candidate.sessionCreated !== "boolean") return undefined;
 	if (candidate.statusReason !== undefined && candidate.statusReason !== "session_missing") return undefined;
@@ -649,9 +659,6 @@ export class StepCronRuntime {
 			// "ran immediately" rather than "scheduled".
 			if (options.runAt <= createdAt) throw new Error("A one-shot cron job must be scheduled in the future");
 		}
-		const normalizedTitle = options.title?.trim();
-		if (normalizedTitle && normalizedTitle.length > CRON_MAX_TITLE_LENGTH)
-			throw new Error(`Cron title exceeds ${CRON_MAX_TITLE_LENGTH} characters`);
 		const nominalNext =
 			(!recurring ? options.runAt : undefined) ??
 			(options.intervalHours ? createdAt + options.intervalHours * 60 * 60 * 1000 : expression.next(createdAt));
@@ -698,7 +705,7 @@ export class StepCronRuntime {
 				...(options.workspace ? { workspace: path.resolve(options.workspace) } : {}),
 				...(options.sessionId ? { sessionId: options.sessionId } : {}),
 				...(options.sessionCreated ? { sessionCreated: true } : {}),
-				...(normalizedTitle ? { title: normalizedTitle } : {}),
+				...(options.title ? { title: options.title.slice(0, CRON_MAX_TITLE_LENGTH) } : {}),
 				...(options.status ? { status: options.status } : {}),
 				...(options.inputs ? { inputs: { skills: [...(options.inputs.skills ?? [])] } } : {}),
 				...(options.model ? { model: { ...options.model } } : {}),
@@ -732,11 +739,7 @@ export class StepCronRuntime {
 					throw new Error(`Cron prompt exceeds ${MAX_PROMPT_LENGTH} characters`);
 				next.prompt = prompt;
 			}
-			if (patch.title !== undefined) {
-				if (patch.title.length > CRON_MAX_TITLE_LENGTH)
-					throw new Error(`Cron title exceeds ${CRON_MAX_TITLE_LENGTH} characters`);
-				next.title = patch.title;
-			}
+			if (patch.title !== undefined) next.title = patch.title.slice(0, CRON_MAX_TITLE_LENGTH);
 			if (patch.inputs !== undefined) next.inputs = { skills: [...(patch.inputs.skills ?? [])] };
 			if (patch.model !== undefined) next.model = { ...patch.model };
 			if (patch.permissionPreset !== undefined) {
