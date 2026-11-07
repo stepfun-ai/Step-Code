@@ -20,7 +20,6 @@ import type { NewSessionOptions } from "../core/session-manager.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "../step/environment.ts";
 import {
 	isValidSubagentBackgroundTimeout,
-	isValidSubagentMaxConcurrency,
 	SUBAGENT_BACKGROUND_TIMEOUT_DEFAULT_SECONDS,
 	SUBAGENT_BACKGROUND_TIMEOUT_MAX_SECONDS,
 	SUBAGENT_BACKGROUND_TIMEOUT_MIN_SECONDS,
@@ -259,8 +258,9 @@ export interface StepSubagentExtensionOptions {
 	backgroundSettings?: () => StepSubagentBackgroundSettings | undefined;
 	/**
 	 * Host-supplied `[subagent] max_concurrency` (config.toml), read on every
-	 * call so a reload takes effect. A valid value overrides both the
-	 * `maxConcurrency` option and the built-in default, and may exceed it.
+	 * call so a reload takes effect. The settings boundary validates the value,
+	 * so it is trusted here and overrides both the `maxConcurrency` option and
+	 * the built-in default; it may exceed the default.
 	 */
 	maxConcurrencySettings?: () => StepSubagentConcurrencySettings | undefined;
 }
@@ -275,19 +275,6 @@ export interface StepSubagentBackgroundSettings {
 export interface StepSubagentConcurrencySettings {
 	/** Default number of child processes a parallel batch runs at once. */
 	maxConcurrency?: number;
-}
-
-/**
- * Effective concurrency for one parallel batch: the configured
- * `[subagent] max_concurrency` when valid, else the host-supplied option, else
- * the built-in default. There is no CPU-derived ceiling and no upper clamp, so
- * a configured value may raise the limit above the default; only positive
- * integers are accepted.
- */
-export function resolveSubagentConcurrency(configured: number | undefined, option: number | undefined): number {
-	if (isValidSubagentMaxConcurrency(configured)) return configured;
-	if (isValidSubagentMaxConcurrency(option)) return option;
-	return SUBAGENT_MAX_CONCURRENCY_DEFAULT;
 }
 
 // Keep the model-facing contract identical to Pi's subagent example. Step
@@ -767,10 +754,7 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 		configDirName: options.configDirName?.trim() || resolveStepConfigDir() || CONFIG_DIR_NAME,
 		includeBuiltinAgents: options.includeBuiltinAgents !== false,
 		maxParallelTasks: Math.max(1, Math.min(MAX_PARALLEL_TASKS, options.maxParallelTasks ?? MAX_PARALLEL_TASKS)),
-		maxConcurrency: Math.min(
-			resolveSubagentConcurrency(undefined, options.maxConcurrency),
-			options.maxParallelTasks ?? MAX_PARALLEL_TASKS,
-		),
+		maxConcurrency: options.maxConcurrency ?? SUBAGENT_MAX_CONCURRENCY_DEFAULT,
 		telemetry: options.telemetry,
 		worktreeManager: options.worktreeManager ?? {
 			allocate: allocateStepWorktree,

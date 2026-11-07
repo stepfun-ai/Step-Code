@@ -12,6 +12,7 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "@step-harness/age
 import type { Static } from "typebox";
 import { SUBAGENT_SESSION_ID_PREFIX } from "../../core/child-session.ts";
 import type { ExtensionContext } from "../../core/extensions/types.ts";
+import { SUBAGENT_MAX_CONCURRENCY_DEFAULT } from "../../step/settings-manager.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../../step/telemetry.ts";
 import {
 	cloneUsage,
@@ -19,7 +20,6 @@ import {
 	finalOutput,
 	isFailed,
 	makeToolResult,
-	resolveSubagentConcurrency,
 	resultText,
 	type StepChainItem,
 	type StepSubagentDetails,
@@ -621,10 +621,11 @@ export async function runPreparedSubagent(
 	// at 0s, including ones still queued behind maxConcurrency.
 	emit(mode);
 	if (parallel) {
-		// Plain default plus an optional configured value; no CPU- or provider-derived ceiling.
+		// Plain default plus an optional configured value; no CPU- or provider-derived
+		// ceiling. `configured` is validated at the settings boundary, so it is used as-is.
 		const configured = options.maxConcurrencySettings?.()?.maxConcurrency;
 		const ceiling = Math.min(
-			resolveSubagentConcurrency(configured, options.maxConcurrency),
+			configured ?? options.maxConcurrency ?? SUBAGENT_MAX_CONCURRENCY_DEFAULT,
 			options.maxParallelTasks,
 		);
 		const lease = acquireWorkflowAdmission(ceiling);

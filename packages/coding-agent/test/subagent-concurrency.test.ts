@@ -2,12 +2,11 @@ import os from "node:os";
 import type { AgentToolResult } from "@step-harness/agent-core";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ExtensionContext } from "../src/core/extensions/types.ts";
-import {
-	resolveSubagentConcurrency,
-	type StepSubagentDetails,
-	type StepSubagentExtensionOptions,
-	type StepSubagentRunResult,
-	type SubagentParams,
+import type {
+	StepSubagentDetails,
+	StepSubagentExtensionOptions,
+	StepSubagentRunResult,
+	SubagentParams,
 } from "../src/features/step-subagent.ts";
 import { executeSubagent } from "../src/features/subagent/execute.ts";
 import { resetWorkflowAdmission } from "../src/features/workflow/admission.ts";
@@ -112,21 +111,6 @@ async function peakConcurrency(tasks: number, expected: number, options: StepSub
 	return { peak, result };
 }
 
-test("the resolver defaults to 8 and prefers a valid configured value", () => {
-	expect(resolveSubagentConcurrency(undefined, undefined)).toBe(8);
-	expect(resolveSubagentConcurrency(undefined, 3)).toBe(3);
-	// A configured value wins over the option and may exceed the default.
-	expect(resolveSubagentConcurrency(12, 3)).toBe(12);
-	expect(resolveSubagentConcurrency(64, undefined)).toBe(64);
-});
-
-test("the resolver ignores invalid configured values and falls back", () => {
-	expect(resolveSubagentConcurrency(0, 3)).toBe(3);
-	expect(resolveSubagentConcurrency(-4, undefined)).toBe(8);
-	expect(resolveSubagentConcurrency(2.5, undefined)).toBe(8);
-	expect(resolveSubagentConcurrency(Number.NaN, 5)).toBe(5);
-});
-
 test("a parallel batch runs at the default of 8 regardless of host CPUs", async () => {
 	const { peak, result } = await peakConcurrency(8, 8, {});
 	expect(peak).toBe(8);
@@ -146,16 +130,12 @@ test("the workflow provider-limit env var no longer caps a subagent batch", asyn
 	expect(peak).toBe(8);
 });
 
-test("an invalid configured value falls back to the option, then the default", async () => {
-	const withOption = await peakConcurrency(3, 3, {
-		maxConcurrency: 3,
-		maxConcurrencySettings: () => ({ maxConcurrency: 0 }),
+test("a configured value overrides the host option", async () => {
+	const { peak } = await peakConcurrency(6, 6, {
+		maxConcurrency: 2,
+		maxConcurrencySettings: () => ({ maxConcurrency: 6 }),
 	});
-	expect(withOption.peak).toBe(3);
-	const withoutOption = await peakConcurrency(8, 8, {
-		maxConcurrencySettings: () => ({ maxConcurrency: -1 }),
-	});
-	expect(withoutOption.peak).toBe(8);
+	expect(peak).toBe(6);
 });
 
 test("maxParallelTasks still rejects an oversized batch before any child starts", async () => {
