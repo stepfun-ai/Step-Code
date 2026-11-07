@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
-import { registerProcess, releaseAllProcessesSync } from "../src/core/process-registry.ts";
+import { forgetProcess, registerProcess, releaseAllProcessesSync } from "../src/core/process-registry.ts";
 import { createStepPsExtension } from "../src/features/step-ps.ts";
 
 const spawned: number[] = [];
@@ -117,13 +117,18 @@ describe("/ps", () => {
 		const session = `session-${Math.random().toString(16).slice(2)}`;
 		const other = `session-${Math.random().toString(16).slice(2)}`;
 		const foreign = spawnLongLived();
+		const mine = spawnLongLived();
 		registerProcess({ pid: foreign, kind: "bash", ownerId: other, label: "not yours" });
+		// The session must own something, or the empty-list branch answers first and this test would
+		// pass even if cross-session refusal were broken.
+		registerProcess({ pid: mine, kind: "bash", ownerId: session, label: "mine" });
 
 		const text = await runPs(session, `kill ${foreign}`);
 
-		// No commands at all in this session, so the refusal is the empty-list message.
-		expect(text).toContain("No background commands running.");
+		expect(text).toContain(`No background command with pid ${foreign} in this session.`);
 		expect(alive(foreign)).toBe(true);
+		expect(alive(mine)).toBe(true);
+		forgetProcess(mine);
 	});
 
 	test("kill all stops only this session's background commands, never a subagent", async () => {

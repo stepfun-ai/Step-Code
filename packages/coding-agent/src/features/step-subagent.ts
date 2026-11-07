@@ -680,11 +680,13 @@ function prependNotice(
  * Show a live lane list under the editor for the duration of a blocking
  * subagent call.
  *
- * Background lanes already have their own `aboveEditor` widget; the blocking
- * path had none, so a parallel run's only surface was the transcript tool row,
- * which the generic collapsed shell truncates. One component instance is reused
- * across updates: `setExtensionWidget` disposes the component it replaces, so
- * the instance deliberately has no `dispose` and the factory returns it again.
+ * Only the blocking path draws this: it is the turn's own output, it ends with
+ * the turn, and there is nothing left to ask about afterwards. Background lanes
+ * are read through `/subagents` instead, so they add no surface while they run.
+ * A parallel run's only other surface is the transcript tool row, which the
+ * generic collapsed shell truncates. One component instance is reused across
+ * updates: `setExtensionWidget` disposes the component it replaces, so the
+ * instance deliberately has no `dispose` and the factory returns it again.
  */
 async function withSubagentListWidget(
 	toolCallId: string,
@@ -758,91 +760,20 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 		if (process.env[CHILD_MARKER] === "1") return;
 
 		const lanes = new Map<string, BackgroundAgentLane>();
-		// Every background lane shares one list widget, built the same way as the
-		// blocking call's list: a row per task with a fixed title and metrics. A
-		// widget per lane, republished on every streamed delta with the child's
-		// live text, reordered the lanes on each publish (the host re-inserts the
-		// key) and changed height as lines wrapped, so the block flickered.
+		// Background lanes are not drawn under the editor. A panel that sits above the editor for as
+		// long as a lane runs competes with the conversation, and its rows cannot show what a user
+		// actually wants next — which step each child is on. `/subagents` answers that on demand; the
+		// lane snapshots it reads are published by the lifecycle (`publishLaneSnapshot`), so nothing
+		// here needs to observe lanes for display.
 		//
-		// Lanes stay listed until the whole batch settles, so the header reads
-		// "2/4 complete" rather than shrinking as lanes finish; then it clears and
-		// the transcript's agent-notification entries take over.
-		//
-		// Elapsed is read from the clock at render time. A blocking call gets its
-		// redraws from the working indicator, but background lanes usually run
-		// while the parent sits idle, so a 1s tick keeps the column moving; the
-		// differential renderer only rewrites the cells that changed.
-		const lanesWidgetKey = "step-agent-lanes";
-		const shownLanes = new Set<string>();
-		let lanesWidget: SubagentListWidget | undefined;
-		let lanesPublished: string | undefined;
-		let lanesTicker: ReturnType<typeof setInterval> | undefined;
-		const stopLanesTicker = (): void => {
-			if (lanesTicker) clearInterval(lanesTicker);
-			lanesTicker = undefined;
+		// A blocking `subagent` call still renders its list inline: it is the turn's own output, it
+		// ends with the turn, and there is nothing to ask about afterwards.
+		const updateLaneWidget = (_lane: BackgroundAgentLane): void => {
+			// Retained as the lifecycle host hook: lane snapshots are published there, and a
+			// replacement host that wants a live view has somewhere to put it.
 		};
-		const updateLaneWidget = (lane: BackgroundAgentLane): void => {
-			if (!lane.ctx.hasUI) return;
-			shownLanes.add(lane.id);
-			// `lanes` iterates in creation order; `shownLanes` in first-update order,
-			// which depends on which child streams first and would shuffle the rows.
-			const batch = [...lanes.values()].filter((entry) => shownLanes.has(entry.id));
-			try {
-				if (batch.every((entry) => entry.status !== "running")) {
-					shownLanes.clear();
-					stopLanesTicker();
-					lanesWidget = undefined;
-					lanesPublished = undefined;
-					lane.ctx.ui.setWidget(lanesWidgetKey, undefined);
-					return;
-				}
-				// Each lane's frame is byte-bounded, so its omitted count must be
-				// summed too: otherwise a two-lane batch under-reports its total.
-				const omitted = batch.reduce((sum, entry) => sum + (entry.details.omittedResults ?? 0), 0);
-				const details: StepSubagentDetails = {
-					...lane.details,
-					mode: "parallel",
-					results: batch.flatMap((entry) => entry.details.results),
-					...(omitted > 0 ? { omittedResults: omitted } : {}),
-				};
-				lanesWidget?.setDetails(details);
-				const signature = subagentListSignature(details);
-				if (signature === lanesPublished) return;
-				lanesPublished = signature;
-				lane.ctx.ui.setWidget(
-					lanesWidgetKey,
-					(tui, theme) => {
-						lanesWidget ??= new SubagentListWidget(details, theme, "background agents");
-						if (!lanesTicker) {
-							lanesTicker = setInterval(() => tui.requestRender(), 1_000);
-							lanesTicker.unref?.();
-						}
-						return lanesWidget;
-					},
-					{ placement: "aboveEditor" },
-				);
-			} catch {
-				// A host may tear down its UI while a detached child is finishing.
-			}
-		};
-		let widgetCtx: ExtensionContext | undefined;
 		const clearLaneWidget = (): void => {
-			shownLanes.clear();
-			stopLanesTicker();
-			lanesWidget = undefined;
-			lanesPublished = undefined;
-			const ctx = widgetCtx;
-			widgetCtx = undefined;
-			if (!ctx?.hasUI) return;
-			try {
-				ctx.ui.setWidget(lanesWidgetKey, undefined);
-			} catch {
-				// The host may already have torn its UI down during shutdown.
-			}
-		};
-		const trackedUpdateLaneWidget = (lane: BackgroundAgentLane): void => {
-			if (lane.ctx.hasUI) widgetCtx = lane.ctx;
-			updateLaneWidget(lane);
+			// Nothing to clear: this host draws no lane surface.
 		};
 		const lifecycle = createLaneLifecycle({
 			pi,
@@ -851,7 +782,7 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 			run: (prepared, signal, onUpdate, ctx, laneRuntime) =>
 				runPreparedSubagent(prepared, signal, onUpdate, ctx, resolved, laneRuntime),
 			outputDirectory: (ctx) => path.join(ctx.sessionManager?.getSessionDir?.() || resolved.agentDir, "tool-output"),
-			updateLaneWidget: trackedUpdateLaneWidget,
+			updateLaneWidget,
 			clearLaneWidget,
 		});
 

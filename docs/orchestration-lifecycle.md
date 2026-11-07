@@ -339,9 +339,10 @@ by the `process.exit` sweep.
 `/ps` lists this session's background commands with pid, state, elapsed time and
 log path, and stops one or all of them. `/subagents` lists the running subagent
 lanes with the step each child is on. Both print into the transcript and fold
-when long. Both are terminal commands: Web and Desktop draw the same state in
-their own interface, and the `notify` a transcript command depends on is a no-op
-in those hosts, so they refuse there rather than appearing to do nothing.
+when long. Both are terminal commands. A graphical host is expected to project
+this state itself, where it can stay live instead of being a snapshot; the
+concrete reason the commands refuse elsewhere is that the `notify` they depend on
+is a no-op in an RPC host, so they would appear to do nothing.
 
 Background lanes draw no widget above the editor. A permanent panel competes
 with the conversation for as long as a lane runs, and its rows cannot show which

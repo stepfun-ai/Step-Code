@@ -17,8 +17,8 @@
  * update per lane per 15s they would bury the session. Completion and needs-input do display, so the
  * outcome is never silent — only the intermediate noise is.
  *
- * Terminal only, for the same reason as `/ps`: Web and Desktop already draw lane state in their
- * inspector, and `notify` is a no-op there.
+ * Terminal only, for the same reason as `/ps`: a graphical host projects lane state itself, and
+ * `notify` is a no-op in an RPC host.
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "../core/extensions/types.ts";

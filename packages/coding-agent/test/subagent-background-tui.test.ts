@@ -1,4 +1,3 @@
-import { visibleWidth } from "@step-harness/pi-tui";
 import { expect, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "../src/core/extensions/types.ts";
 import type { CustomMessage } from "../src/core/messages.ts";
@@ -60,6 +59,7 @@ function harness(): {
 	tools: Map<string, { execute: (...args: never[]) => Promise<unknown> }>;
 	ctx: ExtensionContext;
 	calls: WidgetCall[];
+	sent: Array<{ customType?: string }>;
 } {
 	const tools = new Map<string, { execute: (...args: never[]) => Promise<unknown> }>();
 	const api = {
@@ -73,10 +73,12 @@ function harness(): {
 		setActiveTools: () => {},
 		getFlag: () => false,
 		appendEntry: () => {},
-		sendMessage: () => {},
+		sendMessage: (message: { customType?: string }) => sent.push(message),
 		sendUserMessage: () => {},
 	} as unknown as ExtensionAPI;
 	const calls: WidgetCall[] = [];
+	/** Agent notifications, used as the deterministic "this lane settled" signal. */
+	const sent: Array<{ customType?: string }> = [];
 	const ctx = {
 		mode: "tui",
 		hasUI: true,
@@ -100,7 +102,7 @@ function harness(): {
 		},
 		sessionManager: { getEntries: () => [] },
 	} as unknown as ExtensionContext;
-	return { api, tools, ctx, calls };
+	return { api, tools, ctx, calls, sent };
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
@@ -111,7 +113,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<voi
 	}
 }
 
-test("background lanes share one stable list widget that clears when the batch settles", async () => {
+test("background lanes draw no widget: /subagents is where they are read", async () => {
 	const { api, tools, ctx, calls } = harness();
 	const gates = new Map<string, () => void>();
 	const inputs = new Map<string, StepSubagentRunInput>();
@@ -135,42 +137,18 @@ test("background lanes share one stable list widget that clears when the batch s
 	}
 	await waitFor(() => inputs.size === 2);
 
-	// A burst of streamed deltas only moves the live text; none of it reaches
-	// the widget, so it is not republished.
-	const before = calls.length;
-	for (const delta of ["Now let me", "Now let me look at the section", "- INVERT_IF: `if cond:`"]) {
-		inputs.get("beta task")!.onUpdate?.({ ...runResult("", 0), exitCode: -1, activeText: delta, messages: [] });
-	}
-	expect(calls.length).toBe(before);
+	// A background lane must not add anything above the editor. It used to share one list widget;
+	// the roster is now read through `/subagents`, which subscribes to the same lane snapshots.
+	expect(calls).toEqual([]);
 
-	expect(new Set(calls.map((call) => call.key))).toEqual(new Set(["step-agent-lanes"]));
-	// Live frames coalesce on a repaint budget, so the roster showing both lanes
-	// running arrives on the next publish rather than synchronously.
-	await waitFor(() => (calls.at(-1)?.component?.render(100)[0] ?? "").includes("2 running"));
-	const widget = calls.at(-1)!.component!;
-	const rows = widget.render(100);
-	expect(rows[0]).toContain("background agents");
-	expect(rows[0]).toContain("2 running");
-	// Rows keep spawn order regardless of which lane updated last, never show
-	// the child's streamed text, and fit the width on one line each.
-	expect(rows.findIndex((row) => row.includes("alpha task"))).toBeLessThan(
-		rows.findIndex((row) => row.includes("beta task")),
-	);
-	expect(rows.join("\n")).not.toContain("INVERT_IF");
-	for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(100);
-
+	// Settle both lanes, then let the event loop drain past a repaint interval. The assertion is that
+	// no widget is ever set, not that none was set in the first 50ms: a re-added 1s ticker, or a
+	// publish from the async final-delivery path, would escape a short fixed sample.
 	gates.get("alpha task")!();
-	await waitFor(() => (calls.at(-1)?.component?.render(100)[0] ?? "").includes("1/2 complete"));
-	expect(
-		calls
-			.at(-1)!
-			.component!.render(100)
-			.some((row) => row.includes("alpha task")),
-	).toBe(true);
-
 	gates.get("beta task")!();
-	await waitFor(() => calls.at(-1)?.component === undefined);
-	expect(calls.at(-1)!.key).toBe("step-agent-lanes");
+	await waitFor(() => inputs.size === 2);
+	await new Promise((resolve) => setTimeout(resolve, 1_100));
+	expect(calls).toEqual([]);
 });
 
 function fakeLane(subscribe: BackgroundAgentLane["subscribe"]): BackgroundAgentLane {

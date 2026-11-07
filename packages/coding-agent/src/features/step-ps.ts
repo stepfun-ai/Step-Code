@@ -10,14 +10,20 @@
  * block of always-visible rows would compete with the conversation for the rest of the session.
  * The status line carries the always-on part; this carries the detail on demand.
  *
- * Terminal only. Web and Desktop draw the same list in the composer strip, so the command would
- * duplicate an interface they already have — and worse, `notify` is a no-op in those hosts, so it
- * would look like nothing happened. The handler refuses rather than registering conditionally:
- * `registerCommand` runs once per process and cannot see the host's mode.
+ * Terminal only. A graphical host is expected to project this state itself, where it can stay live
+ * rather than being a snapshot the user has to re-request. The concrete reason to refuse rather than
+ * stay silent: `notify` is a no-op in an RPC host, so a command there would print nothing at all.
+ * The handler refuses at invocation because `registerCommand` runs once per process and cannot see
+ * the host's mode.
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "../core/extensions/types.ts";
-import { listProcesses, type ProcessRegistration, releaseOwnerGracefully } from "../core/process-registry.ts";
+import {
+	listProcesses,
+	PROCESS_TERM_GRACE_MS,
+	type ProcessRegistration,
+	releaseOwnerGracefully,
+} from "../core/process-registry.ts";
 
 /** Commands shown before the list is folded. A long-lived session can accumulate many. */
 const MAX_LISTED = 16;
@@ -122,8 +128,11 @@ export function createStepPsExtension(): (pi: ExtensionAPI) => void {
 							return;
 						}
 						notify(`Stopping ${live.length} background command${live.length === 1 ? "" : "s"}...`);
-						const count = await releaseOwnerGracefully(ownerId, undefined, new Set(live.map((e) => e.pid)));
-						notify(`Stopped ${count} background command${count === 1 ? "" : "s"}.`);
+						// Report `live.length`, not the registry's return value: that counts every tree it
+						// signalled, including one that exited between this listing and the kill. The
+						// number the user saw in "Stopping N" is the honest answer.
+						await releaseOwnerGracefully(ownerId, PROCESS_TERM_GRACE_MS, new Set(live.map((e) => e.pid)));
+						notify(`Stopped ${live.length} background command${live.length === 1 ? "" : "s"}.`);
 						return;
 					}
 					const pid = Number(target);
@@ -137,7 +146,7 @@ export function createStepPsExtension(): (pi: ExtensionAPI) => void {
 						return;
 					}
 					notify(`Stopping background command ${pid}...`);
-					await releaseOwnerGracefully(ownerId, undefined, new Set([pid]));
+					await releaseOwnerGracefully(ownerId, PROCESS_TERM_GRACE_MS, new Set([pid]));
 					notify(`Stopped background command ${pid}.`);
 					return;
 				}
