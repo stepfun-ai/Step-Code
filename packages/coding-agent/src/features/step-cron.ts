@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import type { AgentToolResult } from "@step-harness/agent-core";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -29,13 +29,27 @@ const DURABLE_REFRESH_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_JOBS = 50;
 const AUTO_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_SEARCH_MINUTES = 366 * 24 * 60;
-const MAX_PROMPT_LENGTH = 16_000;
+/**
+ * The one limit every writer shares: the desktop form, the HTTP routes and the
+ * agent tools. A task the agent can create must also be editable in the UI, so
+ * a host must not define a stricter cap of its own.
+ */
+export const CRON_MAX_PROMPT_LENGTH = 8 * 1024;
+export const CRON_MAX_TITLE_LENGTH = 30;
+const MAX_PROMPT_LENGTH = CRON_MAX_PROMPT_LENGTH;
 const MAX_CRON_LENGTH = 200;
 const MAX_LOCK_AGE_MS = 60_000;
 
 type TimerHandle = ReturnType<typeof setInterval>;
 
 export type CronJobStatus = "enabled" | "paused" | "expired" | "completed";
+/**
+ * Why a task is in its current status when the status alone is ambiguous.
+ *
+ * `session_missing` is the one the host sets: the bound session file was
+ * deleted, so the task can never deliver and is paused rather than retried.
+ */
+export type CronStatusReason = "session_missing";
 export type CronRunStatus = "delivered" | "failed" | "missed" | "skipped" | "blocked";
 
 /**
@@ -59,7 +73,15 @@ export interface CronJob {
 	autoExpireAt?: number;
 	workspace?: string;
 	sessionId?: string;
+	/**
+	 * Set when the host created the bound session for this task rather than
+	 * binding a session the user already had. The sidebar uses it to place the
+	 * session under scheduled tasks instead of guessing from its cwd.
+	 */
+	sessionCreated?: boolean;
 	title?: string;
+	/** Why the task is not running, when its status alone does not say it. */
+	statusReason?: CronStatusReason;
 	status?: CronJobStatus;
 	enabled?: boolean;
 	inputs?: { skills?: string[] };
@@ -80,8 +102,10 @@ export interface CronCreateOptions {
 	id?: string;
 	workspace?: string;
 	sessionId?: string;
+	sessionCreated?: boolean;
 	title?: string;
 	status?: CronJobStatus;
+	statusReason?: CronStatusReason;
 	enabled?: boolean;
 	inputs?: { skills?: string[] };
 	model?: { provider: string; modelId?: string; thinkingLevel?: string };
@@ -108,6 +132,8 @@ export interface CronUpdatePatch {
 	delivery?: { lark?: { target: string; format?: "markdown" | "text" } };
 	expiresAt?: number | null;
 	status?: CronJobStatus;
+	/** Host note for why a task was paused; null clears it. */
+	statusReason?: CronStatusReason | null;
 	recurring?: boolean;
 	intervalHours?: number | null;
 	runAt?: number | null;
@@ -394,6 +420,8 @@ function parsePersistedJob(value: unknown): CronJob | undefined {
 		return undefined;
 	if (candidate.title !== undefined && (typeof candidate.title !== "string" || candidate.title.length > 200))
 		return undefined;
+	if (candidate.sessionCreated !== undefined && typeof candidate.sessionCreated !== "boolean") return undefined;
+	if (candidate.statusReason !== undefined && candidate.statusReason !== "session_missing") return undefined;
 	if (
 		candidate.status !== undefined &&
 		!["enabled", "paused", "expired", "completed"].includes(candidate.status as string)
@@ -476,6 +504,14 @@ export interface StepCronRuntimeOptions {
 	sendMessage?: (message: CronDelivery) => void;
 	telemetry?: StepTelemetryReporter;
 	warn?: (message: string) => void;
+	/**
+	 * Which records this host delivers and may change.
+	 *
+	 * Durable records are shared by file path, so a project folder can hold a
+	 * record another host owns. Unowned records are still read and written back
+	 * unchanged; they are only never fired, listed or mutated here.
+	 */
+	ownsJob?: (job: CronJob) => boolean;
 }
 
 /** The narrow surface a host facade needs to expose to the extension. */
@@ -520,6 +556,7 @@ export class StepCronRuntime {
 	private readonly canDeliver?: (job: CronJob) => boolean;
 	private readonly canDeliverMissed?: () => boolean;
 	private readonly maxJobs: number;
+	private readonly ownsJob: (job: CronJob) => boolean;
 	private readonly sendMessage: (message: CronDelivery) => void;
 	private readonly telemetry?: StepTelemetryReporter;
 	private readonly warn: (message: string) => void;
@@ -548,6 +585,7 @@ export class StepCronRuntime {
 		this.canDeliver = options.canDeliver;
 		this.canDeliverMissed = options.canDeliverMissed;
 		this.maxJobs = options.maxJobs ?? DEFAULT_MAX_JOBS;
+		this.ownsJob = options.ownsJob ?? (() => true);
 		this.sendMessage = options.sendMessage ?? (() => {});
 		this.telemetry = options.telemetry;
 		this.warn = options.warn ?? ((message) => console.warn(`[step-cron] ${message}`));
@@ -602,8 +640,20 @@ export class StepCronRuntime {
 			(!Number.isInteger(options.intervalHours) || options.intervalHours < 1 || options.intervalHours > 168)
 		)
 			throw new Error("Cron interval must be a whole number between 1 and 168 hours");
+		if (options.intervalHours !== undefined && !recurring)
+			throw new Error("Cron interval jobs repeat; set recurring to true or omit intervalHours");
+		if (options.runAt !== undefined) {
+			if (!Number.isFinite(options.runAt)) throw new Error("Cron runAt must be a finite timestamp");
+			if (recurring) throw new Error("Only a one-shot cron job takes a runAt time");
+			// A one-shot time in the past would fire on the next tick, which reads as
+			// "ran immediately" rather than "scheduled".
+			if (options.runAt <= createdAt) throw new Error("A one-shot cron job must be scheduled in the future");
+		}
+		const normalizedTitle = options.title?.trim();
+		if (normalizedTitle && normalizedTitle.length > CRON_MAX_TITLE_LENGTH)
+			throw new Error(`Cron title exceeds ${CRON_MAX_TITLE_LENGTH} characters`);
 		const nominalNext =
-			options.runAt ??
+			(!recurring ? options.runAt : undefined) ??
 			(options.intervalHours ? createdAt + options.intervalHours * 60 * 60 * 1000 : expression.next(createdAt));
 		const desktopFields =
 			options.workspace !== undefined ||
@@ -641,13 +691,14 @@ export class StepCronRuntime {
 				prompt: normalizedPrompt,
 				recurring,
 				...(options.intervalHours ? { intervalHours: options.intervalHours } : {}),
-				...(options.runAt !== undefined ? { runAt: options.runAt } : {}),
+				...(!recurring && options.runAt !== undefined ? { runAt: options.runAt } : {}),
 				durable,
 				createdAt,
 				nextFireAt: this.jitter(nominalNext, createdAt, id, recurring, expression, options.jitter !== false),
 				...(options.workspace ? { workspace: path.resolve(options.workspace) } : {}),
 				...(options.sessionId ? { sessionId: options.sessionId } : {}),
-				...(options.title ? { title: options.title.slice(0, 200) } : {}),
+				...(options.sessionCreated ? { sessionCreated: true } : {}),
+				...(normalizedTitle ? { title: normalizedTitle } : {}),
 				...(options.status ? { status: options.status } : {}),
 				...(options.inputs ? { inputs: { skills: [...(options.inputs.skills ?? [])] } } : {}),
 				...(options.model ? { model: { ...options.model } } : {}),
@@ -668,8 +719,7 @@ export class StepCronRuntime {
 
 	update(id: string, patch: CronUpdatePatch): CronJob {
 		const job = this.withLatestJobs(() => {
-			const current = this.jobs.get(id);
-			if (!current) throw new Error(`No cron job with id ${id}`);
+			const current = this.readableJob(id, "update");
 			const next: CronJob = { ...current };
 			if (patch.cron !== undefined) {
 				next.cron = patch.cron.trim();
@@ -682,7 +732,11 @@ export class StepCronRuntime {
 					throw new Error(`Cron prompt exceeds ${MAX_PROMPT_LENGTH} characters`);
 				next.prompt = prompt;
 			}
-			if (patch.title !== undefined) next.title = patch.title.slice(0, 200);
+			if (patch.title !== undefined) {
+				if (patch.title.length > CRON_MAX_TITLE_LENGTH)
+					throw new Error(`Cron title exceeds ${CRON_MAX_TITLE_LENGTH} characters`);
+				next.title = patch.title;
+			}
 			if (patch.inputs !== undefined) next.inputs = { skills: [...(patch.inputs.skills ?? [])] };
 			if (patch.model !== undefined) next.model = { ...patch.model };
 			if (patch.permissionPreset !== undefined) {
@@ -703,6 +757,12 @@ export class StepCronRuntime {
 					throw new Error(`Unknown cron job status: ${String(patch.status)}`);
 				next.status = patch.status;
 				next.enabled = patch.status === "enabled";
+				// A status the user set themselves replaces whatever the host recorded.
+				if (patch.status !== "paused") delete next.statusReason;
+			}
+			if (patch.statusReason !== undefined) {
+				if (patch.statusReason === null) delete next.statusReason;
+				else next.statusReason = patch.statusReason;
 			}
 			if (patch.recurring !== undefined) next.recurring = patch.recurring;
 			if (patch.intervalHours !== undefined) {
@@ -713,6 +773,15 @@ export class StepCronRuntime {
 				if (patch.runAt === null) delete next.runAt;
 				else next.runAt = patch.runAt;
 			}
+			if (next.recurring && patch.runAt !== undefined && patch.runAt !== null)
+				throw new Error("A repeating cron job takes a schedule, not a one-shot runAt");
+			// One schedule shape per task. `runAt` is a one-shot time and
+			// `intervalHours` is a repeating interval, so converting between the two
+			// kinds has to drop the field that no longer applies: a stale `runAt`
+			// otherwise wins the `nextFireAt` calculation below, and a converted
+			// `once -> daily` task fires at its old absolute time or immediately.
+			if (next.recurring) delete next.runAt;
+			else delete next.intervalHours;
 			if (patch.runCount !== undefined) next.runCount = Math.max(0, Math.floor(patch.runCount));
 			if (
 				(patch.permissionPreset !== undefined || patch.fullAccessAcknowledged !== undefined) &&
@@ -727,19 +796,55 @@ export class StepCronRuntime {
 				if (!Number.isInteger(next.intervalHours) || next.intervalHours < 1 || next.intervalHours > 168)
 					throw new Error("Cron interval must be a whole number between 1 and 168 hours");
 			}
+			if (patch.runAt !== undefined && patch.runAt !== null) {
+				if (!Number.isFinite(patch.runAt)) throw new Error("Cron runAt must be a finite timestamp");
+				if (patch.runAt <= now) throw new Error("A one-shot cron job must be scheduled in the future");
+			}
+			if (patch.expiresAt !== undefined && patch.expiresAt !== null && !Number.isFinite(patch.expiresAt))
+				throw new Error("Cron expiry must be a finite timestamp or null");
+
+			// Reopening: a task that used up its schedule comes back to life only when
+			// the edit gives it a future schedule again. An explicit status in the same
+			// patch wins over this, so "pause" stays pause.
+			const extendedExpiry =
+				next.expiresAt !== undefined && patch.expiresAt !== undefined && patch.expiresAt !== null;
+			const scheduledOneShot =
+				!next.recurring && patch.runAt !== undefined && patch.runAt !== null && patch.runAt > now;
+			if (patch.status === undefined && (next.status === "expired" || next.status === "completed")) {
+				const reopened =
+					(next.status === "expired" && extendedExpiry && next.expiresAt !== undefined && next.expiresAt > now) ||
+					(next.status === "completed" && scheduledOneShot);
+				if (reopened) {
+					next.status = "enabled";
+					next.enabled = true;
+					delete next.statusReason;
+				}
+			}
+
+			// A one-shot task fires at its `runAt`. Re-enabling one whose time has
+			// already passed would deliver on the next tick, which reads as an
+			// immediate run; the user has to pick a new time instead.
+			if (!next.recurring && patch.status === "enabled" && patch.runAt === undefined) {
+				if (next.runAt === undefined || next.runAt <= now)
+					throw new Error("A one-shot task needs a future time before it can run again");
+			}
+
 			if (
 				patch.cron !== undefined ||
 				patch.recurring !== undefined ||
 				patch.intervalHours !== undefined ||
 				patch.runAt !== undefined ||
+				patch.expiresAt !== undefined ||
 				patch.status === "enabled"
 			) {
-				next.nextFireAt =
-					patch.runAt ??
-					next.runAt ??
-					(next.intervalHours !== undefined
-						? now + next.intervalHours * 60 * 60 * 1000
-						: this.jitter(expression.next(now), now, id, next.recurring, expression, next.jitter !== false));
+				if (!next.recurring)
+					next.nextFireAt =
+						next.runAt ?? this.jitter(expression.next(now), now, id, false, expression, next.jitter !== false);
+				else
+					next.nextFireAt =
+						next.intervalHours !== undefined
+							? now + next.intervalHours * 60 * 60 * 1000
+							: this.jitter(expression.next(now), now, id, true, expression, next.jitter !== false);
 			}
 			this.jobs.set(id, next);
 			return { ...next };
@@ -758,8 +863,7 @@ export class StepCronRuntime {
 
 	runNow(id: string): CronJob {
 		const job = this.withLatestJobs(() => {
-			const current = this.jobs.get(id);
-			if (!current) throw new Error(`No cron job with id ${id}`);
+			const current = this.readableJob(id, "run");
 			this.fire(current, this.readNow(), true);
 			return { ...current };
 		});
@@ -769,13 +873,14 @@ export class StepCronRuntime {
 	list(): CronJob[] {
 		this.refreshDurableNow();
 		return [...this.jobs.values()]
+			.filter((job) => this.ownsJob(job))
 			.sort((left, right) => left.nextFireAt - right.nextFireAt || left.id.localeCompare(right.id))
 			.map((job) => ({ ...job }));
 	}
 
 	delete(id: string): boolean {
 		const found = this.withLatestJobs(() => {
-			if (!this.jobs.has(id)) return false;
+			if (!this.jobs.has(id) || !this.ownsJob(this.jobs.get(id)!)) return false;
 			this.removeJob(id);
 			return true;
 		});
@@ -887,6 +992,7 @@ export class StepCronRuntime {
 	private drain(now: number): void {
 		this.deliverMissed();
 		for (const job of [...this.jobs.values()]) {
+			if (!this.ownsJob(job)) continue;
 			if (job.status !== undefined && job.status !== "enabled") continue;
 			if (this.isExpiredBeforeDelivery(job, now)) {
 				if (job.status !== undefined) {
@@ -937,6 +1043,7 @@ export class StepCronRuntime {
 	private needsLockedDrain(now: number): boolean {
 		if (this.missedAllowed() && this.pendingMissed.size > 0) return true;
 		for (const job of this.jobs.values()) {
+			if (!this.ownsJob(job)) continue;
 			if (job.status !== undefined && job.status !== "enabled") continue;
 			if (this.isExpiredBeforeDelivery(job, now)) return true;
 			if (this.deliveryAllowed(job) && this.isDue(job, now)) return true;
@@ -947,6 +1054,7 @@ export class StepCronRuntime {
 	/** `drain`'s busy-host branch, which is in-memory bookkeeping only. */
 	private deferDue(now: number): void {
 		for (const job of this.jobs.values()) {
+			if (!this.ownsJob(job)) continue;
 			if (job.status !== undefined && job.status !== "enabled") continue;
 			if (this.isDue(job, now)) this.defer(job);
 		}
@@ -956,7 +1064,7 @@ export class StepCronRuntime {
 		if (this.pendingMissed.size === 0 || !this.missedAllowed()) return;
 		const jobs = [...this.pendingMissed].flatMap((id) => {
 			const job = this.jobs.get(id);
-			return job ? [{ ...job }] : [];
+			return job && this.ownsJob(job) ? [{ ...job }] : [];
 		});
 		if (jobs.length === 0) return;
 		try {
@@ -1043,6 +1151,14 @@ export class StepCronRuntime {
 		this.deferred.delete(id);
 		this.pendingMissed.delete(id);
 		this.failures.delete(`delivery:${id}`);
+	}
+
+	/** A job this host may change, or an error saying whose it is. */
+	private readableJob(id: string, action: "run" | "update"): CronJob {
+		const job = this.jobs.get(id);
+		if (!job) throw new Error(`No cron job with id ${id}`);
+		if (!this.ownsJob(job)) throw new Error(`Cron job ${id} belongs to another host and cannot be ${action}`);
+		return job;
 	}
 
 	/**
@@ -1202,6 +1318,15 @@ export interface StepCronExtensionOptions {
 	telemetry?: StepTelemetryReporter;
 	enabled?: boolean;
 	readOnly?: boolean;
+	/**
+	 * Ask the user before an agent creates, updates or deletes a task.
+	 *
+	 * This is a host capability, not a product default: the desktop host has a
+	 * page that can show the dialog and wants the gate, while a CLI session (and
+	 * any print / RPC host with no dialog surface) would otherwise lose the
+	 * ability to schedule work altogether.
+	 */
+	requireApproval?: boolean;
 	/** Register `cron_update`; off for the CLI so its tool surface stays unchanged. */
 	allowUpdate?: boolean;
 	runtime?: CronRuntimeLike;
@@ -1225,15 +1350,58 @@ function formatCronStatus(jobs: readonly CronJob[]): string {
 		.join("\n");
 }
 
+/**
+ * Describe a pending `cron_update` by what the task is now, not by its id.
+ *
+ * The approval dialog is the only place a person sees what they are agreeing
+ * to, and an id alone says nothing about which scheduled work changes.
+ */
+function describeUpdateTarget(runtime: CronRuntimeLike, params: Static<typeof CronUpdateParams>): string {
+	const job = runtime.list().find((candidate) => candidate.id === params.id);
+	const current = job ? `${job.title ?? job.prompt.slice(0, 60)} (${job.cron})` : `unknown task ${params.id}`;
+	const changes = [
+		params.cron === undefined ? undefined : `schedule -> ${params.cron}`,
+		params.prompt === undefined ? undefined : "prompt",
+		params.title === undefined ? undefined : `title -> ${params.title}`,
+		params.skills === undefined ? undefined : "skills",
+		params.enabled === undefined ? undefined : params.enabled ? "resume" : "pause",
+		params.expiresAt === undefined ? undefined : "expiry",
+	].filter((value): value is string => value !== undefined);
+	return `${current}\n${changes.length > 0 ? `changes: ${changes.join(", ")}` : "no changes"}`;
+}
+
+/**
+ * Read from a captured extension context, tolerating a stale one.
+ *
+ * A ctx goes stale the moment its session is replaced — fork, newSession,
+ * switchSession or reload — and touching a stale ctx throws. Timer callbacks can
+ * land in that window, and an uncaught throw there takes down the whole host
+ * rather than just skipping one notification, so treat it as "nothing to read".
+ *
+ * The plan-mode gate is read through the same helper: it asks the session
+ * whether a human decision is pending, and a stale ctx cannot answer.
+ */
+function withLiveContext<T>(context: ExtensionContext | undefined, read: (ctx: ExtensionContext) => T): T | undefined {
+	if (!context) return undefined;
+	try {
+		return read(context);
+	} catch {
+		return undefined;
+	}
+}
+
 async function requireCronApproval(
 	ctx: ExtensionContext,
 	action: "create" | "update" | "delete",
 	detail: string,
 ): Promise<void> {
-	if (!ctx.hasUI || typeof ctx.ui.confirm !== "function") throw new Error(`Cron ${action} requires user approval`);
+	// `once` marks the dialog as a decision about one scheduled task, so a
+	// standing "allow for this session" cannot silently cover every later
+	// scheduled-task change in the conversation.
 	const approved = await ctx.ui.confirm(
 		`Approve scheduled task ${action}?`,
 		`${detail}\n\nAgent-created scheduled-task changes require your approval.`,
+		{ once: true },
 	);
 	if (!approved) throw new Error(`Cron ${action} was not approved`);
 }
@@ -1242,21 +1410,44 @@ async function requireCronApproval(
 export function createStepCronExtension(options: StepCronExtensionOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
 		if (options.enabled === false || envFlagEnabled(process.env.STEP_DISABLE_CRON)) return;
+		/**
+		 * The approval gate is a host capability. A host that asks has a dialog
+		 * surface; a host that does not must not lose the ability to schedule, and a
+		 * host whose context cannot show a dialog at all is refused rather than
+		 * silently allowed.
+		 */
+		const approve = (ctx: ExtensionContext, action: "create" | "update" | "delete", detail: string) => {
+			if (!options.requireApproval) return;
+			if (!ctx.hasUI) throw new Error(`Cron ${action} requires user approval, but this host has no dialog surface`);
+			return requireCronApproval(ctx, action, detail);
+		};
 		let currentContext: ExtensionContext | undefined;
 		const runtime =
 			options.runtime ??
 			new StepCronRuntime({
 				telemetry: options.telemetry,
+				// A durable record bound to a session belongs to the host that owns
+				// that session. A CLI session loading the same project folder must not
+				// fire, list, or delete it: it has no way to see that session, and
+				// firing it would deliver a desktop task's prompt into this terminal
+				// conversation instead.
+				ownsJob: (job) => job.sessionId === undefined,
 				isIdle: () =>
 					Boolean(
-						currentContext?.isIdle() &&
-							!currentContext.hasPendingMessages() &&
-							// A job whose delivery would start a turn stays due instead of
-							// being fired into a queue, so an approval does not replay work the
-							// user may reject.
-							currentContext.hasPendingUserDecision?.() !== true,
+						withLiveContext(
+							currentContext,
+							(ctx) =>
+								ctx.isIdle() &&
+								!ctx.hasPendingMessages() &&
+								// A job whose delivery would start a turn stays due instead of
+								// being fired into a queue, so an approval does not replay work
+								// the user may reject.
+								ctx.hasPendingUserDecision?.() !== true,
+						),
 					),
-				warn: (message) => currentContext?.ui.notify(message, "warning"),
+				warn: (message) => {
+					withLiveContext(currentContext, (ctx) => ctx.ui.notify(message, "warning"));
+				},
 				sendMessage: (delivery) => {
 					if (delivery.kind === "missed") {
 						const jobs = delivery.jobs ?? [];
@@ -1324,7 +1515,7 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 			parameters: CronCreateParams,
 			execute: async (_id, params, _signal, _onUpdate, ctx) => {
 				if (options.readOnly) throw new Error("This task session cannot create cron jobs");
-				await requireCronApproval(ctx, "create", `${params.cron} — ${params.prompt.slice(0, 120)}`);
+				await approve(ctx, "create", `${params.cron} - ${params.prompt.slice(0, 120)}`);
 				currentContext = ctx;
 				runtime.setContext(ctx.cwd);
 				const recurring = params.recurring !== false;
@@ -1353,7 +1544,7 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 			parameters: CronDeleteParams,
 			execute: async (_id, params, _signal, _onUpdate, ctx) => {
 				if (options.readOnly) throw new Error("This task session cannot delete cron jobs");
-				await requireCronApproval(ctx, "delete", params.id);
+				await approve(ctx, "delete", params.id);
 				currentContext = ctx;
 				runtime.setContext(ctx.cwd);
 				const found = runtime.delete(params.id);
@@ -1369,7 +1560,7 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 				parameters: CronUpdateParams,
 				execute: async (_id, params, _signal, _onUpdate, ctx) => {
 					if (options.readOnly) throw new Error("This task session cannot update cron jobs");
-					await requireCronApproval(ctx, "update", params.id);
+					await approve(ctx, "update", describeUpdateTarget(runtime, params));
 					if (!runtime.update) throw new Error("This host does not support updating cron jobs");
 					currentContext = ctx;
 					runtime.setContext(ctx.cwd);

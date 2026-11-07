@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import {
+	CRON_MAX_PROMPT_LENGTH,
+	CRON_MAX_TITLE_LENGTH,
 	type CronDelivery,
 	CronFileStore,
 	type CronJob,
@@ -262,25 +264,50 @@ test("the CLI cron extension keeps its original tool surface", () => {
 	expect([...harness.tools.keys()].sort()).toEqual(["cron_create", "cron_delete", "cron_list"]);
 });
 
-test("agent-created cron mutations require user approval", async () => {
-	const harness = createHarness();
-	createStepCronExtension({ enabled: true })(harness.api);
-	await emitCron(harness, "session_start");
-	const confirm = harness.ctx.ui.confirm as ReturnType<typeof vi.fn>;
+test("the approval gate is a host choice, and a host that asks gets one dialog per change", async () => {
+	// The CLI host does not pass `requireApproval`: scheduling work is its own
+	// user-driven command surface, and a print / RPC session has no page to show
+	// a dialog on. A host that opts in does.
+	const cli = createHarness();
+	createStepCronExtension({ enabled: true })(cli.api);
+	await emitCron(cli, "session_start");
+	const cliConfirm = cli.ctx.ui.confirm as ReturnType<typeof vi.fn>;
+	await cli.tools
+		.get("cron_create")!
+		.execute("create", { cron: "* * * * *", prompt: "no gate here" } as never, undefined, undefined, cli.ctx);
+	expect(cliConfirm).not.toHaveBeenCalled();
+	await emitCron(cli, "session_shutdown");
+
+	const desktop = createHarness();
+	createStepCronExtension({ enabled: true, requireApproval: true })(desktop.api);
+	await emitCron(desktop, "session_start");
+	const confirm = desktop.ctx.ui.confirm as ReturnType<typeof vi.fn>;
 	confirm.mockResolvedValueOnce(false);
 	await expect(
-		harness.tools
+		desktop.tools
 			.get("cron_create")!
 			.execute(
 				"create",
 				{ cron: "* * * * *", prompt: "needs approval" } as never,
 				undefined,
 				undefined,
-				harness.ctx,
+				desktop.ctx,
 			),
 	).rejects.toThrow("not approved");
-	expect(harness.tools.get("cron_create")).toBeDefined();
-	await emitCron(harness, "session_shutdown");
+	// The dialog is per scheduled task, never part of a session-wide grant.
+	expect(confirm.mock.calls[0]?.[2]).toMatchObject({ once: true });
+	await emitCron(desktop, "session_shutdown");
+});
+
+test("a host without a dialog surface refuses rather than silently scheduling", async () => {
+	const harness = createHarness();
+	Object.assign(harness.ctx, { hasUI: false });
+	createStepCronExtension({ enabled: true, requireApproval: true })(harness.api);
+	await expect(
+		harness.tools
+			.get("cron_create")!
+			.execute("create", { cron: "* * * * *", prompt: "no dialog" } as never, undefined, undefined, harness.ctx),
+	).rejects.toThrow("no dialog surface");
 });
 
 test("durable creation is rejected in an untrusted project", async () => {
@@ -890,6 +917,159 @@ describe("desktop cron task fields", () => {
 			fullAccessAcknowledged: true,
 		}).job;
 		expect(() => runtime.update(created.id, { fullAccessAcknowledged: false })).toThrow(/risk acknowledgment/);
+	});
+
+	test("one-shot and repeating schedules cannot leak into each other", () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const runtime = new StepCronRuntime({ now: () => now, jitterRatio: 0 });
+		const runAt = now + 2 * 60 * 60 * 1000;
+		const once = runtime.create("0 9 * * *", "once", false, false, true, {
+			runAt,
+			status: "enabled",
+			autoExpireMs: null,
+			jitter: false,
+		}).job;
+		expect(once.runAt).toBe(runAt);
+		expect(once.nextFireAt).toBe(runAt);
+
+		// `once -> daily`: the old absolute time must not decide the next fire.
+		const daily = runtime.update(once.id, { recurring: true, cron: "0 9 * * *" });
+		expect(daily.recurring).toBe(true);
+		expect(daily.runAt).toBeUndefined();
+		expect(daily.nextFireAt).toBe(SimpleCronExpression.parse("0 9 * * *").next(now));
+
+		// …and back: `daily -> once` carries an explicit time.
+		const backToOnce = runtime.update(once.id, { recurring: false, runAt: now + 60 * 60 * 1000 });
+		expect(backToOnce.intervalHours).toBeUndefined();
+		expect(backToOnce.nextFireAt).toBe(now + 60 * 60 * 1000);
+
+		// A repeating task cannot take a one-shot time.
+		expect(() =>
+			runtime.update(once.id, {
+				recurring: true,
+				runAt: now + 60 * 60 * 1000,
+			}),
+		).toThrow(/one-shot/);
+	});
+
+	test("a one-shot time must be in the future on create and update", () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const runtime = new StepCronRuntime({ now: () => now, jitterRatio: 0 });
+		expect(() =>
+			runtime.create("0 9 * * *", "past", false, false, true, {
+				runAt: now - 60_000,
+				status: "enabled",
+				autoExpireMs: null,
+				jitter: false,
+			}),
+		).toThrow(/future/);
+		expect(() =>
+			runtime.create("0 9 * * *", "nan", false, false, true, {
+				runAt: Number.NaN,
+				status: "enabled",
+				autoExpireMs: null,
+				jitter: false,
+			}),
+		).toThrow(/finite/);
+		const once = runtime.create("0 9 * * *", "ok", false, false, true, {
+			runAt: now + 60_000,
+			status: "enabled",
+			autoExpireMs: null,
+			jitter: false,
+		}).job;
+		expect(() => runtime.update(once.id, { runAt: now - 1 })).toThrow(/future/);
+		expect(() => runtime.update(once.id, { runAt: Number.POSITIVE_INFINITY })).toThrow(/finite/);
+		expect(() => runtime.update(once.id, { expiresAt: Number.NaN })).toThrow(/finite/);
+	});
+
+	test("editing an expiry or a one-shot time reopens a finished task", () => {
+		let now = Date.UTC(2026, 0, 1, 12, 0);
+		const runtime = new StepCronRuntime({ now: () => now, jitterRatio: 0 });
+		const expired = runtime.create("0 9 * * *", "expiring", true, false, true, {
+			status: "expired",
+			expiresAt: now - 60_000,
+			autoExpireMs: null,
+			jitter: false,
+		}).job;
+		const renewed = runtime.update(expired.id, { expiresAt: now + 24 * 60 * 60 * 1000 });
+		expect(renewed.status).toBe("enabled");
+		expect(renewed.enabled).toBe(true);
+
+		const completed = runtime.create("0 9 * * *", "done", false, false, true, {
+			runAt: now + 60_000,
+			status: "completed",
+			autoExpireMs: null,
+			jitter: false,
+		}).job;
+		expect(runtime.update(completed.id, { runAt: now + 60 * 60 * 1000 }).status).toBe("enabled");
+
+		// An edit that does not restore a future schedule must not reopen it.
+		const stillExpired = runtime.update(expired.id, { status: "expired" });
+		expect(runtime.update(stillExpired.id, { title: "renamed" }).status).toBe("expired");
+
+		// Re-enabling a one-shot whose time already passed would fire it at once on
+		// the next tick, so it needs a new time instead.
+		const stale = runtime.create("0 9 * * *", "stale", false, false, true, {
+			runAt: now + 60_000,
+			status: "paused",
+			autoExpireMs: null,
+			jitter: false,
+		}).job;
+		now += 10 * 60_000;
+		expect(() => runtime.update(stale.id, { status: "enabled" })).toThrow(/future time/);
+		expect(runtime.update(stale.id, { status: "enabled", runAt: now + 60_000 }).status).toBe("enabled");
+	});
+
+	test("a host only sees and fires the records it owns", () => {
+		let now = Date.UTC(2026, 0, 1, 12, 0);
+		const deliveries: CronDelivery[] = [];
+		const runtime = new StepCronRuntime({
+			now: () => now,
+			jitterRatio: 0,
+			ownsJob: (job) => job.sessionId === undefined,
+			sendMessage: (delivery) => deliveries.push(delivery),
+		});
+		const mine = runtime.create("* * * * *", "mine", false, false, true, {
+			status: "enabled",
+			// One-shot at the next tick, so the drain loop has real work to do.
+			runAt: now + 60_000,
+			autoExpireMs: null,
+			jitter: false,
+		}).job;
+		const foreign = runtime.create("* * * * *", "desktop", true, false, true, {
+			sessionId: "session-desktop",
+			status: "enabled",
+			autoExpireMs: null,
+			jitter: false,
+		}).job;
+		expect(runtime.list().map((job) => job.id)).toEqual([mine.id]);
+		expect(runtime.delete(foreign.id)).toBe(false);
+		expect(() => runtime.runNow(foreign.id)).toThrow(/another host/);
+		expect(() => runtime.update(foreign.id, { title: "hijack" })).toThrow(/another host/);
+		now += 60_000;
+		runtime.tick();
+		expect(deliveries.map((delivery) => delivery.job?.id)).toEqual([mine.id]);
+	});
+
+	test("prompt and title limits are shared with every host", () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const runtime = new StepCronRuntime({ now: () => now, jitterRatio: 0 });
+		const created = runtime.create("0 9 * * *", "x", true, false, true, { status: "enabled" }).job;
+		expect(() => runtime.create("0 9 * * *", "y".repeat(CRON_MAX_PROMPT_LENGTH + 1), true, false, true)).toThrow(
+			/exceeds 8192/,
+		);
+		expect(() => runtime.update(created.id, { prompt: "y".repeat(CRON_MAX_PROMPT_LENGTH + 1) })).toThrow(
+			/exceeds 8192/,
+		);
+		expect(() =>
+			runtime.create("0 9 * * *", "z", true, false, true, {
+				title: "t".repeat(CRON_MAX_TITLE_LENGTH + 1),
+				status: "enabled",
+			}),
+		).toThrow(/title exceeds 30/);
+		expect(() => runtime.update(created.id, { title: "t".repeat(CRON_MAX_TITLE_LENGTH + 1) })).toThrow(
+			/title exceeds 30/,
+		);
 	});
 
 	test("supports explicit hour intervals and absolute one-shot times", () => {
