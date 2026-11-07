@@ -3,8 +3,10 @@
 import type { ExtensionAPI, ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
 import type { StepTelemetryReporter } from "../step/telemetry.ts";
 import { createStepPlanExtension } from "./step-plan.ts";
+import { createStepPsExtension } from "./step-ps.ts";
 import { registerStepClarifyUserExtension } from "./step-questionnaire.ts";
 import { createStepSubagentExtension, type StepSubagentExtensionOptions } from "./step-subagent.ts";
+import { createStepSubagentsCommandExtension } from "./step-subagents-command.ts";
 import { createStepTasksExtension } from "./step-tasks.ts";
 import { registerWorkflowChildAcl } from "./workflow/acl-extension.ts";
 import { createStepWorkflowExtension, type StepWorkflowExtensionOptions } from "./workflow/step-workflow.ts";
@@ -21,6 +23,8 @@ export interface StepCapabilitiesExtensionOptions {
 /** Compose Pi's native UI examples behind one Step-owned inline extension. */
 export function createStepCapabilitiesExtension(options: StepCapabilitiesExtensionOptions = {}): ExtensionFactory {
 	const plan = createStepPlanExtension({ telemetry: options.telemetry });
+	const ps = createStepPsExtension();
+	const subagentsCommand = createStepSubagentsCommandExtension();
 	const tasks = createStepTasksExtension();
 	const subagent = createStepSubagentExtension({
 		...options.subagent,
@@ -41,6 +45,8 @@ export function createStepCapabilitiesExtension(options: StepCapabilitiesExtensi
 		registerWorkflowChildAcl(pi, options.telemetry);
 		registerStepClarifyUserExtension(pi, options.telemetry);
 		plan(pi);
+		ps(pi);
+		subagentsCommand(pi);
 		tasks(pi);
 		subagent(pi);
 		workflow(pi);

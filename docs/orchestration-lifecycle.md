@@ -257,7 +257,8 @@ Lanes belong to the session runtime that started them. `session_shutdown`
 (quit, signals, `/new`, `/resume`, `/fork`, and reload) aborts every lane of that
 runtime, stops its children, and waits up to three seconds. Children still
 running after that are killed, and their temporary directories are removed.
-The lane list and widget are cleared, and results that arrive later are dropped.
+The lane list and widget are cleared, and results that arrive later are dropped. Background lanes
+draw no widget above the editor: `/subagents` reads their live state on demand.
 Lanes are not persisted or resumed. Lane children are also registered for the
 host's process-exit sweep. Shutting down one runtime never touches another
 runtime's lanes. A host that keeps several sessions open, such as a web client,
@@ -322,6 +323,31 @@ running.
 Log files survive their command: they are the only record of what a dev server
 printed before it was stopped, so the registry keeps the `logPath` and does not
 delete it.
+
+### When a command is released
+
+`session_shutdown` fires for five reasons, and only `quit` ends the session.
+`new`, `resume` and `fork` replace the runtime while the old conversation stays
+on disk — and, in a multi-session host, on screen — and `reload` keeps the same
+session object. Releasing on those would stop a dev server the user is still
+watching, so the release is gated on `reason === "quit"`, which covers a host
+that is exiting and a session that is deleted. A host killed outright is covered
+by the `process.exit` sweep.
+
+### Reading them from a terminal
+
+`/ps` lists this session's background commands with pid, state, elapsed time and
+log path, and stops one or all of them. `/subagents` lists the running subagent
+lanes with the step each child is on. Both print into the transcript and fold
+when long. Both are terminal commands: Web and Desktop draw the same state in
+their own interface, and the `notify` a transcript command depends on is a no-op
+in those hosts, so they refuse there rather than appearing to do nothing.
+
+Background lanes draw no widget above the editor. A permanent panel competes
+with the conversation for as long as a lane runs, and its rows cannot show which
+step a child is on — the question a user actually has. Progress notifications to
+the model stay out of the transcript for the same reason; completion and
+needs-input still display.
 
 ## Cron scheduling and delivery
 
