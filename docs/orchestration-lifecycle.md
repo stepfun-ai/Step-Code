@@ -298,8 +298,11 @@ Ownership decides when the tree stops:
 Stopping goes through three layers, from narrowest to widest:
 
 1. `releaseOwnerGracefully(ownerId)` sends `SIGTERM` to the tree's process
-   group, then `SIGKILL` after `PROCESS_TREE_TERM_GRACE_MS`. The owning session
-   calls it from its `session_shutdown` handler.
+   group, then `SIGKILL` after `PROCESS_TREE_TERM_GRACE_MS` (3s). The owning
+   session calls it from its `session_shutdown` handler. A command the user
+   interrupted uses the shorter `INTERRUPTED_COMMAND_GRACE_MS` (500ms) instead:
+   an Escape or an elapsed deadline must look stopped immediately, and the call
+   still waits for the tree to exit.
 2. `releaseAllProcessesSync()` runs from a `process.exit` listener registered
    inside the registry module. Every host inherits it, including hosts that do
    not write their own shutdown path.

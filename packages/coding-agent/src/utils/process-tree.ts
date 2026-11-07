@@ -17,8 +17,22 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** Long enough for a shell `trap ... TERM` handler to finish its own cleanup. */
+/**
+ * Long enough for a shell `trap ... TERM` handler to run its own cleanup.
+ *
+ * Used where waiting is acceptable: releasing a session's trees during teardown, where nothing
+ * interactive is blocked on it.
+ */
 export const PROCESS_TREE_TERM_GRACE_MS = 3_000;
+
+/**
+ * Grace for a command the user just interrupted or that hit its deadline.
+ *
+ * Shorter than {@link PROCESS_TREE_TERM_GRACE_MS} because a foreground command must look stopped
+ * immediately: the user pressed Escape, or the deadline already elapsed. A long window here reads as
+ * a hang, and the call is still held open until the tree actually exits.
+ */
+export const INTERRUPTED_COMMAND_GRACE_MS = 500;
 
 type LinuxProcessIdentity = { pid: number; ppid: number; startTime: string };
 

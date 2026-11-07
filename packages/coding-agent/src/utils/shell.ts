@@ -9,6 +9,7 @@ import { isStepStorageContext, resolveStepAgentDir } from "../step/environment.t
 // modules so the registry can signal trees without importing shell configuration; these
 // re-exports keep the existing call sites and the package entry point working.
 export {
+	INTERRUPTED_COMMAND_GRACE_MS,
 	killProcessTree,
 	PROCESS_TREE_TERM_GRACE_MS,
 	terminateProcessTreeGracefully,

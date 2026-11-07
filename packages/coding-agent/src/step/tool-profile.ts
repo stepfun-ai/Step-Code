@@ -1998,7 +1998,11 @@ function createBashKillDefinition(
 				throw new Error(`No background command with pid ${args.pid} in this session.`);
 			}
 			if (killAll) {
-				const count = await releaseOwnerGracefully(ownerId);
+				// Narrow to this session's background commands. The registry's owner release is
+				// kind-agnostic by design, so passing the whole owner would also stop this session's
+				// subagent and workflow trees — which the description does not promise and which the
+				// user did not ask for.
+				const count = await releaseOwnerGracefully(ownerId, undefined, new Set(owned.map((entry) => entry.pid)));
 				return {
 					content: [
 						{

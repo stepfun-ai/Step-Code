@@ -10,6 +10,7 @@ import { waitForChildProcess } from "../../utils/child-process.ts";
 import {
 	getShellConfig,
 	getShellEnv,
+	INTERRUPTED_COMMAND_GRACE_MS,
 	type ShellConfig,
 	spawnShellChild,
 	terminateProcessTreeGracefully,
@@ -144,11 +145,15 @@ export function createLocalShellOperations(
 			// escalation is cancelled once the child actually exits; a late SIGKILL must never land
 			// on a reused pid. Re-arming (timeout then abort) replaces the previous escalation
 			// instead of leaking it.
+			//
+			// A foreground command uses a short window: the user pressed Escape, or the deadline
+			// already elapsed, so anything longer reads as a hang. The call still waits for the tree
+			// to exit, which is where a cleanup handler's time actually goes.
 			let cancelEscalation: (() => void) | undefined;
 			const stopGracefully = () => {
 				if (!child.pid) return;
 				cancelEscalation?.();
-				cancelEscalation = terminateProcessTreeGracefully(child.pid);
+				cancelEscalation = terminateProcessTreeGracefully(child.pid, INTERRUPTED_COMMAND_GRACE_MS);
 			};
 			const onAbort = () => {
 				stopGracefully();

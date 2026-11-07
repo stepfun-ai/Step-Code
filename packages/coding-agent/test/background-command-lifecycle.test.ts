@@ -1,10 +1,16 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import type { ExtensionContext } from "../src/core/extensions/types.ts";
-import { forgetProcess, HOST_OWNER, listProcesses, releaseOwnerGracefully } from "../src/core/process-registry.ts";
+import {
+	forgetProcess,
+	HOST_OWNER,
+	listProcesses,
+	registerProcess,
+	releaseOwnerGracefully,
+} from "../src/core/process-registry.ts";
 import { createStepToolProfile } from "../src/step/tool-profile.ts";
 
 const workspaces: string[] = [];
@@ -31,6 +37,20 @@ function alive(pid: number): boolean {
 }
 
 /** Minimal extension context: the tools only read cwd and the session id. */
+/**
+ * A long-lived process that is not a background command, for tests that need a second kind in the
+ * same session. Registered by the caller; `afterEach` reaps it through `releaseOwnerGracefully`.
+ */
+async function ordinaryProcess(): Promise<number> {
+	const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"], {
+		stdio: "ignore",
+		detached: true,
+	});
+	child.unref();
+	if (child.pid === undefined) throw new Error("child did not start");
+	return child.pid;
+}
+
 function contextFor(sessionId: string, cwd: string): ExtensionContext {
 	return { cwd, sessionManager: { getSessionId: () => sessionId } } as unknown as ExtensionContext;
 }
@@ -62,6 +82,7 @@ async function startBackground(cwd: string, sessionId: string, command: string) 
 const logs = new Set<string>();
 
 afterEach(async () => {
+	// Owner release is kind-agnostic on purpose, so this reaps every kind a test registered.
 	for (const owner of owners.splice(0)) await releaseOwnerGracefully(owner, 200).catch(() => undefined);
 	for (const dir of workspaces.splice(0)) rmSync(dir, { recursive: true, force: true });
 	// A log file is a deliberate product artifact (it is how a stopped dev server stays inspectable),
@@ -141,6 +162,33 @@ describe("run_in_background lifecycle", () => {
 		expect(killed.details?.stopped).toBe(1);
 		expect(alive(pid)).toBe(false);
 		expect(listProcesses(session)).toEqual([]);
+	}, 30_000);
+
+	test("bash_kill with `all` stops only background commands, never the session's subagent trees", async () => {
+		const cwd = workspace();
+		const session = `session-${Math.random().toString(16).slice(2)}`;
+		owners.push(session);
+
+		const started = await startBackground(cwd, session, "sleep 300");
+		const bashPid = started.details?.pid as number;
+		// A subagent tree the same session owns. `bash_kill` speaks only for background commands, so
+		// `all` must not reach it: the description promises commands, and a subagent is not one.
+		const subagentPid = await ordinaryProcess();
+		registerProcess({ pid: subagentPid, kind: "subagent", ownerId: session, label: "subagent x" });
+
+		const tools = createStepToolProfile(cwd);
+		const result = (await tool(tools, "bash_kill").execute(
+			"call-all",
+			{ all: true },
+			undefined,
+			undefined,
+			contextFor(session, cwd),
+		)) as { details?: { stopped?: number } };
+
+		expect(result.details?.stopped).toBe(1);
+		expect(alive(bashPid)).toBe(false);
+		expect(alive(subagentPid)).toBe(true);
+		expect(listProcesses(session).map((entry) => entry.kind)).toEqual(["subagent"]);
 	}, 30_000);
 
 	test("bash_kill refuses a pid that belongs to another session", async () => {

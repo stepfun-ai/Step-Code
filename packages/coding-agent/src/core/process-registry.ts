@@ -151,10 +151,22 @@ export function releaseAllProcessesSync(): number {
 /**
  * Terminate one owner's trees and wait for the grace window.
  *
- * `only` narrows the release to specific pids; omit it to release every tree the owner has. Marks
- * each tree released first, so a concurrent {@link releaseAllProcessesSync} on `process.exit` does
- * not signal the same group twice. Returns after the escalation is *sent*, not after every pid is
- * observed dead: a tree that ignores `SIGKILL` is not something this process can fix.
+ * **Kind is the caller's decision.** This function releases every registration the owner has,
+ * whatever its kind, unless `only` narrows it. That is deliberate for session teardown, where all
+ * of the session's work should stop. It is wrong for a narrower caller: `bash_kill` promises to
+ * stop background commands, so it must pass the pids it means and leave the owner's subagent trees
+ * alone. Any new caller that means "one kind" has to say so explicitly:
+ *
+ * ```ts
+ * const pids = listProcesses(ownerId).filter((e) => e.kind === "bash").map((e) => e.pid);
+ * await releaseOwnerGracefully(ownerId, undefined, new Set(pids));
+ * ```
+ *
+ * `only` narrows pids, this function does not widen them back.
+ *
+ * Marks each tree released first, so a concurrent {@link releaseAllProcessesSync} on `process.exit`
+ * does not signal the same group twice. Returns after the escalation is *sent*, not after every pid
+ * is observed dead: a tree that ignores `SIGKILL` is not something this process can fix.
  */
 export async function releaseOwnerGracefully(
 	ownerId: string,
