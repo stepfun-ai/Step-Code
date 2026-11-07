@@ -23,6 +23,13 @@ import type {
 	ToolRenderContext,
 	ToolRenderResultOptions,
 } from "../core/extensions/types.ts";
+import {
+	forgetProcessIf,
+	HOST_OWNER,
+	listProcesses,
+	registerProcess,
+	releaseOwnerGracefully,
+} from "../core/process-registry.ts";
 import { type BashExecutionOutcome, type BashToolDetails, ShellToolError } from "../core/tools/bash.ts";
 import {
 	commandOutcomeNotice,
@@ -54,15 +61,9 @@ import { pathExists, resolveReadPathAsync, resolveToCwd } from "../core/tools/pa
 import type { ReadToolOptions } from "../core/tools/read.ts";
 import type { WriteToolOptions } from "../core/tools/write.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.ts";
+import { armParentDeathGuard, type ParentDeathGuard } from "../utils/parent-death-guard.ts";
 import { resolvePath } from "../utils/paths.ts";
-import {
-	getShellConfig,
-	getShellEnv,
-	killProcessTree,
-	spawnShellChild,
-	trackDetachedChildPid,
-	untrackDetachedChildPid,
-} from "../utils/shell.ts";
+import { getShellConfig, getShellEnv, killProcessTree, spawnShellChild } from "../utils/shell.ts";
 import { resolveStepAgentDir } from "./environment.ts";
 import { createSearchWebTool, type SearchWebToolOptions } from "./search-web-tool.ts";
 import { readThenRunCommand } from "./then-run.ts";
@@ -76,6 +77,8 @@ const STEP_TOOL_NAMES = [
 	"write_file",
 	"edit_file",
 	"run_command",
+	"bash_list",
+	"bash_kill",
 	"find_tools",
 ] as const;
 
@@ -157,7 +160,7 @@ const runCommandSchema = Type.Object({
 	run_in_background: Type.Optional(
 		Type.Boolean({
 			description:
-				"Start the command detached and return immediately with its pid and a log file capturing stdout+stderr. Use for long-running processes such as dev servers: read the log to confirm readiness, then stop it (and the processes it spawned) with the kill command returned in the result. The process is terminated when the session exits; timeout_ms and max_output_chars do not apply.",
+				"Start the command detached and return immediately with its pid and a log file capturing stdout+stderr. Use for long-running processes such as dev servers: read the log to confirm readiness, then stop it (and the processes it spawned) with bash_kill or the kill command returned in the result. It keeps running while the user views another conversation and stops when this session is deleted or the app exits; timeout_ms and max_output_chars do not apply.",
 		}),
 	),
 });
@@ -238,6 +241,23 @@ function getContextValue<T>(ctx: ExtensionContext | undefined, key: string): T |
 
 function getToolCwd(ctx: ExtensionContext | undefined, fallback: string): string {
 	return getContextValue<string>(ctx, "cwd") ?? fallback;
+}
+
+/**
+ * The session a tool call belongs to.
+ *
+ * Background process trees are owned per session, so a session that is deleted reclaims exactly its
+ * own trees and no one else's. A host that runs a tool with no session (an SDK embedder, a test)
+ * still gets an owner, so its trees are reclaimed on host exit.
+ */
+function getOwnerId(ctx: ExtensionContext | undefined): string {
+	if (!ctx) return HOST_OWNER;
+	try {
+		return ctx.sessionManager.getSessionId() || HOST_OWNER;
+	} catch {
+		// A context from a replaced session throws on read; its trees belong to the host.
+		return HOST_OWNER;
+	}
 }
 
 function getContextOutputLimit(ctx: ExtensionContext | undefined): number | undefined {
@@ -1510,14 +1530,17 @@ function createFindToolsDefinition(
 }
 
 /**
- * Detached run for long-lived processes (dev servers, watchers). The child
- * outlives the tool call but not the session: its pid stays in the detached
- * registry until it exits, and session shutdown kills whatever is left.
+ * Detached run for long-lived processes (dev servers, watchers). The child outlives the tool call,
+ * but not its session: it is registered as `kind: "bash"` under the owning session, so the session's
+ * teardown reclaims it while a session switch or fork leaves it running.
+ *
+ * `kind: "bash"` is deliberate. A background command is a side effect the user inspects, not work
+ * the session is still performing, so it must not make an otherwise finished session read as busy.
  */
 async function startBackgroundCommand(
 	command: string,
 	commandCwd: string,
-	options: { shellPath?: string; agentDir?: string },
+	options: { shellPath?: string; agentDir?: string; ownerId: string },
 ): Promise<AnyResult> {
 	try {
 		await fsStat(commandCwd);
@@ -1564,9 +1587,24 @@ async function startBackgroundCommand(
 		child.once("error", (error) => reject(error));
 	});
 	const pid = child.pid;
+	let guard: ParentDeathGuard | undefined;
 	if (pid !== undefined) {
-		trackDetachedChildPid(pid);
-		child.once("exit", () => untrackDetachedChildPid(pid));
+		registerProcess({
+			pid,
+			kind: "bash",
+			ownerId: options.ownerId,
+			label: commandLabel(command),
+			cwd: commandCwd,
+			logPath,
+		});
+		child.once("exit", () => {
+			void guard?.disarm();
+			forgetProcessIf(pid, (entry) => entry.kind === "bash" && entry.ownerId === options.ownerId);
+		});
+		// The guard is what reclaims this tree if the host dies without running its own shutdown,
+		// including SIGKILL. It is best-effort: an unavailable supervisor leaves the other layers.
+		guard = armParentDeathGuard(pid);
+		void guard?.ready.catch(() => {});
 	}
 	child.unref();
 	// Stop the whole process tree, not just the wrapper shell. The child is spawned
@@ -1596,8 +1634,14 @@ async function startBackgroundCommand(
 				].join("\n"),
 			},
 		],
-		details: { background: true, pid: pid ?? null, logPath },
+		details: { background: true, kind: "bash", pid: pid ?? null, logPath, command: commandLabel(command) },
 	};
+}
+
+/** First line of a command, bounded: the label identifies a row, it is not the command itself. */
+function commandLabel(command: string): string {
+	const firstLine = command.trim().split("\n")[0]?.trim() ?? "";
+	return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
 }
 
 /** Create Step-facing definitions backed by Pi's native tools. */
@@ -1793,6 +1837,9 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 				return startBackgroundCommand(args.command, commandCwd, {
 					...(nativeBashOptions.shellPath ? { shellPath: nativeBashOptions.shellPath } : {}),
 					agentDir,
+					// A background command belongs to the session that asked for it, but it is not
+					// that session's work: a switch or fork must leave it running.
+					ownerId: getOwnerId(ctx),
 				});
 			}
 			const nativeArgs = mapRunCommandArgs(args, ctx);
@@ -1836,9 +1883,140 @@ export function createStepToolProfile(cwd: string, options: StepToolProfileOptio
 		writeFile,
 		editFile,
 		runCommand,
+		createBashListDefinition(getOwnerId),
+		createBashKillDefinition(getOwnerId),
 	];
 	const findTools = createFindToolsDefinition(profileWithoutFindTools);
 	return [...profileWithoutFindTools, findTools];
+}
+
+/** Details for `bash_list`: the session's background commands, in registry order. */
+interface BashListDetails {
+	background: true;
+	kind: "bash";
+	commands: Array<{
+		pid: number;
+		label: string;
+		status: "running" | "stopping";
+		cwd?: string;
+		logPath?: string;
+	}>;
+}
+
+/** Details for `bash_kill`: how many trees the release covered. */
+interface BashKillDetails {
+	background: true;
+	kind: "bash";
+	stopped: number;
+	pid?: number;
+}
+
+const bashListSchema = Type.Object({});
+const bashKillSchema = Type.Object({
+	pid: Type.Optional(Type.Integer({ minimum: 1, description: "Pid from bash_list." })),
+	all: Type.Optional(Type.Boolean({ description: "Stop every background command in this session." })),
+});
+
+type BashKillInput = Static<typeof bashKillSchema>;
+
+/**
+ * `bash_list`: the background commands this session started.
+ *
+ * The model otherwise has to remember pids from earlier tool results, and a session that was
+ * resumed or compacted has lost them. Listing from the registry makes the state authoritative
+ * rather than derived from transcript text.
+ */
+function createBashListDefinition(
+	ownerOf: (ctx: ExtensionContext | undefined) => string,
+): ToolDefinition<typeof bashListSchema, BashListDetails | undefined> {
+	return {
+		name: "bash_list",
+		label: "bash_list",
+		description:
+			"List the background commands this session started, with pid, status, and log path. Background commands keep running across a session switch and stop when the session is deleted or the app exits.",
+		promptSnippet: "List this session's background commands",
+		parameters: bashListSchema,
+		execute: async (_toolCallId, _args, _signal, _onUpdate, ctx) => {
+			const ownerId = ownerOf(ctx);
+			const entries = listProcesses(ownerId).filter((entry) => entry.kind === "bash");
+			if (entries.length === 0) {
+				return { content: [{ type: "text" as const, text: "(no background commands)" }], details: undefined };
+			}
+			const text = entries
+				.map((entry) => {
+					const parts = [
+						`pid ${entry.pid}`,
+						entry.releasing ? "stopping" : "running",
+						entry.label,
+						entry.logPath ? `log: ${entry.logPath}` : undefined,
+					].filter((part): part is string => part !== undefined);
+					return parts.join(" · ");
+				})
+				.join("\n");
+			return {
+				content: [{ type: "text" as const, text }],
+				details: {
+					background: true,
+					kind: "bash" as const,
+					commands: entries.map((entry) => ({
+						pid: entry.pid,
+						label: entry.label,
+						status: entry.releasing ? ("stopping" as const) : ("running" as const),
+						...(entry.cwd ? { cwd: entry.cwd } : {}),
+						...(entry.logPath ? { logPath: entry.logPath } : {}),
+					})),
+				},
+			};
+		},
+	};
+}
+
+/**
+ * `bash_kill`: stop background commands this session started.
+ *
+ * Scoped to the caller's own session on purpose. A subagent or a fork must not be able to kill a
+ * dev server another session is watching.
+ */
+function createBashKillDefinition(
+	ownerOf: (ctx: ExtensionContext | undefined) => string,
+): ToolDefinition<typeof bashKillSchema, BashKillDetails | undefined> {
+	return {
+		name: "bash_kill",
+		label: "bash_kill",
+		description:
+			"Stop background commands this session started. Accepts one pid or `all`. Sends SIGTERM, then SIGKILL after a short grace period. Only the caller's own session's commands can be stopped.",
+		promptSnippet: "Stop a background command started by this session",
+		parameters: bashKillSchema,
+		execute: async (_toolCallId, args: BashKillInput, _signal, _onUpdate, ctx) => {
+			const ownerId = ownerOf(ctx);
+			const owned = listProcesses(ownerId).filter((entry) => entry.kind === "bash");
+			const killAll = args.all === true;
+			if (!killAll && args.pid === undefined) {
+				throw new Error("Pass `pid` or `all: true`.");
+			}
+			if (args.pid !== undefined && !owned.some((entry) => entry.pid === args.pid)) {
+				throw new Error(`No background command with pid ${args.pid} in this session.`);
+			}
+			if (killAll) {
+				const count = await releaseOwnerGracefully(ownerId);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: count === 0 ? "(no background commands)" : `Stopped ${count} background command(s).`,
+						},
+					],
+					details: { background: true, kind: "bash" as const, stopped: count },
+				};
+			}
+			const target = args.pid as number;
+			await releaseOwnerGracefully(ownerId, undefined, new Set([target]));
+			return {
+				content: [{ type: "text" as const, text: `Stopped background command ${target}.` }],
+				details: { background: true, kind: "bash" as const, stopped: 1, pid: target },
+			};
+		},
+	};
 }
 
 /** True for the Step model-facing names. */

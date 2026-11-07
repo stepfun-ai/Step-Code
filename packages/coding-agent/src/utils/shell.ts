@@ -1,8 +1,18 @@
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { delimiter, join, win32 } from "node:path";
 import { type ChildProcess, spawn, spawnSync } from "child_process";
 import { getBinDir } from "../config.ts";
+import { forgetProcess, HOST_OWNER, registerProcess, releaseAllProcessesSync } from "../core/process-registry.ts";
 import { isStepStorageContext, resolveStepAgentDir } from "../step/environment.ts";
+
+// Process-tree signalling and ownership used to live in this module. They moved to their own
+// modules so the registry can signal trees without importing shell configuration; these
+// re-exports keep the existing call sites and the package entry point working.
+export {
+	killProcessTree,
+	PROCESS_TREE_TERM_GRACE_MS,
+	terminateProcessTreeGracefully,
+} from "./process-tree.ts";
 
 export interface ShellConfig {
 	shell: string;
@@ -259,112 +269,26 @@ export function sanitizeBinaryOutput(str: string): string {
 /**
  * Detached child processes must be tracked so they can be killed on parent
  * shutdown signals (SIGHUP/SIGTERM).
+ *
+ * These three functions are the pre-registry API: they know a pid but neither its owner nor its
+ * kind. They forward to the process registry, registering under `HOST_OWNER` with `kind: "bash"`,
+ * which is what every legacy call site meant. New code must call `registerProcess()` with the
+ * owning session and the real kind, so `listUnfinishedWork()` can tell a subagent from a dev server.
  */
-const trackedDetachedChildPids = new Set<number>();
-
 export function trackDetachedChildPid(pid: number): void {
-	trackedDetachedChildPids.add(pid);
+	registerProcess({ pid, kind: "bash", ownerId: HOST_OWNER, label: "detached child" });
 }
 
 export function untrackDetachedChildPid(pid: number): void {
-	trackedDetachedChildPids.delete(pid);
-}
-
-export function killTrackedDetachedChildren(): void {
-	for (const pid of trackedDetachedChildPids) {
-		killProcessTree(pid);
-	}
-	trackedDetachedChildPids.clear();
-}
-
-type LinuxProcessIdentity = { pid: number; ppid: number; startTime: string };
-
-function readLinuxProcessIdentity(pid: number): LinuxProcessIdentity | undefined {
-	try {
-		const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-		const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-		const startTime = fields[19];
-		return startTime ? { pid, ppid: Number(fields[1]), startTime } : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-/** Snapshot descendants before killing their parent makes them untraceable. */
-function getLinuxDescendants(pid: number): LinuxProcessIdentity[] {
-	const children = new Map<number, LinuxProcessIdentity[]>();
-	try {
-		// /proc/<pid>/task/<tid>/children is absent on some Linux kernels.
-		// The stat parent field is available without that optional interface.
-		for (const entry of readdirSync("/proc")) {
-			const childPid = Number(entry);
-			if (!Number.isSafeInteger(childPid) || childPid <= 0) continue;
-			const child = readLinuxProcessIdentity(childPid);
-			if (!child) continue;
-			const siblings = children.get(child.ppid) ?? [];
-			siblings.push(child);
-			children.set(child.ppid, siblings);
-		}
-	} catch {
-		return [];
-	}
-	const descendants: LinuxProcessIdentity[] = [];
-	const pending = [pid];
-	const visited = new Set(pending);
-	for (let index = 0; index < pending.length; index++) {
-		for (const child of children.get(pending[index]) ?? []) {
-			if (visited.has(child.pid)) continue;
-			visited.add(child.pid);
-			descendants.push(child);
-			pending.push(child.pid);
-		}
-	}
-	return descendants;
+	forgetProcess(pid);
 }
 
 /**
- * Kill a process and all its children (cross-platform)
+ * Kill everything this process registered, immediately.
+ *
+ * Kept for the modes that already call it on their own shutdown path. The registry also sweeps on
+ * `process.exit`, so a host that never calls this still reclaims its children.
  */
-export function killProcessTree(pid: number): void {
-	if (process.platform === "win32") {
-		// Use the trusted System32 executable so cleanup does not depend on PATH.
-		try {
-			const child = spawn(
-				join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
-				["/F", "/T", "/PID", String(pid)],
-				{
-					stdio: "ignore",
-					detached: true,
-					windowsHide: true,
-				},
-			);
-			// A failed spawn emits "error" asynchronously; consume it to avoid crashing Node.
-			child.once("error", () => {});
-		} catch {
-			// Ignore errors if taskkill fails.
-		}
-	} else {
-		const descendants = process.platform === "linux" ? getLinuxDescendants(pid) : [];
-		// Use SIGKILL on Unix/Linux/Mac
-		try {
-			process.kill(-pid, "SIGKILL");
-		} catch {
-			// Fallback to killing just the child if process group kill fails
-			try {
-				process.kill(pid, "SIGKILL");
-			} catch {
-				// Process already dead
-			}
-		}
-		// A detached child can have a different group/session. Target only the
-		// identities observed in this command's subtree, never all host processes.
-		for (const descendant of descendants.reverse()) {
-			if (readLinuxProcessIdentity(descendant.pid)?.startTime !== descendant.startTime) continue;
-			try {
-				process.kill(descendant.pid, "SIGKILL");
-			} catch {
-				// The descendant already exited or was killed with the parent group.
-			}
-		}
-	}
+export function killTrackedDetachedChildren(): void {
+	releaseAllProcessesSync();
 }

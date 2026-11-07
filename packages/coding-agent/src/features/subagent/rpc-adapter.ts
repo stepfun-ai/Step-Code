@@ -14,8 +14,8 @@ import { rmSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { forgetProcess, HOST_OWNER, registerProcess } from "../../core/process-registry.ts";
 import { waitForChildProcess } from "../../utils/child-process.ts";
-import { trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.ts";
 import {
 	CHILD_MARKER,
 	cloneUsage,
@@ -261,10 +261,19 @@ export async function createSubagentRpcSession(
 		shell: false,
 		stdio: ["pipe", "pipe", "pipe"],
 	});
-	// Registered with the host's process-exit sweep, so a signal or emergency
-	// exit that skips session shutdown still kills the child.
+	// Registered as `kind: "subagent"` under the parent session, so the parent's teardown reclaims
+	// it and so it counts as unfinished work: a running subagent means the session is still doing
+	// something, unlike a background dev server the user may be inspecting.
 	const childPid = child.pid;
-	if (childPid) trackDetachedChildPid(childPid);
+	if (childPid) {
+		registerProcess({
+			pid: childPid,
+			kind: "subagent",
+			ownerId: input.parentSessionId ?? HOST_OWNER,
+			label: `subagent ${sessionId}`,
+			cwd: input.cwd,
+		});
+	}
 	// `close` can be held open by inherited descendant pipes after OS exit.
 	// Reuse the bounded-idle stdio drain used by our other child processes.
 	const exitStatus = waitForChildProcess(child);
@@ -491,7 +500,7 @@ export async function createSubagentRpcSession(
 	child.once("error", (error) => {
 		processError = error.message;
 		childExited = true;
-		if (childPid) untrackDetachedChildPid(childPid);
+		if (childPid) forgetProcess(childPid);
 		dropFromRegistry();
 		clearIdleWatchdog();
 		clearWallClock();
@@ -505,7 +514,7 @@ export async function createSubagentRpcSession(
 	});
 	const finishExitedChild = (code: number | null): void => {
 		childExited = true;
-		if (childPid) untrackDetachedChildPid(childPid);
+		if (childPid) forgetProcess(childPid);
 		dropFromRegistry();
 		clearIdleWatchdog();
 		clearWallClock();

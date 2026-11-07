@@ -10,9 +10,9 @@ import { waitForChildProcess } from "../../utils/child-process.ts";
 import {
 	getShellConfig,
 	getShellEnv,
-	killProcessTree,
 	type ShellConfig,
 	spawnShellChild,
+	terminateProcessTreeGracefully,
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
@@ -139,8 +139,19 @@ export function createLocalShellOperations(
 			if (child.pid) trackDetachedChildPid(child.pid);
 			let timedOut = false;
 			let timeoutHandle: NodeJS.Timeout | undefined;
+			// Stop and timeout send SIGTERM to the process group and escalate to SIGKILL after a
+			// grace window, so a shell `trap ... TERM` handler gets to run its own cleanup. The
+			// escalation is cancelled once the child actually exits; a late SIGKILL must never land
+			// on a reused pid. Re-arming (timeout then abort) replaces the previous escalation
+			// instead of leaking it.
+			let cancelEscalation: (() => void) | undefined;
+			const stopGracefully = () => {
+				if (!child.pid) return;
+				cancelEscalation?.();
+				cancelEscalation = terminateProcessTreeGracefully(child.pid);
+			};
 			const onAbort = () => {
-				if (child.pid) killProcessTree(child.pid);
+				stopGracefully();
 			};
 
 			try {
@@ -148,13 +159,13 @@ export function createLocalShellOperations(
 				if (timeoutMs !== undefined) {
 					timeoutHandle = setTimeout(() => {
 						timedOut = true;
-						if (child.pid) killProcessTree(child.pid);
+						stopGracefully();
 					}, timeoutMs);
 				}
 				// Stream stdout and stderr.
 				child.stdout?.on("data", onData);
 				child.stderr?.on("data", onData);
-				// Handle abort signal by killing the entire process tree.
+				// Handle abort signal by stopping the entire process tree.
 				if (signal) {
 					if (signal.aborted) onAbort();
 					else signal.addEventListener("abort", onAbort, { once: true });
@@ -170,6 +181,8 @@ export function createLocalShellOperations(
 					...(timeout === undefined ? {} : { timeoutSeconds: timeout }),
 				};
 			} finally {
+				// Disarm a pending escalation first: the process is gone, and its pid may be reused.
+				cancelEscalation?.();
 				if (child.pid) untrackDetachedChildPid(child.pid);
 				if (timeoutHandle) clearTimeout(timeoutHandle);
 				if (signal) signal.removeEventListener("abort", onAbort);

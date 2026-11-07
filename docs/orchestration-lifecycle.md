@@ -274,6 +274,49 @@ this run mode; ran in the foreground.`. `STEP_DISABLE_SUBAGENT_BACKGROUND=1` or
 `[subagent] background = false` does the same everywhere, with a matching
 notice.
 
+## Background commands and process ownership
+
+`run_command` with `run_in_background: true` starts a detached process tree for
+long-lived work such as a dev server. The tree is registered in the process
+registry under the calling session, with `kind: "bash"`.
+
+Kind decides whether a tree counts as unfinished work. `subagent` and
+`workflow` are the session's own work, so they count. `bash` is a side effect
+the user inspects afterwards: a session with a running dev server is still a
+finished session, and its row does not read as busy.
+
+Ownership decides when the tree stops:
+
+| Event | Background command |
+| --- | --- |
+| Switching which session is viewed | keeps running |
+| Forking a session | keeps running; the new session starts with none of them |
+| Reloading settings or extensions | keeps running |
+| The owning session is deleted, replaced, or resumed away | stopped |
+| The host exits | stopped |
+
+Stopping goes through three layers, from narrowest to widest:
+
+1. `releaseOwnerGracefully(ownerId)` sends `SIGTERM` to the tree's process
+   group, then `SIGKILL` after `PROCESS_TREE_TERM_GRACE_MS`. The owning session
+   calls it from its `session_shutdown` handler.
+2. `releaseAllProcessesSync()` runs from a `process.exit` listener registered
+   inside the registry module. Every host inherits it, including hosts that do
+   not write their own shutdown path.
+3. A detached parent-death supervisor holds one IPC lease per armed group.
+   When the channel closes — including when the host is `SIGKILL`ed — the
+   supervisor signals the group. No in-process handler can cover that case.
+
+The registry also decides what the model and the UI can see. `bash_list` returns
+the calling session's own commands with pid, status, and log path; `bash_kill`
+stops one or all of them and refuses pids owned by another session. A fork
+therefore starts with an empty list even though the parent's commands keep
+running.
+
+Log files survive their command: they are the only record of what a dev server
+printed before it was stopped, so the registry keeps the `logPath` and does not
+delete it.
+
 ## Cron scheduling and delivery
 
 `cron_create` accepts numeric five-field local-time cron expressions. Fields
