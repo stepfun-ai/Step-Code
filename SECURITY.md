@@ -48,14 +48,14 @@ repository code are in scope.
 - Behavior of StepCode extensions or skills installed by the user
 - Risks from working in untrusted repositories
 - Risks from installing untrusted extensions, skills, packages, or tools
-- Isuses caused by non trustworthy MITM proxies
+- Issues caused by non-trustworthy MITM proxies
 - Public internet exposure of a StepCode installation
 - Prompt injection attacks
 - Exposed secrets that are third-party/user-controlled credentials
 - Reports requiring the ability to create, modify, delete, or replace files,
   directories, symlinks, environment variables, shell configuration, or other
   user-controlled local state on the target machine. This includes `~/.stepcode`,
-  `~/.stepcode/agent/models.json`, workspace files, `AGENTS.md`, skills, extensions,
+  `~/.stepcode/models.json`, workspace files, `AGENTS.md`, skills, extensions,
   extension configuration, dotfiles, and files synchronized through NFS, roaming
   profiles, or dotfile managers, unless the report shows how StepCode itself grants
   that access.
