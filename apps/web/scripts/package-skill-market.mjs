@@ -55,7 +55,7 @@ for (const directory of await readdir(source, { withFileTypes: true })) {
 	const id = previous?.id ?? `skills-${packageName}`;
 	const paths = [...files.keys()].sort();
 	entries.push({ ...previous, id, kind: "skills", package: packageName, identifier: name, name,
-		description: normalizeExtensionDescription(metadata.description) || "1 技能", version: metadata.version?.toString() ?? previous?.version ?? "",
+		description: previous?.description?.trim() ? previous.description : normalizeExtensionDescription(metadata.description) || "1 技能", version: metadata.version?.toString() ?? previous?.version ?? "",
 		publisher: previous?.publisher ?? metadata.author ?? "本地精选", license: metadata.license ?? previous?.license ?? "",
 		categories: previous?.categories ?? ["creative"], components: "1 技能", items: { skills: [{ name, description: metadata.description.trim() }], connectors: [], commands: [] },
 		files: paths, notes: ["目录收录不代表安装、运行或安全认证。", ...(normalized ? ["分发副本的 YAML 头部已规范化，原始文件未改动。"] : [])],

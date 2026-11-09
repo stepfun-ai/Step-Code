@@ -153,7 +153,15 @@ export function ExtensionMarketDetail({ entry, onBack }: Props) {
 						<img src={entry.logo} alt="" />
 					) : (
 						<Icon
-							name={entry.kind === "connectors" ? "globe" : entry.kind === "skills" ? "wand" : "sliders"}
+							name={
+								entry.kind === "connectors"
+									? connection?.transport === "stdio"
+										? "terminal"
+										: "globe"
+									: entry.kind === "skills"
+										? "wand"
+										: "sliders"
+							}
 							size="lg"
 						/>
 					)}

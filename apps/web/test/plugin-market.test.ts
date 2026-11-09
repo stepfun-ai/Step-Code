@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { crc32 } from "node:zlib";
+import { crc32, gunzipSync } from "node:zlib";
 
 function pluginZip(id: string): string {
 	const name = Buffer.from("step.plugin.json");
@@ -32,13 +33,41 @@ test.after(async () => {
 	for (const [key, value] of previous) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
 	await rm(home, { recursive: true, force: true });
 });
-test("all 29 portable catalog packages pass actual manifest and contribution validation", async () => {
+test("rejected plugins are unavailable from the installable market", async () => {
+	for (const packageName of [
+		"pbakaus__impeccable", "slidevjs__slidev", "nextlevelbuilder__ui-ux-pro-max-skill",
+		"apollographql__skills", "cloudflare__skills", "coderabbitai__skills", "duckdb__duckdb-skills",
+		"affaan-m__ECC", "mongodb__agent-skills__mongodb", "anthropics__claude-plugins-official__pr-review-toolkit",
+		"aaquib90__proxymail-qa-plugin", "supermax92__qgraphflow", "obra__superpowers", "JuliusBrussee__caveman",
+	]) {
+		await assert.rejects(previewCuratedPlugin(`plugins-${packageName}`), { status: 404 }, packageName);
+	}
+});
+
+test("all 15 selected catalog packages pass actual manifest and contribution validation", async () => {
 	const resources = JSON.parse(await readFile(new URL("../resources/plugin-market.json", import.meta.url), "utf8")) as { packages: Array<{ catalogId: string; id: string }> };
-	assert.equal(resources.packages.length, 29);
+	assert.equal(resources.packages.length, 15);
 	for (const bundle of resources.packages) {
 		const preview = await previewCuratedPlugin(bundle.catalogId);
 		assert.equal(preview.id, bundle.id);
 		assert.match(preview.fingerprint, /^[a-f0-9]{64}$/u);
+	}
+});
+test("plugin payloads preserve catalog documents and provide a root README", async () => {
+	const catalog = JSON.parse(await readFile(new URL("../client/src/features/market/catalog/catalog.json", import.meta.url), "utf8")) as {
+		entries: Array<{ id: string; kind: string; document: { path: string; sha256: string } }>;
+	};
+	const resources = JSON.parse(await readFile(new URL("../resources/plugin-market.json", import.meta.url), "utf8")) as {
+		packages: Array<{ catalogId: string; data: string }>;
+	};
+	for (const entry of catalog.entries.filter((item) => item.kind === "plugins")) {
+		const bundle = resources.packages.find((item) => item.catalogId === entry.id);
+		assert.ok(bundle, entry.id);
+		const files = JSON.parse(gunzipSync(Buffer.from(bundle.data, "base64"), { maxOutputLength: 96 * 1024 * 1024 }).toString("utf8")) as Array<{ path: string; data: string }>;
+		const document = files.find((file) => file.path === entry.document.path);
+		assert.ok(document, `${entry.id}: missing catalog document ${entry.document.path}`);
+		assert.equal(createHash("sha256").update(Buffer.from(document.data, "base64")).digest("hex"), entry.document.sha256, entry.id);
+		assert.ok(files.some((file) => /^readme(?:\.|$)/iu.test(file.path)), `${entry.id}: missing root README`);
 	}
 });
 test("catalog consent binds content, installs real skills, groups origin and supports toggle/removal", async () => {

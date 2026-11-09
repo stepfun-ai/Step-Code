@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { createSkill, deleteSkill, listSkills, parseMcpServerConfig, setSkillEnabled } from "../src/settings.ts";
 import { importSkillArchive, installCuratedSkill, previewCuratedSkill } from "../src/skill-market.ts";
 const keys = ["HOME", "STEP_CODING_AGENT_DIR", "STEPCODE_STORAGE_ROOT_DIR", "STEPCODE_CONFIG_DIR"];
@@ -41,9 +43,39 @@ test("manual numeric and boolean-like skill names remain string metadata and imp
 	}
 });
 
-test("15 connector templates use valid MCP configurations and unresolved directories cannot be saved", async () => {
+test("skill repackaging preserves reviewed introductions and StepFun attribution", async () => {
+	const root = await mkdtemp(join(tmpdir(), "skill-repackaging-"));
+	try {
+		const web = join(root, "web");
+		const scripts = join(web, "scripts");
+		const catalogDir = join(web, "client/src/features/market/catalog");
+		const source = join(root, "source");
+		await mkdir(join(scripts, "lib"), { recursive: true });
+		await mkdir(catalogDir, { recursive: true });
+		await symlink(fileURLToPath(new URL("../../../node_modules", import.meta.url)), join(web, "node_modules"), "dir");
+		await copyFile(new URL("../scripts/package-skill-market.mjs", import.meta.url), join(scripts, "package-skill-market.mjs"));
+		await copyFile(new URL("../scripts/lib/extension-text.mjs", import.meta.url), join(scripts, "lib/extension-text.mjs"));
+		const description = "StepFun 官方技能：已确认的中文用途说明。";
+		await writeFile(join(catalogDir, "catalog.json"), JSON.stringify({ entries: [{ kind: "skills", name: "official-skill", id: "skills-official", description, selfMade: true }] }));
+		for (let index = 0; index < 36; index++) {
+			const name = index === 0 ? "official-skill" : `fixture-${index}`;
+			const folder = join(source, name);
+			await mkdir(folder, { recursive: true });
+			await writeFile(join(folder, "SKILL.md"), `---\nname: ${name}\ndescription: Original source instruction\nversion: 1.0.0\n---\n# Fixture\n`);
+		}
+		execFileSync(process.execPath, [join(scripts, "package-skill-market.mjs"), source], { cwd: web, stdio: "pipe" });
+		const result = JSON.parse(await readFile(join(catalogDir, "catalog.json"), "utf8")) as { entries: Array<{ id: string; description: string; selfMade?: boolean }> };
+		const official = result.entries.find((entry) => entry.id === "skills-official");
+		assert.equal(official?.description, description);
+		assert.equal(official?.selfMade, true);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("11 selected connector templates use valid MCP configurations and unresolved directories cannot be saved", async () => {
 	const catalog = JSON.parse(await readFile(new URL("../client/src/features/market/catalog/catalog.json", import.meta.url), "utf8"));
-	const connectors = catalog.entries.filter((entry: { kind: string }) => entry.kind === "connectors"); assert.equal(connectors.length, 15);
+	const connectors = catalog.entries.filter((entry: { kind: string }) => entry.kind === "connectors"); assert.equal(connectors.length, 11);
 	for (const entry of connectors) {
 		const config = entry.connection.configuration;
 		if (config.args?.some((arg: string) => arg.startsWith("<"))) assert.throws(() => parseMcpServerConfig(config));

@@ -20,22 +20,22 @@ Limits: 32 MiB uploaded ZIP, 64 MiB expanded content and 6000 entries. Only stor
 
 ## Portable curated resources
 
-`apps/web/scripts/package-plugin-market.mjs` reads the locally reviewed converted plugin packages and creates `apps/web/resources/plugin-market.json`. It includes declared skills, commands, MCP declarations, associated root scripts/references/assets and root notices. It excludes repository/dependency caches and refuses links or credential-like files. It never executes plugin scripts or downloads dependencies.
+`apps/web/scripts/package-plugin-market.mjs` reads the locally reviewed converted plugin packages and creates `apps/web/resources/plugin-market.json`. It includes declared skills, commands, MCP declarations, the catalog document at its declared package-relative path, associated root scripts/references/assets and root notices. If the package has no root README, it also places a non-executable copy of the catalog document at `README.md`; both copies count toward package limits. It excludes repository/dependency caches and refuses links or credential-like files. It never executes plugin scripts or downloads dependencies.
 
 The Web build copies this resource beside the compiled Host as `dist/plugin-market.json`; installation does not depend on the developer machine's source path. Catalog ids must map to actual manifest ids. Regenerate explicitly when the curated packages change, and verify the generated resource before distribution. Packaging is not license approval: copyright/component licenses and redistribution permission remain release prerequisites.
 
-## Payload archive is distributed separately
+## Payload delivery on the extension-market branch
 
-`apps/web/resources/` is generated from the reviewed local collection and is **not committed**. The source collection is ~1.4 GB (45 `.git` directories and whole third-party repositories), so committing the derived payloads would permanently add 119 MB of third-party skill content to history and carry attribution/redistribution obligations.
+For the 2026-11-09 development handover, the project owner explicitly requested that the current `apps/web/resources/plugin-market.json` and `skill-market.json` be tracked on `feat/extension-market`, and confirmed the right to distribute this batch in the target repository. The original ~1.4 GB collection, its Git histories, personal configuration, dependency caches and rejected-plugin payloads are not added.
 
-Instead:
+- The repository tracks `client/src/features/market/catalog/catalog.json` for browsing and the two selected installation payloads for handover.
+- `scripts/copy-market-payload.mjs` copies the payloads into `dist/`; if a partial checkout omits them, browsing still works and curated installation returns 404 until they are restored.
+- Regeneration still requires the reviewed source directories; the original collection is not implied to exist on a new developer machine.
+- Existing ignore rules may still exclude new untracked resource files. Adding future resources requires an explicit decision and a fresh provenance, license and credential review; do not force-add the entire directory.
 
-- the repo commits `client/src/features/market/catalog/catalog.json` (metadata, so browsing works);
-- the installable payloads ship as a separate archive, restored into `apps/web/resources/`;
-- `scripts/copy-market-payload.mjs` copies them into `dist/` and warns when absent;
-- without them the market still browses and installation returns a clear 404.
+Packaging does not approve licensing or service authorization. Preserve each component's applicable notices and redistribution obligations; the first-party project license does not replace them. See the [handover README](extension-market-handover/readme.md).
 
-Run the packaging scripts to regenerate. They copy only declared resources, exclude `.git` / `node_modules` / credential-like files, and never execute plugin scripts.
+Run the packaging scripts only after source review. They copy declared resources, exclude `.git` / `node_modules` / credential-like files, and never execute plugin scripts.
 
 ## Management and reference state
 

@@ -34,6 +34,7 @@ const catalog = JSON.parse(
 			readonly auth: string;
 			readonly url: string;
 			readonly source: string;
+			readonly configuration?: { readonly command?: string; readonly args?: readonly string[] };
 		};
 		readonly document: { readonly filename: string; readonly path: string; readonly raw: string; readonly sha256: string };
 	}>;
@@ -43,14 +44,14 @@ test("local catalog keeps the full package list with original documents", () => 
 	assert.equal(catalog.schemaVersion, 1);
 	assert.match(catalog.source.statement, /不等于安装/);
 	const counts = Object.groupBy(catalog.entries, (entry) => entry.kind);
-	assert.equal(counts.plugins?.length, 29);
+	assert.equal(counts.plugins?.length, 15);
 	assert.equal(counts.skills?.length, 36);
-	assert.equal(counts.connectors?.length, 15);
+	assert.equal(counts.connectors?.length, 11);
 	const packages = catalog.entries.map((entry) => `${entry.kind}/${entry.package}`);
-	assert.equal(new Set(packages).size, 80);
+	assert.equal(new Set(packages).size, 62);
 	const logoRoot = fileURLToPath(new URL("../client/src/features/market/catalog/logos/", import.meta.url));
 	const withLogo = catalog.entries.filter((entry) => entry.logo);
-	assert.ok(withLogo.length >= 60);
+	assert.ok(withLogo.length >= 50);
 	for (const entry of withLogo) assert.ok(existsSync(join(logoRoot, entry.logo!)), entry.logo);
 	for (const entry of catalog.entries) {
 		assert.ok(entry.name.trim(), entry.package);
@@ -75,14 +76,34 @@ test("component items come from real manifests and expose no connection secrets"
 		}
 	}
 	const connection = (name: string) => catalog.entries.find((entry) => entry.package === name)?.connection;
-	assert.equal(connection("aliyun__alibabacloud-devops-mcp-server")?.transport, "http");
-	assert.equal(connection("aliyun__alibabacloud-devops-mcp-server")?.auth, "bearer");
-	assert.equal(connection("aliyun__alibabacloud-devops-mcp-server")?.url, "https://openapi-rdc.aliyuncs.com/ai/mcp");
+	assert.equal(connection("datalayer__jupyter-mcp-server")?.transport, "http");
+	assert.equal(connection("datalayer__jupyter-mcp-server")?.auth, "oauth");
+	assert.equal(connection("datalayer__jupyter-mcp-server")?.url, "https://mcp.datalayer.run/mcp");
 	assert.equal(connection("microsoft__playwright")?.transport, "stdio");
 	assert.equal(connection("microsoft__playwright")?.source, "readme");
 	for (const entry of catalog.entries.filter((item) => item.kind === "connectors")) {
 		const url = entry.connection?.url ?? "";
 		assert.ok(!url.includes("@") && !url.includes("?"), entry.package);
+	}
+});
+
+test("rejected connector packages are absent from the market", () => {
+	for (const packageName of [
+		"haris-musa__excel-mcp-server", "GongRzhe__Office-PowerPoint-MCP-Server",
+		"GongRzhe__Office-Word-MCP-Server", "aliyun__alibabacloud-devops-mcp-server",
+	]) {
+		assert.equal(catalog.entries.some((entry) => entry.kind === "connectors" && entry.package === packageName), false, packageName);
+	}
+});
+
+test("npm connector templates select fixed releases instead of floating packages", () => {
+	for (const packageName of ["Coding-Solo__godot-mcp", "MausRundung__mcp-explorer", "microsoft__playwright"]) {
+		const entry = catalog.entries.find((item) => item.kind === "connectors" && item.package === packageName);
+		assert.ok(entry, packageName);
+		assert.equal(entry.connection?.configuration?.command, "npx", packageName);
+		const packageArgument = entry.connection?.configuration?.args?.find((argument) => argument.startsWith("@"));
+		assert.ok(packageArgument, packageName);
+		assert.match(packageArgument, /@\d+\.\d+\.\d+$/u, packageName);
 	}
 });
 

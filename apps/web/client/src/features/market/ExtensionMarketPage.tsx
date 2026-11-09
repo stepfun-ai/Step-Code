@@ -41,7 +41,22 @@ function MarketRow({ entry, onOpen }: { readonly entry: MarketDetailEntry; reado
 				}}
 			>
 				<span className="extension-market-placeholder" aria-hidden="true">
-					{entry.logo ? <img src={entry.logo} alt="" /> : <span />}
+					{entry.logo ? (
+						<img src={entry.logo} alt="" />
+					) : (
+						<Icon
+							name={
+								entry.kind === "connectors"
+									? entry.catalog?.connection?.transport === "stdio"
+										? "terminal"
+										: "globe"
+									: entry.kind === "skills"
+										? "wand"
+										: "sliders"
+							}
+							size="lg"
+						/>
+					)}
 				</span>
 				<span className="extension-market-copy">
 					<span className="extension-market-item-title">

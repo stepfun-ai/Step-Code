@@ -14,7 +14,7 @@ for (const directory of await readdir(sourceRoot, { withFileTypes: true })) {
 	const root = join(sourceRoot, directory.name);
 	const manifest = JSON.parse(await readFile(join(root, "step.plugin.json"), "utf8"));
 	const entry = catalog.entries.find((item) => item.kind === "plugins" && item.identifier === manifest.id);
-	if (!entry) throw new Error(`No catalog entry for ${manifest.id}`);
+	if (!entry) continue;
 	const files = new Map();
 	let bytes = 0;
 	async function collect(relative) {
@@ -32,7 +32,7 @@ for (const directory of await readdir(sourceRoot, { withFileTypes: true })) {
 			files.set(relative, { path: relative, data: (await readFile(path)).toString("base64"), executable: Boolean(info.mode & 0o111) });
 		} else if (!info.isFile()) throw new Error(`Unsupported resource: ${manifest.id}`);
 	}
-	const roots = new Set(["step.plugin.json", ...(manifest.skills ?? []), ...(manifest.commands ?? [])]);
+	const roots = new Set(["step.plugin.json", entry.document.path, ...(manifest.skills ?? []), ...(manifest.commands ?? [])]);
 	if (typeof manifest.mcpServers === "string") roots.add(manifest.mcpServers);
 	for (const item of await readdir(root, { withFileTypes: true })) {
 		if (item.isFile() && /^(readme|license|licence|notice|copyright|接入说明)(\.|$)/iu.test(item.name)) roots.add(item.name);
@@ -42,6 +42,13 @@ for (const directory of await readdir(sourceRoot, { withFileTypes: true })) {
 		const path = declared.replace(/^(?:\.\/)+/u, "");
 		if (path.startsWith("/") || path.split("/").includes("..")) throw new Error("Unsafe declared resource");
 		await collect(path);
+	}
+	if (![...files.keys()].some((path) => /^readme(?:\.|$)/iu.test(path))) {
+		const document = files.get(entry.document.path.replace(/^(?:\.\/)+/u, ""));
+		if (!document) throw new Error(`Missing catalog document: ${manifest.id}`);
+		bytes += Buffer.from(document.data, "base64").length;
+		if (bytes > 64 * 1024 * 1024 || files.size >= 6000) throw new Error(`Oversized plugin: ${manifest.id}`);
+		files.set("README.md", { ...document, path: "README.md", executable: false });
 	}
 	packages.push({ catalogId: entry.id, id: manifest.id, data: gzipSync(JSON.stringify([...files.values()].sort((a, b) => a.path.localeCompare(b.path))), { level: 9 }).toString("base64") });
 	console.log(`${manifest.id}: ${files.size} files, ${bytes} bytes`);

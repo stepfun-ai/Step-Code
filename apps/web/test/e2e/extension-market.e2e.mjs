@@ -22,8 +22,10 @@ import {SettingsView} from "/src/features/settings";
 import {SidebarNav} from "/src/features/sidebar";
 import {MarketView} from "/src/features/market";import {ErrorToast} from "/src/features/shell";
 import {setState, setUi} from "/src/state/store.ts";
+import catalog from "/src/features/market/catalog/catalog.json";
 setState({booted:true,locale:"zh-CN"});setUi({midView:"market"});
 window.marketLocale = locale => setState({locale});
+window.marketCatalog = catalog;
 createRoot(document.getElementById("root")).render(<I18nProvider><IconSprite/><div className="app"><aside className="sidebar"><SidebarNav/></aside><main className="main"><MarketView/></main></div><SettingsView/><ErrorToast/></I18nProvider>);
 `;
 let vite, browser, url, cacheDir;
@@ -86,11 +88,11 @@ test("market tabs keep plugin/skill filters and add connectors", {skip}, async (
 		assert.equal(await page.locator('.extension-market-title').count(),0);
 		await page.locator('[data-market-kind="connectors"]').click();assert.equal(await page.locator('.extension-market-title').count(),0);
 		assert.ok(await page.evaluate(()=>document.querySelector('.extension-market-search').getBoundingClientRect().top-document.querySelector('.extension-market-toolbar').getBoundingClientRect().bottom<=36));
-		for (const [kind,total] of [["plugins",29],["skills",36]]) {
+		for (const [kind,total] of [["plugins",15],["skills",36]]) {
 			await page.locator(`[data-market-kind="${kind}"]`).click();
 			await page.locator('[data-market-category="all"]').click();
 			assert.equal(await page.locator(".extension-market-row").count(), total);
-			assert.equal(await page.locator(".extension-market-origin").count(), 0);
+			assert.equal(await page.locator(".extension-market-origin").count(), kind === "skills" ? 6 : 0);
 			for (const category of ["office","creative","code","other"]) {
 				await page.locator(`[data-market-category="${category}"]`).click();
 				const count=await page.locator(".extension-market-row").count();
@@ -115,6 +117,63 @@ test("market tabs keep plugin/skill filters and add connectors", {skip}, async (
 		await page.waitForFunction(() => document.querySelector('[data-market-category="all"]')?.textContent === "All");
 		assert.deepEqual(await page.locator("[data-market-kind]").allTextContents(), ["Plugins","Skills","Connectors"]);
 	} finally { await page.close(); }
+});
+
+test("catalog rows and details show type icons when logos are absent", {skip}, async () => {
+	for (const [kind, id, expectedIcon] of [
+		["plugins", "plugins-anthropics__claude-plugins-official__frontend-design", "#i-sliders"],
+		["skills", "skills-user_1a470ba8__wps-office-suite", "#i-wand"],
+		["connectors", "connectors-microsoft__playwright", "#i-terminal"],
+		["connectors", "connectors-excalidraw__excalidraw-mcp", "#i-globe"],
+	]) {
+		const page = await browser.newPage({viewport: {width: 1440, height: 1000}});
+		await page.route("**/api/v1/models**", route => route.fulfill({json: {models: [], providers: []}}));
+		try {
+			await page.goto(url);
+			await page.locator(".extension-market-row").first().waitFor();
+			await page.locator("#newSession").click();
+			await page.locator("#marketView").waitFor({state: "hidden"});
+			await page.evaluate(entryId => {
+				const entry = window.marketCatalog.entries.find(item => item.id === entryId);
+				delete entry.logo;
+			}, id);
+			await page.locator("#marketButton").click();
+			await page.locator(`[data-market-kind="${kind}"]`).click();
+			const button = page.locator(`[data-market-entry="${id}"]`);
+			await button.waitFor();
+			assert.equal(await button.locator(".extension-market-placeholder img").count(), 0);
+			assert.equal(await button.locator(".extension-market-placeholder use").count(), 1);
+			assert.equal(await button.locator(".extension-market-placeholder use").getAttribute("href"), expectedIcon);
+			await button.click();
+			await page.locator(".extension-detail-icon").waitFor();
+			assert.equal(await page.locator(".extension-detail-icon img").count(), 0);
+			assert.equal(await page.locator(".extension-detail-icon use").getAttribute("href"), expectedIcon);
+		} finally {
+			await page.close();
+		}
+	}
+});
+
+test("StepFun confirmed skills carry official badges and attributed introductions", {skip}, async () => {
+	const page = await browser.newPage({viewport: {width: 1440, height: 1000}});
+	try {
+		await page.goto(url);
+		await page.locator('[data-market-kind="skills"]').click();
+		for (const name of ["experience-design", "motion-interaction-skill", "stepfun-brand-uiux", "style-fidelity", "svg-optimize", "web-icon-system"]) {
+			const button = page.locator(`[data-market-entry="skills-local__${name}"]`);
+			await button.waitFor();
+			assert.equal(await button.locator("[data-market-official]").count(), 1, name);
+			assert.equal(await button.locator("[data-market-official]").textContent(), "StepFun 官方");
+			assert.ok((await button.locator(".extension-market-description").textContent()).startsWith("StepFun 官方技能："), name);
+			await button.click();
+			assert.equal(await page.locator(".extension-detail-header [data-market-official]").textContent(), "StepFun 官方");
+			assert.ok((await page.locator(".extension-detail-description").textContent()).startsWith("StepFun 官方技能："));
+			await page.locator(".extension-detail-back button").click();
+		}
+		assert.equal(await page.locator('[data-market-entry="skills-tencent-adm__tencent-docs"] [data-market-official]').count(), 0);
+	} finally {
+		await page.close();
+	}
 });
 
 test("market New isolates plugin and skill options and shares the management menu", {skip}, async () => {
