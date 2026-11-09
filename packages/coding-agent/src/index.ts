@@ -530,6 +530,10 @@ export {
 } from "./features/step-cron.ts";
 export { createStepProviderConfig, STEP_PROVIDER_ID } from "./features/step-provider/index.ts";
 export {
+	createStepRuntimeContextExtension,
+	type StepRuntimeContextExtensionOptions,
+} from "./features/step-runtime-context.ts";
+export {
 	CreateGoalParams,
 	continuationPrompt,
 	createStepGoalExtension,

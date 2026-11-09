@@ -7,8 +7,6 @@
  * structured calls.
  */
 
-import { spawnSync } from "node:child_process";
-
 export interface StepSystemPromptContext {
 	/** Initial working directory rendered by the Pi prompt builder. */
 	cwd?: string;
@@ -63,7 +61,8 @@ function hasAnyTool(active: ReadonlySet<string>, names: readonly string[]): bool
 	return names.some((name) => active.has(name));
 }
 
-function encodeEnvironmentValue(value: string): string {
+/** Escape a runtime fact so it stays one inert line inside a prompt or reminder block. */
+export function encodeEnvironmentValue(value: string): string {
 	return Array.from(value, (character) => {
 		switch (character) {
 			case "&":
@@ -98,84 +97,12 @@ function buildEnvironmentSection(context: StepSystemPromptContext, operatingMode
 		`Working directory: ${encodeEnvironmentValue(context.cwd?.trim() || "(see Current working directory below)")}`,
 		`Platform: ${encodeEnvironmentValue(context.platform?.trim() || "unknown")}`,
 		`Today's date: ${encodeEnvironmentValue(context.date?.trim() || "unknown")}`,
-	];
-	const gitEnvironment = collectGitEnvironment(context.cwd);
-	if (gitEnvironment.branch !== undefined) {
-		lines.push(`Git branch: ${encodeEnvironmentValue(gitEnvironment.branch)}`);
-	}
-	if (gitEnvironment.uncommittedCount !== undefined) {
-		lines.push(`Uncommitted changes: ${gitEnvironment.uncommittedCount}`);
-	}
-	lines.push(
 		`Operating mode: ${operatingMode}`,
 		"</env>",
 		"The initial working directory is the base for relative paths. The working directory above is also the default base for relative paths; absolute paths, parent-directory paths, and ~/ home paths are valid where the selected tool and permissions allow.",
 		"Git state is not assumed to be clean; inspect it before changing repository files and preserve unrelated user changes.",
-	);
+	];
 	return lines.join("\n");
-}
-
-interface GitEnvironment {
-	branch?: string;
-	uncommittedCount?: number;
-}
-
-/**
- * Git state changes far more slowly than the prompt is rebuilt. A single MCP
- * server registering N tools rebuilds the prompt N times within a few hundred
- * milliseconds, and each rebuild used to pay two synchronous git spawns
- * (~29 ms). Cache per working directory so a registration burst pays once.
- */
-const GIT_ENVIRONMENT_TTL_MS = 5_000;
-const gitEnvironmentCache = new Map<string, { readonly value: GitEnvironment; readonly expiresAt: number }>();
-
-/** Drop cached git facts so the next prompt build re-reads the repository. */
-export function invalidateGitEnvironmentCache(cwd?: string): void {
-	if (cwd === undefined) gitEnvironmentCache.clear();
-	else gitEnvironmentCache.delete(cwd.trim());
-}
-
-/**
- * Best-effort git facts for the environment block. Every failure path —
- * missing git binary, not a repository, nonexistent cwd, timeout — returns
- * an empty object so prompt construction can never crash on git state.
- */
-function collectGitEnvironment(cwd: string | undefined): GitEnvironment {
-	const workingDirectory = cwd?.trim();
-	if (!workingDirectory) return {};
-	const now = Date.now();
-	const cached = gitEnvironmentCache.get(workingDirectory);
-	if (cached && cached.expiresAt > now) return cached.value;
-	const value = readGitEnvironment(workingDirectory);
-	gitEnvironmentCache.set(workingDirectory, { value, expiresAt: now + GIT_ENVIRONMENT_TTL_MS });
-	return value;
-}
-
-function readGitEnvironment(workingDirectory: string): GitEnvironment {
-	const runGitCommand = (gitArguments: string[]): string | undefined => {
-		try {
-			const spawnResult = spawnSync("git", gitArguments, {
-				cwd: workingDirectory,
-				encoding: "utf8",
-				timeout: 1500,
-				windowsHide: true,
-			});
-			if (spawnResult.error || spawnResult.status !== 0 || typeof spawnResult.stdout !== "string") return undefined;
-			return spawnResult.stdout;
-		} catch {
-			return undefined;
-		}
-	};
-	// symbolic-ref resolves the branch even before the first commit; fall back
-	// to rev-parse for detached HEAD (which reports the literal "HEAD").
-	const branch = (
-		runGitCommand(["symbolic-ref", "--short", "HEAD"]) ?? runGitCommand(["rev-parse", "--abbrev-ref", "HEAD"])
-	)?.trim();
-	if (!branch) return {};
-	const statusOutput = runGitCommand(["status", "--porcelain"]);
-	if (statusOutput === undefined) return { branch };
-	const uncommittedCount = statusOutput.split("\n").filter((line) => line.trim().length > 0).length;
-	return { branch, uncommittedCount };
 }
 
 /** Build the Step product fragment for the tools active in this session. */

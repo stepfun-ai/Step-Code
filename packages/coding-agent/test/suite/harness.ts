@@ -22,6 +22,7 @@ import { convertToLlm } from "../../src/core/messages.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import type { Settings } from "../../src/core/settings-manager.ts";
 import { SettingsManager } from "../../src/core/settings-manager.ts";
+import type { SystemPromptProduct } from "../../src/core/system-prompt.ts";
 import type { InlineExtension, ResourceLoader } from "../../src/index.ts";
 import {
 	type CreateTestExtensionsResultInput,
@@ -64,6 +65,10 @@ export interface HarnessOptions {
 	models?: FauxModelDefinition[];
 	settings?: Partial<Settings>;
 	systemPrompt?: string;
+	/** Product fragment the session's prompt builder layers on, e.g. Step's operating contract. */
+	systemPromptProduct?: SystemPromptProduct;
+	/** Prepares the workspace directory before the session is created, e.g. a git repository. */
+	setupWorkspace?: (directory: string) => void;
 	tools?: AgentTool[];
 	initialActiveToolNames?: string[];
 	allowedToolNames?: string[];
@@ -103,6 +108,7 @@ function createTempDir(): string {
 
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const tempDir = createTempDir();
+	options.setupWorkspace?.(tempDir);
 	const fauxProvider: FauxProviderRegistration = registerFauxProvider({
 		models: options.models,
 	});
@@ -194,6 +200,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		allowedToolNames: options.allowedToolNames,
 		excludedToolNames: options.excludedToolNames,
 		extensionRunnerRef,
+		systemPromptProduct: options.systemPromptProduct,
 	});
 
 	const events: AgentSessionEvent[] = [];
