@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildStepSystemPromptAppendix, invalidateGitEnvironmentCache } from "../src/step/system-prompt.ts";
+import { buildStepSystemPromptAppendix } from "../src/step/system-prompt.ts";
 
 const hasGit = ((): boolean => {
 	try {
@@ -274,44 +274,19 @@ describe("Step system prompt appendix", () => {
 		expect(allTools).not.toContain("Operating mode: read-only");
 	});
 
-	it.skipIf(!hasGit)(
-		"adds git branch and uncommitted count for a git workspace and omits them otherwise",
-		async () => {
-			const root = await mkdtemp(path.join(tmpdir(), "step-prompt-env-"));
-			try {
-				const plain = buildStepSystemPromptAppendix([], { cwd: root });
-				expect(plain).not.toContain("Git branch:");
-				expect(plain).not.toContain("Uncommitted changes:");
-
-				expect(spawnSync("git", ["init", "-b", "step-env-test"], { cwd: root, encoding: "utf8" }).status).toBe(0);
-				await writeFile(path.join(root, "pending.txt"), "uncommitted\n");
-				// Git facts are cached per working directory; the repository was created
-				// after the first build, so drop the "not a repository" entry.
-				invalidateGitEnvironmentCache(root);
-				const repo = buildStepSystemPromptAppendix([], { cwd: root });
-				expect(repo).toContain("Git branch: step-env-test");
-				expect(repo).toContain("Uncommitted changes: 1");
-			} finally {
-				await rm(root, { recursive: true, force: true });
-			}
-		},
-	);
-
-	it.skipIf(!hasGit)("reuses cached git facts across rebuilds until invalidated", async () => {
-		const root = await mkdtemp(path.join(tmpdir(), "step-prompt-cache-"));
+	it.skipIf(!hasGit)("keeps git state out of the system prompt so a checkout cannot rewrite it", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "step-prompt-env-"));
 		try {
-			expect(spawnSync("git", ["init", "-b", "cache-a"], { cwd: root, encoding: "utf8" }).status).toBe(0);
-			invalidateGitEnvironmentCache(root);
-			expect(buildStepSystemPromptAppendix([], { cwd: root })).toContain("Git branch: cache-a");
+			expect(spawnSync("git", ["init", "-b", "step-env-test"], { cwd: root, encoding: "utf8" }).status).toBe(0);
+			await writeFile(path.join(root, "pending.txt"), "uncommitted\n");
+			const before = buildStepSystemPromptAppendix([], { cwd: root });
+			expect(before).not.toContain("Git branch:");
+			expect(before).not.toContain("Uncommitted changes:");
 
-			// A rebuild burst (one per registered tool) must not re-read git state.
-			expect(spawnSync("git", ["branch", "-m", "cache-b"], { cwd: root, encoding: "utf8" }).status).toBe(0);
-			expect(buildStepSystemPromptAppendix([], { cwd: root })).toContain("Git branch: cache-a");
-
-			invalidateGitEnvironmentCache(root);
-			expect(buildStepSystemPromptAppendix([], { cwd: root })).toContain("Git branch: cache-b");
+			expect(spawnSync("git", ["checkout", "-q", "-b", "other"], { cwd: root, encoding: "utf8" }).status).toBe(0);
+			await writeFile(path.join(root, "second.txt"), "uncommitted\n");
+			expect(buildStepSystemPromptAppendix([], { cwd: root })).toBe(before);
 		} finally {
-			invalidateGitEnvironmentCache(root);
 			await rm(root, { recursive: true, force: true });
 		}
 	});

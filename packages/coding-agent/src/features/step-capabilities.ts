@@ -1,10 +1,11 @@
-/** Step's built-in clarification, plan, task-tracking, and delegated-agent extensions. */
+/** Step's built-in clarification, plan, task-tracking, runtime-context, and delegated-agent extensions. */
 
 import type { ExtensionAPI, ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
 import type { StepTelemetryReporter } from "../step/telemetry.ts";
 import { createStepPlanExtension } from "./step-plan.ts";
 import { createStepPsExtension } from "./step-ps.ts";
 import { registerStepClarifyUserExtension } from "./step-questionnaire.ts";
+import { createStepRuntimeContextExtension } from "./step-runtime-context.ts";
 import { createStepSubagentExtension, type StepSubagentExtensionOptions } from "./step-subagent.ts";
 import { createStepSubagentsCommandExtension } from "./step-subagents-command.ts";
 import { createStepTasksExtension } from "./step-tasks.ts";
@@ -26,6 +27,7 @@ export function createStepCapabilitiesExtension(options: StepCapabilitiesExtensi
 	const ps = createStepPsExtension();
 	const subagentsCommand = createStepSubagentsCommandExtension();
 	const tasks = createStepTasksExtension();
+	const runtimeContext = createStepRuntimeContextExtension();
 	const subagent = createStepSubagentExtension({
 		...options.subagent,
 		telemetry: options.telemetry,
@@ -48,6 +50,7 @@ export function createStepCapabilitiesExtension(options: StepCapabilitiesExtensi
 		ps(pi);
 		subagentsCommand(pi);
 		tasks(pi);
+		runtimeContext(pi);
 		subagent(pi);
 		workflow(pi);
 		ultraloopOptIn(pi);
