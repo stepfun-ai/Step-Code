@@ -11,8 +11,10 @@
  * hidden custom message added beside the user's prompt only when the branch
  * differs from the last snapshot in the active context. Each snapshot states it
  * supersedes earlier ones, so history stays append-only and the cached prefix
- * survives. Working-tree changes are not announced: they are mostly the agent's
- * own edits, and the system prompt already tells it to inspect git state.
+ * survives. Within a run, a step that ran tools or a run started without a user
+ * prompt re-reads the branch and shows a changed one at the request tail.
+ * Working-tree changes are not announced: they are mostly the agent's own
+ * edits, and the system prompt already tells it to inspect git state.
  */
 
 import { execFile } from "node:child_process";
@@ -113,15 +115,24 @@ export function createStepRuntimeContextExtension(options: StepRuntimeContextExt
 	return (pi: ExtensionAPI): void => {
 		// The branch the model should currently see; undefined while there is nothing to state.
 		let current: GitBranch | undefined;
+		// The branch may have moved since the last read: a step ran tools (the agent
+		// may have checked out), or a run started without a user prompt.
+		let stale = false;
+		// before_agent_start already read git for the run that is about to start.
+		let readForPrompt = false;
 
 		pi.on("session_start", () => {
 			current = undefined;
+			stale = false;
+			readForPrompt = false;
 		});
 
 		// Read once per user prompt and persist a snapshot beside it only when the
 		// branch changed since the last one the model can see.
 		pi.on("before_agent_start", async (_event, ctx) => {
 			const branch = await readBranch(ctx.cwd);
+			readForPrompt = true;
+			stale = false;
 			if (branch === undefined) return;
 			const previous = lastSnapshot(
 				ctx.sessionManager.buildContextEntries().filter((entry) => entry.type === "custom_message"),
@@ -132,10 +143,28 @@ export function createStepRuntimeContextExtension(options: StepRuntimeContextExt
 			return { message: snapshotMessage(current) };
 		});
 
-		// Compaction can summarize the persisted snapshot away mid-run. Restore it
-		// for this request only, at the tail, so the cached prefix is untouched;
-		// the next prompt persists a fresh one.
-		pi.on("context", (event) => {
+		// Goal continuation, cron, background subagent wake-ups, approved plans and
+		// retries start runs without before_agent_start, so they never read git above.
+		pi.on("agent_start", () => {
+			if (!readForPrompt) stale = true;
+			readForPrompt = false;
+		});
+
+		pi.on("turn_end", (event) => {
+			if (event.toolResults.length > 0) stale = true;
+		});
+
+		// Each request re-reads git only when it may have moved, then restores the
+		// current snapshot at the tail when the request does not already show it:
+		// after a mid-run checkout, after compaction summarized the persisted one
+		// away, or during runs that persist nothing. The addition is request-local,
+		// so the cached prefix is untouched; the next user prompt persists a fresh one.
+		pi.on("context", async (event, ctx) => {
+			if (stale) {
+				stale = false;
+				const branch = await readBranch(ctx.cwd);
+				if (branch !== undefined && !(current === undefined && branch === null)) current = branch;
+			}
 			if (current === undefined) return;
 			const visible = lastSnapshot(
 				event.messages.filter((message): message is AgentMessage & SnapshotRecord => message.role === "custom"),

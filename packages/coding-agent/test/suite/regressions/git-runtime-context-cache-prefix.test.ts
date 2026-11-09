@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { fauxAssistantMessage } from "@step-harness/providers";
+import { fauxAssistantMessage, fauxToolCall } from "@step-harness/providers";
 import { Type } from "typebox";
 import { expect, it } from "vitest";
 import type { SystemPromptProduct } from "../../../src/core/system-prompt.ts";
@@ -113,3 +113,76 @@ it.skipIf(!hasGit)("announces a branch switch in history while the cached prefix
 		harness.cleanup();
 	}
 });
+
+it.skipIf(!hasGit)(
+	"shows a checkout the agent made mid-run on its next request without touching the prefix",
+	async () => {
+		const harness = await createHarness({
+			systemPromptProduct: STEP_PRODUCT,
+			setupWorkspace: (directory) => {
+				git(directory, "init", "-q", "-b", "feat/log-ctx-gate");
+				git(
+					directory,
+					"-c",
+					"user.email=t@example.com",
+					"-c",
+					"user.name=t",
+					"commit",
+					"-q",
+					"--allow-empty",
+					"-m",
+					"x",
+				);
+			},
+			tools: [
+				{
+					name: "run_command",
+					label: "run_command",
+					description: "run_command tool",
+					parameters: Type.Object({ branch: Type.String() }),
+					execute: async (_id: string, params: unknown) => {
+						git(harness.tempDir, "checkout", "-q", "-b", (params as { branch: string }).branch);
+						return { content: [{ type: "text" as const, text: "switched" }], details: {} };
+					},
+				},
+			],
+			extensionFactories: [
+				{ name: "step-runtime-context", factory: createStepRuntimeContextExtension(), hidden: true },
+			],
+		});
+
+		try {
+			const captured: Array<{ systemPrompt: string; tools: string; messages: string[] }> = [];
+			const capture = (context: { systemPrompt?: string; tools?: unknown[]; messages: unknown[] }) => {
+				captured.push({
+					systemPrompt: context.systemPrompt ?? "",
+					tools: JSON.stringify(context.tools ?? []),
+					messages: context.messages.map((message) => getMessageText(message)),
+				});
+			};
+			harness.setResponses([
+				(context) => {
+					capture(context);
+					return fauxAssistantMessage(fauxToolCall("run_command", { branch: "dev" }), { stopReason: "toolUse" });
+				},
+				(context) => {
+					capture(context);
+					return fauxAssistantMessage("done");
+				},
+			]);
+
+			// One user prompt; the agent checks out a new branch inside the same run.
+			await harness.session.prompt("switch to dev");
+
+			expect(captured).toHaveLength(2);
+			expect(captured[1]!.systemPrompt).toBe(captured[0]!.systemPrompt);
+			expect(captured[1]!.tools).toBe(captured[0]!.tools);
+			// The second request keeps the first one's messages and shows the new branch at its tail.
+			expect(captured[1]!.messages.slice(0, captured[0]!.messages.length)).toEqual(captured[0]!.messages);
+			expect(captured[1]!.messages.at(-1)).toContain("Git branch: dev");
+			expect(harness.getPendingResponseCount()).toBe(0);
+		} finally {
+			harness.cleanup();
+		}
+	},
+);

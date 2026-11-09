@@ -22,13 +22,21 @@ function install(initial: GitBranch | undefined) {
 	const handlers = new Map<string, Handler>();
 	const contextEntries: Array<{ type: string; customType?: string; details?: unknown }> = [];
 	let branch = initial;
+	let reads = 0;
 	const api = { on: (event: string, handler: Handler) => handlers.set(event, handler) } as unknown as ExtensionAPI;
-	createStepRuntimeContextExtension({ readBranch: async () => branch })(api);
+	createStepRuntimeContextExtension({
+		readBranch: async () => {
+			reads++;
+			return branch;
+		},
+	})(api);
 	const ctx = {
 		cwd: "/workspace",
 		sessionManager: { buildContextEntries: () => contextEntries },
 	} as unknown as ExtensionContext;
 	return {
+		contextEntries,
+		reads: () => reads,
 		setBranch: (next: GitBranch | undefined) => {
 			branch = next;
 		},
@@ -40,9 +48,22 @@ function install(initial: GitBranch | undefined) {
 			if (result?.message) contextEntries.push({ type: "custom_message", ...result.message });
 			return result?.message;
 		},
-		context: (messages: unknown[]) =>
-			handlers.get("context")!({ type: "context", messages }, ctx) as { messages: unknown[] } | undefined,
+		agentStart: () => handlers.get("agent_start")!({ type: "agent_start" }, ctx),
+		turnEnd: (toolResults: unknown[]) =>
+			handlers.get("turn_end")!({ type: "turn_end", turnIndex: 0, message: {}, toolResults }, ctx),
+		context: async (messages: unknown[]) =>
+			(await handlers.get("context")!({ type: "context", messages }, ctx)) as { messages: unknown[] } | undefined,
 	};
+}
+
+/** The request view as the session builds it: persisted snapshots become custom messages. */
+function requestMessages(entries: ReadonlyArray<{ customType?: string; details?: unknown }>): unknown[] {
+	return [{ role: "user", content: "task" }, ...entries.map((entry) => ({ role: "custom", ...entry }))];
+}
+
+function tailSnapshot(result: { messages: unknown[] } | undefined): string | undefined {
+	const last = result?.messages.at(-1) as { customType?: string; content?: string } | undefined;
+	return last?.customType === STEP_RUNTIME_CONTEXT_TYPE ? last.content : undefined;
 }
 
 describe("step runtime context", () => {
@@ -82,12 +103,54 @@ describe("step runtime context", () => {
 		expect(await runtime.prompt()).toBeUndefined();
 	});
 
+	it("reads git once for a user prompt, not again on its first request", async () => {
+		const runtime = install("feat/a");
+		await runtime.prompt();
+		runtime.agentStart();
+		expect(await runtime.context(requestMessages(runtime.contextEntries))).toBeUndefined();
+		expect(runtime.reads()).toBe(1);
+	});
+
+	it("shows a checkout made by a tool at the next request's tail", async () => {
+		const runtime = install("feat/a");
+		await runtime.prompt();
+		runtime.agentStart();
+		await runtime.context(requestMessages(runtime.contextEntries));
+
+		runtime.setBranch("dev");
+		// A step without tools does not re-read.
+		runtime.turnEnd([]);
+		expect(await runtime.context(requestMessages(runtime.contextEntries))).toBeUndefined();
+		expect(runtime.reads()).toBe(1);
+
+		runtime.turnEnd([{ role: "toolResult" }]);
+		expect(tailSnapshot(await runtime.context(requestMessages(runtime.contextEntries)))).toContain("Git branch: dev");
+		// The tail addition is request-local; later requests keep showing it without re-reading.
+		expect(tailSnapshot(await runtime.context(requestMessages(runtime.contextEntries)))).toContain("Git branch: dev");
+		expect(runtime.reads()).toBe(2);
+		expect(runtime.contextEntries).toHaveLength(1);
+
+		// The next user prompt persists the new branch.
+		expect((await runtime.prompt())?.content).toContain("Git branch: dev");
+	});
+
+	it("refreshes a run started without a user prompt", async () => {
+		const runtime = install("feat/a");
+		await runtime.prompt();
+		runtime.agentStart();
+
+		// A goal continuation or cron run: agent_start without before_agent_start.
+		runtime.setBranch("dev");
+		runtime.agentStart();
+		expect(tailSnapshot(await runtime.context(requestMessages(runtime.contextEntries)))).toContain("Git branch: dev");
+	});
+
 	it("restores a snapshot that compaction removed, at the request tail only", async () => {
 		const runtime = install("dev");
 		const persisted = (await runtime.prompt())!;
 
 		expect(
-			runtime.context([
+			await runtime.context([
 				{ role: "user", content: "hi" },
 				{ role: "custom", ...persisted },
 			]),
@@ -97,7 +160,7 @@ describe("step runtime context", () => {
 			{ role: "compactionSummary", summary: "..." },
 			{ role: "user", content: "next" },
 		];
-		const restored = runtime.context(compacted)!;
+		const restored = (await runtime.context(compacted))!;
 		expect(restored.messages.slice(0, compacted.length)).toEqual(compacted);
 		expect(restored.messages.at(-1)).toMatchObject({
 			role: "custom",
