@@ -707,6 +707,10 @@ export class StepCronRuntime {
 				...(options.sessionCreated ? { sessionCreated: true } : {}),
 				...(options.title ? { title: options.title.slice(0, CRON_MAX_TITLE_LENGTH) } : {}),
 				...(options.status ? { status: options.status } : {}),
+				// `CronStatusReason` is part of the create options, not only the update
+				// patch: a host that imports a task whose bound session is already gone
+				// creates it paused, and the reason has to survive that same write.
+				...(options.statusReason ? { statusReason: options.statusReason } : {}),
 				...(options.inputs ? { inputs: { skills: [...(options.inputs.skills ?? [])] } } : {}),
 				...(options.model ? { model: { ...options.model } } : {}),
 				...(options.permissionPreset ? { permissionPreset: options.permissionPreset } : {}),
