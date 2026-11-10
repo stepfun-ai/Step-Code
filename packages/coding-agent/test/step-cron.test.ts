@@ -825,6 +825,32 @@ test("an unschedulable persisted recurrence does not block other jobs on restart
 });
 
 describe("desktop cron task fields", () => {
+	test("a task created paused for a missing session keeps its reason", () => {
+		// The record reader validates `statusReason`, so a host that creates a task
+		// already paused (an imported task whose session is gone) must have the
+		// reason written on creation, not only through a later update.
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const directory = makeDirectory();
+		const file = path.join(directory, "tasks.json");
+		const first = new StepCronRuntime({ now: () => now, jitterRatio: 0, storagePath: file });
+		const created = first.create("0 9 * * *", "orphaned task", true, true, true, {
+			id: "orphan",
+			sessionId: "session-gone",
+			status: "paused",
+			statusReason: "session_missing",
+			origin: "desktop",
+			autoExpireMs: null,
+			jitter: false,
+		}).job;
+		expect(created.statusReason).toBe("session_missing");
+
+		const reloaded = new StepCronRuntime({ now: () => now, jitterRatio: 0, storagePath: file });
+		reloaded.start(directory, true);
+		const record = reloaded.list().find((job) => job.id === "orphan");
+		expect(record?.statusReason).toBe("session_missing");
+		expect(record?.status).toBe("paused");
+	});
+
 	test("creates a v2 task with task session metadata and updates it", () => {
 		const now = Date.UTC(2026, 0, 1, 12, 0);
 		const directory = makeDirectory();
