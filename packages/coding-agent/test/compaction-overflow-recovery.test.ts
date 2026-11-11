@@ -686,3 +686,60 @@ describe("compaction overflow protection and accounting", () => {
 		expect(requests).toHaveLength(1);
 	});
 });
+
+describe("unnamed provider rejection", () => {
+	const unnamedMessage =
+		'400 {"type":"error","error":{"type":"invalid_request_error","message":"The input you provided is invalid [trace_id=abc code=30003]"}}';
+
+	it("reduces the summary request when the rejection is near the window", async () => {
+		// A 20K window with an 8K output reservation gates at 19K requested tokens.
+		const tightModel: Model<"anthropic-messages"> = { ...model, contextWindow: 20_000, maxTokens: 8_000 };
+		const messages = [...history("history"), ...toolGroup("huge-a", 12_000), ...toolGroup("huge-b", 12_000)];
+		const { streamFn, requests } = scriptedStream([failure(unnamedMessage), reply("recovered summary")]);
+
+		const result = await generateSummaryWithUsage(
+			messages,
+			tightModel,
+			24576,
+			"test-key",
+			{ "x-test": "summary" },
+			undefined,
+			customInstructions,
+			previousSummary,
+			"medium",
+			streamFn,
+			{ TEST_SUMMARY_ENV: "value" },
+			undefined,
+			undefined,
+			"summary-session",
+		);
+
+		expect(result.text).toContain("recovered summary");
+		expect(requests).toHaveLength(2);
+	});
+
+	it("keeps the failure when the same rejection comes from a request that fit", async () => {
+		const roomyModel: Model<"anthropic-messages"> = { ...model, contextWindow: 200_000, maxTokens: 8_000 };
+		const { streamFn, requests } = scriptedStream([failure(unnamedMessage)]);
+
+		await expect(
+			generateSummaryWithUsage(
+				history("history"),
+				roomyModel,
+				24576,
+				"test-key",
+				{ "x-test": "summary" },
+				undefined,
+				customInstructions,
+				previousSummary,
+				"medium",
+				streamFn,
+				{ TEST_SUMMARY_ENV: "value" },
+				{ enabled: false, maxRetries: 0, baseDelayMs: 0 },
+				undefined,
+				"summary-session",
+			),
+		).rejects.toThrow(/input you provided is invalid/);
+		expect(requests).toHaveLength(1);
+	});
+});

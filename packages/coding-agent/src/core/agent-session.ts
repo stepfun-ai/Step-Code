@@ -29,6 +29,7 @@ import {
 	classifyIncompleteAssistantTurn,
 	contentBlocks,
 	contentText,
+	estimateTextTokens,
 	INCOMPLETE_TURN_MESSAGES,
 	type IncompleteTurnReason,
 	isIncompleteAssistantTurn,
@@ -52,6 +53,7 @@ import {
 	isContextOverflow,
 	isRecoverableLength,
 	isRetryableAssistantError,
+	isUnnamedOverflowRejection,
 	modelsAreEqual,
 	type RetryCallbacks,
 	resetApiProviders,
@@ -384,10 +386,10 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 	return tokens;
 }
 
-/** Approximate tokens of the system prompt and tool schemas, using the same chars/4 heuristic as messages. */
+/** Approximate tokens of the system prompt and tool schemas, priced like messages (UTF-8 bytes / 4). */
 function estimateRequestOverheadTokens(context: AgentContext): number {
 	const tools = (context.tools ?? []).map(({ name, description, parameters }) => ({ name, description, parameters }));
-	return Math.ceil(((context.systemPrompt ?? "").length + JSON.stringify(tools).length) / 4);
+	return estimateTextTokens(context.systemPrompt ?? "") + estimateTextTokens(JSON.stringify(tools));
 }
 
 // ============================================================================
@@ -3417,6 +3419,28 @@ export class AgentSession {
 	}
 
 	/**
+	 * Prompt size of the request that was just rejected, for classifying an unnamed
+	 * provider rejection. Uses the same estimate as the threshold check, so a request
+	 * that fit is never retried as an overflow by mistake.
+	 */
+	private _overflowSizeEvidence(): { inputTokens: number; maxTokens: number } | undefined {
+		const model = this.model;
+		if (!model || model.contextWindow <= 0) return undefined;
+		try {
+			return {
+				inputTokens: this._workingContextTokens({
+					systemPrompt: this.systemPrompt,
+					messages: this.agent.state.messages,
+					tools: this.agent.state.tools,
+				}),
+				maxTokens: model.maxTokens ?? 0,
+			};
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
 	 * Classify a response as a context overflow or a recoverable truncated response.
 	 */
 	private _getOverflowKind(assistantMessage: AssistantMessage): "context" | "length" | undefined {
@@ -3431,7 +3455,14 @@ export class AgentSession {
 			return undefined;
 		}
 		if (!sameModel) return undefined;
-		if (isContextOverflow(silentOverflowCandidate(assistantMessage), contextWindow)) return "context";
+		const candidate = silentOverflowCandidate(assistantMessage);
+		// The size measurement is deferred: ordinary errors never pay for it, and the
+		// "stop after three measurement faults" contract still holds.
+		if (
+			isContextOverflow(candidate, contextWindow) ||
+			isUnnamedOverflowRejection(candidate, contextWindow, () => this._overflowSizeEvidence())
+		)
+			return "context";
 		if (isRecoverableLength(assistantMessage, this.model?.maxTokens ?? 0)) return "length";
 		return undefined;
 	}

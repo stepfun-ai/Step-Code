@@ -2,6 +2,7 @@ import type { ThinkingLevel } from "@step-harness/agent-core";
 import type { TuiMode as RendererTuiMode, ScrollViewScrollbar, TerminalCapabilities } from "@step-harness/pi-tui";
 import { supportsTerminalProgress } from "@step-harness/pi-tui";
 import type { Transport } from "@step-harness/providers";
+import { DEFAULT_STREAM_IDLE_TIMEOUT_MS } from "@step-harness/providers";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
@@ -35,7 +36,7 @@ export interface CompactionSettings {
 	modelTriggerRatios?: Record<string, number>;
 	/** Absolute token ceiling that can only make automatic compaction trigger earlier. */
 	tokenLimit?: number;
-	/** Projection mode: clm-v1 by default when automatic compaction is enabled. */
+	/** Projection mode: native compaction (`off`) by default; `clm-v1` opts into CLM. */
 	contextProjection?: ContextProjectionMode;
 	/** Host-triggered maintenance inside clm-v1; native compaction remains the fallback. */
 	autoClm?: Partial<AutoClmSettings>;
@@ -50,6 +51,7 @@ export interface ProviderRetrySettings {
 	timeoutMs?: number; // SDK/provider request timeout in milliseconds
 	maxRetries?: number; // SDK/provider retry attempts
 	maxRetryDelayMs?: number; // default: 60000 (max server-requested delay before failing)
+	streamIdleTimeoutMs?: number; // default: 300000; longest wait for the next provider event, 0 disables
 }
 
 export interface RetrySettings {
@@ -934,13 +936,14 @@ export class SettingsManager {
 
 	/**
 	 * Selected context projection mode (`step.compaction.contextProjection`).
-	 * Defaults to CLM when compaction is enabled; explicit modes take precedence.
-	 * Disabling compaction also disables implicit CLM, while an explicit clm-v1
-	 * setting retains manual edits. Invalid values fail closed to "off".
+	 * Defaults to native compaction (`off`). CLM is opt-in: near a full window its
+	 * maintenance request recomputes almost the whole context to save about 12%, which
+	 * made it slower than native compaction where speed mattered most. An explicit
+	 * `clm-v1` keeps manual edits even with compaction disabled. Invalid values fail
+	 * closed to "off".
 	 */
 	getContextProjectionMode(): ContextProjectionMode {
 		const mode = this.settings.compaction?.contextProjection;
-		if (mode === undefined) return this.getCompactionEnabled() ? "clm-v1" : "off";
 		return mode === "lightweight-v1" || mode === "clm-v1" ? mode : "off";
 	}
 
@@ -1026,11 +1029,22 @@ export class SettingsManager {
 		this.save();
 	}
 
-	getProviderRetrySettings(): { timeoutMs?: number; maxRetries?: number; maxRetryDelayMs: number } {
+	getProviderRetrySettings(): {
+		timeoutMs?: number;
+		maxRetries?: number;
+		maxRetryDelayMs: number;
+		streamIdleTimeoutMs: number;
+	} {
+		const streamIdleTimeoutMs = this.settings.retry?.provider?.streamIdleTimeoutMs;
 		return {
 			timeoutMs: this.settings.retry?.provider?.timeoutMs,
 			maxRetries: this.settings.retry?.provider?.maxRetries,
 			maxRetryDelayMs: this.settings.retry?.provider?.maxRetryDelayMs ?? 60000,
+			// Invalid values keep the default rather than disabling the bound by accident.
+			streamIdleTimeoutMs:
+				typeof streamIdleTimeoutMs === "number" && Number.isFinite(streamIdleTimeoutMs) && streamIdleTimeoutMs >= 0
+					? Math.floor(streamIdleTimeoutMs)
+					: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
 		};
 	}
 

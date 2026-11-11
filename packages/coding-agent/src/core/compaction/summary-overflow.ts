@@ -1,6 +1,6 @@
 /** Source-history reduction used only after a summary request is rejected for context overflow. */
 import type { AgentMessage } from "@step-harness/agent-core";
-import { contentText } from "@step-harness/providers";
+import { contentText, textUtf8ByteLength } from "@step-harness/providers";
 import { convertToLlm } from "../messages.ts";
 import { serializeConversation } from "./utils.ts";
 
@@ -45,7 +45,7 @@ function groupMessages(messages: AgentMessage[]): AgentMessage[][] | undefined {
  */
 export function createSummarySourceReducer(
 	messages: AgentMessage[],
-	estimateRequestTokens: (conversationChars: number) => number,
+	estimateRequestTokens: (conversationBytes: number) => number,
 ): SourceReducer | undefined {
 	const groups = groupMessages(messages);
 	if (!groups?.length) return undefined;
@@ -79,7 +79,7 @@ export function createSummarySourceReducer(
 			index >= tailStart ||
 			group.some((message) => message.role === "compactionSummary" || message.role === "branchSummary"),
 	}));
-	let textChars = sources.reduce((sum, source) => sum + source.text.length, 0);
+	let textBytes = sources.reduce((sum, source) => sum + textUtf8ByteLength(source.text), 0);
 	let textCount = sources.filter((source) => source.text.length > 0).length;
 	let nextGroup = 0;
 	let omitted = 0;
@@ -88,12 +88,12 @@ export function createSummarySourceReducer(
 		while (nextGroup < sources.length) {
 			const source = sources[nextGroup++];
 			if (source.protected || !source.text) continue;
-			textChars -= source.text.length;
+			textBytes -= textUtf8ByteLength(source.text);
 			textCount--;
 			source.text = "";
 			omitted++;
 			const note = `[${omitted} older message groups omitted after context overflow]\n\n`;
-			const tokens = estimateRequestTokens(note.length + textChars + Math.max(0, textCount - 1) * 2);
+			const tokens = estimateRequestTokens(textUtf8ByteLength(note) + textBytes + Math.max(0, textCount - 1) * 2);
 			// A large earlier removal may already be below the next target. Still require
 			// a strictly smaller payload: never submit the same rejected request again.
 			if (tokens <= targetTokens && tokens < rejectedTokens) {

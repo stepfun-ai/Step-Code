@@ -1,4 +1,5 @@
 import type { AssistantMessage, Context, Model, RetryPolicy, SimpleStreamOptions } from "@step-harness/providers";
+import { estimateTextTokens } from "@step-harness/providers";
 import { redactSecretString } from "../../step/secret-redaction.ts";
 
 export interface SummaryRequestDiagnostics {
@@ -45,7 +46,7 @@ export function createSummaryDiagnostics(
 		contextWindow: model.contextWindow,
 		modelMaxTokens: model.maxTokens,
 		selectedMaxTokens: options.maxTokens,
-		inputTokensEstimated: Math.ceil(JSON.stringify(context).length / 4),
+		inputTokensEstimated: estimateTextTokens(JSON.stringify(context)),
 		reasoning: options.reasoning ?? "off",
 		attempts: 0,
 		durationMs: 0,

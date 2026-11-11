@@ -245,8 +245,8 @@ describe("AgentSession CLM context integration", () => {
 		expect(previousStopChecks).toBe(2);
 	});
 
-	it("creates the default working view on the first request without a maintenance call", async () => {
-		const harness = await createHarness();
+	it("creates the working view on the first request without a maintenance call", async () => {
+		const harness = await createHarness({ settings: { compaction: { contextProjection: "clm-v1" } } });
 		harnesses.push(harness);
 		let request: Context | undefined;
 		harness.setResponses([
@@ -266,7 +266,7 @@ describe("AgentSession CLM context integration", () => {
 		expect(harness.faux.state.callCount).toBe(1);
 	});
 
-	it.each([{ contextProjection: "off" as const }, { enabled: false }])(
+	it.each([{}, { contextProjection: "off" as const }, { enabled: false }])(
 		"does not install a working view when disabled with %j",
 		async (compaction) => {
 			const harness = await createHarness({ settings: { compaction } });

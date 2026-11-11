@@ -38,20 +38,17 @@ describe("projection single-implementation re-export", () => {
 // ============================================================================
 
 describe("step.compaction.contextProjection setting", () => {
-	it("defaults to CLM with automatic compaction enabled", () => {
+	it("defaults to native compaction, with CLM opt-in", () => {
 		const settings = SettingsManager.inMemory();
-		expect(settings.getContextProjectionMode()).toBe("clm-v1");
-		expect(settings.getCompactionSettings().contextProjection).toBe("clm-v1");
-		expect(settings.getAutoClmSettings().enabled).toBe(true);
+		expect(settings.getContextProjectionMode()).toBe("off");
+		expect(settings.getCompactionSettings().contextProjection).toBe("off");
 		expect(settings.getGlobalSettings().compaction).toBeUndefined();
 	});
 
-	it("turns implicit CLM off with automatic compaction and restores it when enabled", () => {
+	it("keeps native compaction as the default whether automatic compaction is on or off", () => {
 		const settings = SettingsManager.inMemory({ compaction: { enabled: false } });
 		expect(settings.getContextProjectionMode()).toBe("off");
 		settings.setCompactionEnabled(true);
-		expect(settings.getContextProjectionMode()).toBe("clm-v1");
-		settings.setCompactionEnabled(false);
 		expect(settings.getContextProjectionMode()).toBe("off");
 	});
 
@@ -66,7 +63,9 @@ describe("step.compaction.contextProjection setting", () => {
 	);
 
 	it("keeps the CLM working view when only automatic maintenance is disabled", () => {
-		const settings = SettingsManager.inMemory({ compaction: { autoClm: { enabled: false } } });
+		const settings = SettingsManager.inMemory({
+			compaction: { contextProjection: "clm-v1", autoClm: { enabled: false } },
+		});
 		expect(settings.getContextProjectionMode()).toBe("clm-v1");
 		expect(settings.getAutoClmSettings().enabled).toBe(false);
 	});
@@ -190,7 +189,7 @@ describe("--context-projection flag", () => {
 			printHelp();
 			const help = log.mock.calls.flat().join("\n");
 			const option = help.split("\n").find((line) => line.includes("--context-projection <mode>"));
-			expect(option).toContain("clm-v1 (default), lightweight-v1, or off");
+			expect(option).toContain("off (default, native compaction), clm-v1, or lightweight-v1");
 		} finally {
 			log.mockRestore();
 		}

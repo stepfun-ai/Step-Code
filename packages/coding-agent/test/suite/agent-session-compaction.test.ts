@@ -973,4 +973,97 @@ describe("AgentSession compaction characterization", () => {
 		expect(belowThresholdSpy).not.toHaveBeenCalled();
 		expect(disabledSpy).not.toHaveBeenCalled();
 	});
+
+	it("classifies an unnamed gateway rejection as overflow only near the window", async () => {
+		const harness = await createHarness({ models: [{ id: "faux-1", contextWindow: 64_000, maxTokens: 8192 }] });
+		harnesses.push(harness);
+		const internals = harness.session as unknown as SessionWithCompactionInternals & {
+			_getOverflowKind: (message: AssistantMessage) => "context" | "length" | undefined;
+		};
+		const unnamed = createAssistant(harness, {
+			stopReason: "error",
+			errorMessage:
+				'400 {"type":"error","error":{"type":"invalid_request_error","message":"The input you provided is invalid [trace_id=abc code=30003]"}}',
+			timestamp: Date.now() + 10_000,
+		});
+
+		// 53,500 + 8,192 = 61,692 >= 60,800 (95% of the window).
+		const nearWindow = vi.spyOn(
+			harness.session as unknown as { _workingContextTokens: () => number },
+			"_workingContextTokens",
+		);
+		nearWindow.mockReturnValue(53_500);
+		expect(internals._getOverflowKind(unnamed)).toBe("context");
+
+		// The same wording on a request that plainly fit stays an ordinary error.
+		nearWindow.mockReturnValue(10_000);
+		expect(internals._getOverflowKind(unnamed)).toBeUndefined();
+	});
+
+	it("compacts and retries once after an unnamed gateway rejection", async () => {
+		const harness = await createHarness({
+			models: [{ id: "faux-1", contextWindow: 64_000, maxTokens: 8192 }],
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => ({
+						compaction: {
+							summary: "unnamed overflow compacted",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+							details: {},
+						},
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		// The real estimate stays far below the 51,712-token threshold, so no threshold
+		// compaction runs. Only the rejected request's size evidence is near the window,
+		// as when the host underestimated what it sent.
+		const evidence = vi
+			.spyOn(
+				harness.session as unknown as { _overflowSizeEvidence: () => { inputTokens: number; maxTokens: number } },
+				"_overflowSizeEvidence",
+			)
+			.mockReturnValue({ inputTokens: 58_000, maxTokens: 8192 });
+		harness.setResponses([
+			createAssistant(harness, {
+				stopReason: "error",
+				errorMessage:
+					'400 {"type":"error","error":{"type":"invalid_request_error","message":"The input you provided is invalid [trace_id=abc code=30003]"}}',
+				timestamp: Date.now() + 10_000,
+			}),
+			fauxAssistantMessage("recovered after compaction"),
+		]);
+
+		await harness.session.prompt("continue the task");
+
+		expect(harness.eventsOfType("compaction_start").map((event) => event.reason)).toEqual(["overflow"]);
+		expect(evidence).toHaveBeenCalled();
+		expect(harness.faux.state.callCount).toBe(2);
+		expect(harness.session.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+	});
+
+	it("surfaces an unnamed rejection from a small request without compacting", async () => {
+		const harness = await createHarness({ models: [{ id: "faux-1", contextWindow: 64_000, maxTokens: 8192 }] });
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		vi.spyOn(
+			harness.session as unknown as { _workingContextTokens: () => number },
+			"_workingContextTokens",
+		).mockReturnValue(9_000);
+		harness.setResponses([
+			createAssistant(harness, {
+				stopReason: "error",
+				errorMessage:
+					'400 {"type":"error","error":{"type":"invalid_request_error","message":"The input you provided is invalid [code=30003]"}}',
+			}),
+		]);
+
+		await harness.session.prompt("continue the task");
+
+		expect(harness.eventsOfType("compaction_start")).toHaveLength(0);
+	});
 });

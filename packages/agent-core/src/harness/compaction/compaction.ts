@@ -3,6 +3,7 @@ import {
 	type AssistantMessage,
 	type Context,
 	contentText,
+	estimateTextTokens,
 	type Model,
 	type Models,
 	type RetryCallbacks,
@@ -245,61 +246,53 @@ export function shouldCompact(contextTokens: number, contextWindow: number, sett
 	return contextTokens > contextWindow - settings.reserveTokens;
 }
 
-const ESTIMATED_IMAGE_CHARS = 4800;
+/** Fixed per-image estimate; images carry no text to measure by bytes. */
+const ESTIMATED_IMAGE_TOKENS = 1200;
 
-function estimateTextAndImageContentChars(content: string | Array<{ type: string; text?: string }>): number {
-	if (typeof content === "string") {
-		return content.length;
-	}
+/** Content blocks mix text (priced by UTF-8 bytes) with images (fixed estimate). */
+function estimateTextAndImageTokens(content: string | Array<{ type: string; text?: string }>): number {
+	if (typeof content === "string") return estimateTextTokens(content);
 
-	let chars = 0;
+	let tokens = 0;
 	for (const block of content) {
-		if (block.type === "text" && block.text) {
-			chars += block.text.length;
-		} else if (block.type === "image") {
-			chars += ESTIMATED_IMAGE_CHARS;
-		}
+		if (block.type === "text" && block.text) tokens += estimateTextTokens(block.text);
+		else if (block.type === "image") tokens += ESTIMATED_IMAGE_TOKENS;
 	}
-	return chars;
+	return tokens;
 }
 
-/** Estimate token count for one message using a conservative character heuristic. */
+/** Estimate token count for one message from its UTF-8 payload size. */
 export function estimateTokens(message: AgentMessage): number {
-	let chars = 0;
-
 	switch (message.role) {
 		case "user": {
-			chars = estimateTextAndImageContentChars(
+			return estimateTextAndImageTokens(
 				(message as { content: string | Array<{ type: string; text?: string }> }).content,
 			);
-			return Math.ceil(chars / 4);
 		}
 		case "assistant": {
 			const assistant = message as AssistantMessage;
+			let tokens = 0;
 			for (const block of assistant.content) {
 				if (block.type === "text") {
-					chars += block.text.length;
+					tokens += estimateTextTokens(block.text);
 				} else if (block.type === "thinking") {
-					chars += block.thinking.length;
+					tokens += estimateTextTokens(block.thinking);
 				} else if (block.type === "toolCall") {
-					chars += block.name.length + safeJsonStringify(block.arguments).length;
+					tokens += estimateTextTokens(block.name) + estimateTextTokens(safeJsonStringify(block.arguments));
 				}
 			}
-			return Math.ceil(chars / 4);
+			return tokens;
 		}
 		case "custom":
 		case "toolResult": {
-			chars = estimateTextAndImageContentChars(message.content);
-			return Math.ceil(chars / 4);
+			return estimateTextAndImageTokens(message.content);
 		}
 		case "bashExecution": {
-			chars = message.command.length + message.output.length;
-			return Math.ceil(chars / 4);
+			return estimateTextTokens(message.command) + estimateTextTokens(message.output);
 		}
 		case "branchSummary":
 		case "compactionSummary": {
-			chars = message.summary.length;
-			return Math.ceil(chars / 4);
+			return estimateTextTokens(message.summary);
 		}
 	}
 
@@ -387,12 +380,10 @@ export function findCutPoint(
 		const messageTokens = estimateTokens(entry.message as AgentMessage);
 		accumulatedTokens += messageTokens;
 		if (accumulatedTokens >= keepRecentTokens) {
-			for (let c = 0; c < cutPoints.length; c++) {
-				if (cutPoints[c] >= i) {
-					cutIndex = cutPoints[c];
-					break;
-				}
-			}
+			// Closest valid cut point at or after this entry. When the newest message alone exceeds
+			// the budget and is a tool result (never a cut point), nothing qualifies; keep from the
+			// newest cut point instead of keeping everything, which left nothing to summarize.
+			cutIndex = cutPoints.find((candidate) => candidate >= i) ?? cutPoints[cutPoints.length - 1];
 			break;
 		}
 	}

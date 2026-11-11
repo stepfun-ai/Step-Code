@@ -169,6 +169,10 @@ export class AutoClmController {
 			cachedJson = false;
 			request = makeRequest(false);
 		}
+		// Without a reusable prefix the provider recomputes the whole request before the task can
+		// start. Past this size native compaction is cheaper and leaves a much smaller context.
+		const coldLimit = input.settings.coldMaxPrefillTokens;
+		if (!cachedJson && coldLimit > 0 && this.live.estimate(request) > coldLimit) return skipped("cold-prefill");
 		const result: AutoClmResult = {
 			attempted: true,
 			accepted: false,

@@ -109,7 +109,7 @@ For VS Code, include `--wait` so step resumes after the editor exits:
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
-| `compaction.triggerRatio` | number | `0.9` | Fraction of the context window that triggers auto-compaction (0.5-0.95); small windows trigger earlier to keep response room |
+| `compaction.triggerRatio` | number | `0.85` | Fraction of the context window that triggers auto-compaction (0.5-0.95); small windows trigger earlier to keep response room |
 | `compaction.modelTriggerRatios` | object | `{}` | Per-model trigger ratios keyed by `provider/model-id` |
 | `compaction.tokenLimit` | number | - | Absolute trigger ceiling; can only trigger earlier |
 | `compaction.triggerPolicy` | string | `"v2"` | `"legacy"` restores the previous `contextWindow - reserveTokens` trigger and checkpoints |
@@ -122,7 +122,7 @@ For VS Code, include `--wait` so step resumes after the editor exits:
 {
   "compaction": {
     "enabled": true,
-    "triggerRatio": 0.9,
+    "triggerRatio": 0.85,
     "keepRecentTokens": 20000
   }
 }
@@ -149,6 +149,7 @@ budget. `compaction.reserveTokens` does not set a separate summary output cap.
 | `retry.provider.timeoutMs` | number | SDK default | Provider/SDK request timeout in milliseconds |
 | `retry.provider.maxRetries` | number | `0` | Provider/SDK retry attempts |
 | `retry.provider.maxRetryDelayMs` | number | `60000` | Max server-requested delay before failing (60s) |
+| `retry.provider.streamIdleTimeoutMs` | number | `300000` | Longest wait for the next parsed provider event before the request is cancelled and retried as a transient error; keep-alive bytes do not count. `0` disables it |
 
 When a provider requests a retry delay longer than `retry.provider.maxRetryDelayMs`, the request fails immediately with an informative error instead of waiting silently. Set it to `0` to disable the limit.
 
@@ -356,7 +357,7 @@ See [packages.md](packages.md) for package management details.
   "theme": "dark",
   "compaction": {
     "enabled": true,
-    "triggerRatio": 0.9,
+    "triggerRatio": 0.85,
     "keepRecentTokens": 20000
   },
   "retry": {
@@ -379,7 +380,7 @@ Project settings (`.stepcode/settings.json`) override global settings. Nested ob
 // ~/.stepcode/agent/settings.json (global)
 {
   "theme": "dark",
-  "compaction": { "enabled": true, "triggerRatio": 0.9 }
+  "compaction": { "enabled": true, "triggerRatio": 0.85 }
 }
 
 // .stepcode/settings.json (project)
@@ -396,12 +397,12 @@ Project settings (`.stepcode/settings.json`) override global settings. Nested ob
 
 ### Model-managed context
 
-`compaction.contextProjection` defaults to `clm-v1` when automatic compaction is
-enabled. It also accepts `off` (native compaction) and `lightweight-v1`
-(deterministic request projection); explicit settings remain unchanged.
-Default CLM maintenance inherits native compaction's
-`contextWindow * compaction.triggerRatio` threshold and falls back to native
-compaction if no valid useful edit can be accepted.
+`compaction.contextProjection` defaults to `off`: native summary compaction.
+CLM is opt-in with `contextProjection = "clm-v1"` (or `/clm on` for the current
+session); `lightweight-v1` selects the deterministic request projection.
+Explicit settings remain unchanged. When enabled, CLM maintenance inherits native
+compaction's `contextWindow * compaction.triggerRatio` threshold and falls back
+to native compaction if no valid useful edit can be accepted.
 
 `compaction.autoClm.enabled = false` disables automatic CLM maintenance while
 retaining the working view, manual edits, and native compaction.

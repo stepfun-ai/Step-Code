@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@step-harness/agent-core";
 import type { AssistantMessage, Context, ToolResultMessage } from "@step-harness/providers";
+import { estimateTextTokens } from "@step-harness/providers";
 import type { CustomMessage } from "../../messages.ts";
 import { buildContextEntries, type SessionManager, sessionEntryToContextMessages } from "../../session-manager.ts";
 import { resolveToCwd } from "../../tools/path-utils.ts";
@@ -559,8 +560,9 @@ export class LiveContextManager {
 	}
 
 	estimate(context: Context): number {
-		const chars = (context.systemPrompt?.length ?? 0) + JSON.stringify(context.tools ?? []).length;
-		const raw = Math.ceil(chars / 4) + sumTokens(context.messages);
+		const overhead =
+			estimateTextTokens(context.systemPrompt ?? "") + estimateTextTokens(JSON.stringify(context.tools ?? []));
+		const raw = overhead + sumTokens(context.messages);
 		return Math.ceil(raw * this.factor);
 	}
 	recordRequest(context: Context, model: string): number {
@@ -581,7 +583,9 @@ export class LiveContextManager {
 			return;
 		const observed = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
 		if (observed > 0 && request.tokens > 0)
-			this.factor = Math.max(1, Math.min(4, 0.75 * this.factor + (0.25 * observed) / request.tokens));
+			// Byte pricing slightly overestimates CJK (0.75 vs ~0.6 token per character), so the
+			// factor may fall below 1; it still cannot collapse below half the heuristic.
+			this.factor = Math.max(0.5, Math.min(4, 0.75 * this.factor + (0.25 * observed) / request.tokens));
 	}
 
 	/** Project the same source ranges chosen by the existing compactor; retain its prompts and skill/file tracking. */

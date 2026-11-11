@@ -1,7 +1,7 @@
 import type { AgentMessage, AgentTool } from "@step-harness/agent-core";
 import { type Context, fauxAssistantMessage, fauxToolCall } from "@step-harness/providers";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHarness, type Harness, type HarnessOptions } from "./harness.ts";
 
 const active: Harness[] = [];
@@ -49,7 +49,8 @@ async function setup(
 		models: [{ id: "automatic-clm", contextWindow: options.contextWindow ?? 64000, maxTokens: 8192 }],
 		settings: {
 			compaction: {
-				...(options.mode === undefined ? {} : { contextProjection: options.mode }),
+				// CLM is opt-in; these tests exercise it unless a mode is given.
+				contextProjection: options.mode ?? "clm-v1",
 				...(options.triggerPolicy === undefined ? {} : { triggerPolicy: options.triggerPolicy }),
 				enabled: options.native ?? true,
 				reserveTokens: options.contextWindow ? 2048 : 8192,
@@ -108,6 +109,19 @@ describe("automatic CLM maintenance", () => {
 		expect(h.eventsOfType("compaction_start")).toHaveLength(0);
 		expect(taskRequest?.tools?.some((tool) => tool.name === "apply_context_edit")).toBe(false);
 	});
+	it("uses native compaction instead of a cold full-context maintenance request", async () => {
+		const h = await setup({ alignNativeThreshold: true });
+		h.settingsManager.applyOverrides({ compaction: { autoClm: { coldMaxPrefillTokens: 8_000 } } });
+		seed(h, "old completed observation\n".repeat(8800));
+		h.setResponses([
+			() => fauxAssistantMessage("## User Goal\nPreserve output order."),
+			() => fauxAssistantMessage("done"),
+		]);
+		await h.session.prompt("NEW REQUIREMENT: preserve output order");
+		expect(h.eventsOfType("auto_clm_start")).toHaveLength(0);
+		expect(h.eventsOfType("compaction_start").map((event) => event.reason)).toEqual(["threshold"]);
+	});
+
 	it("tries default CLM first when an ordinary prompt crosses the native threshold", async () => {
 		const h = await setup({ alignNativeThreshold: true });
 		seed(h, "old completed observation\n".repeat(8800));
@@ -470,6 +484,16 @@ describe("automatic CLM maintenance", () => {
 		};
 		const h = await setup({ tools: [bulk, slow], contextWindow: 16000 });
 		seed(h, "brief prior state");
+		// This window's native threshold (8,000) sits below CLM's 60% soft threshold, so once
+		// the oversized tool batch can be cut, native compaction would rightly run while CLM
+		// waits. Suppress only native threshold compaction to isolate CLM's batch deferral.
+		const internals = h.session as unknown as {
+			_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+		};
+		const runAutoCompaction = internals._runAutoCompaction.bind(h.session);
+		vi.spyOn(internals, "_runAutoCompaction").mockImplementation(async (reason, willRetry) =>
+			reason === "threshold" ? false : runAutoCompaction(reason, willRetry),
+		);
 		h.setResponses([
 			fauxAssistantMessage([fauxToolCall("bulk", {}), fauxToolCall("slow", {})], { stopReason: "toolUse" }),
 			(context) => {

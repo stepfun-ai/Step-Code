@@ -4,9 +4,9 @@
  * The threshold is a fraction of the model's context window, capped so the
  * next response keeps usable output room. Providers clamp each request's
  * `max_tokens` to `contextWindow - input - CONTEXT_SAFETY_TOKENS`; on a large
- * window the remaining fraction covers that margin and estimation error, but
- * on a small window 10% can be smaller than the margin itself (about 3.3K
- * tokens of a 32K window against a 4,096-token margin), which would clamp
+ * window the remaining 15% covers that margin and estimation error, but on a
+ * small window it can be smaller than the margin plus the response reservation
+ * (about 4.9K tokens of a 32K window against 4,096 + 8,192), which would clamp
  * output to almost nothing before compaction fires. See
  * {@link resolveCompactionThreshold}.
  */
@@ -15,7 +15,7 @@ import { CONTEXT_SAFETY_TOKENS } from "@step-harness/providers";
 
 export type CompactionTriggerPolicy = "v2" | "legacy";
 
-export const DEFAULT_COMPACTION_TRIGGER_RATIO = 0.9;
+export const DEFAULT_COMPACTION_TRIGGER_RATIO = 0.85;
 export const MIN_COMPACTION_TRIGGER_RATIO = 0.5;
 export const MAX_COMPACTION_TRIGGER_RATIO = 0.95;
 
@@ -159,7 +159,8 @@ function responseHeadroomCeiling(model: CompactionTriggerModel): number {
  * | 16,384 | 8,192 | 50% (floor) |
  * | 32,768 | 20,480 | 62.5% |
  * | 65,536 | 53,248 | 81.25% |
- * | 131,072 and larger | `contextWindow * 0.9` | 90% |
+ * | 131,072 | 111,411 | 85% |
+ * | 1,000,000 | 850,000 | 85% |
  *
  * `tokenLimit` and an explicit legacy reserve can only move it earlier.
  */

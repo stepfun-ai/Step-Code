@@ -11,8 +11,40 @@ export interface ContextUsageEstimate {
 	lastUsageIndex: number | null;
 }
 
-const CHARS_PER_TOKEN = 4;
-const ESTIMATED_IMAGE_CHARS = 4800;
+/**
+ * UTF-8 bytes per token, the unit providers actually bill.
+ *
+ * English prose and code sit near four bytes per token. CJK does not: one han
+ * character is three UTF-8 bytes but only ~0.75 token, while JavaScript's
+ * `string.length` counts it as one character and the old `length / 4` estimate
+ * therefore reported a quarter of its real cost. Counting bytes keeps English
+ * estimates unchanged and stops CJK text from being undercounted by ~2.5x,
+ * which is what let requests exceed the window while the host still believed
+ * they fit.
+ */
+const BYTES_PER_TOKEN = 4;
+const ESTIMATED_IMAGE_TOKENS = 1200;
+const NON_ASCII = /[^\x00-\x7f]/;
+
+/** UTF-8 byte length without allocating an encoded copy. */
+export function textUtf8ByteLength(text: string): number {
+	if (!NON_ASCII.test(text)) return text.length;
+	let bytes = text.length;
+	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		if (code < 0x80) continue;
+		if (code < 0x800) {
+			bytes += 1;
+		} else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+			// One astral character: two UTF-16 units already counted, four bytes in UTF-8.
+			bytes += 2;
+			i++;
+		} else {
+			bytes += 2;
+		}
+	}
+	return bytes;
+}
 
 export function calculateContextTokens(usage: Usage): number {
 	return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
@@ -26,38 +58,36 @@ function safeJsonStringify(value: unknown): string {
 	}
 }
 
-function estimateTextAndImageContentChars(content: string | Array<TextContent | ImageContent>): number {
-	if (typeof content === "string") return content.length;
-
-	let chars = 0;
-	for (const block of content) chars += block.type === "text" ? block.text.length : ESTIMATED_IMAGE_CHARS;
-	return chars;
-}
-
 export function estimateTextTokens(text: string): number {
-	return Math.ceil(text.length / CHARS_PER_TOKEN);
+	return Math.ceil(textUtf8ByteLength(text) / BYTES_PER_TOKEN);
 }
 
 export function estimateTextAndImageContentTokens(content: string | Array<TextContent | ImageContent>): number {
-	return Math.ceil(estimateTextAndImageContentChars(content) / CHARS_PER_TOKEN);
+	if (typeof content === "string") return estimateTextTokens(content);
+
+	let tokens = 0;
+	for (const block of content) {
+		tokens += block.type === "text" ? estimateTextTokens(block.text) : ESTIMATED_IMAGE_TOKENS;
+	}
+	return tokens;
 }
 
 export function estimateMessageTokens(message: Message): number {
-	let chars = 0;
+	let tokens = 0;
 
 	if (message.role === "user") return estimateTextAndImageContentTokens(message.content);
 	if (message.role === "toolResult") return estimateTextAndImageContentTokens(message.content);
 
 	for (const block of message.content) {
 		if (block.type === "text") {
-			chars += block.text.length;
+			tokens += estimateTextTokens(block.text);
 		} else if (block.type === "thinking") {
-			chars += block.thinking.length;
+			tokens += estimateTextTokens(block.thinking);
 		} else {
-			chars += block.name.length + safeJsonStringify(block.arguments).length;
+			tokens += estimateTextTokens(block.name) + estimateTextTokens(safeJsonStringify(block.arguments));
 		}
 	}
-	return Math.ceil(chars / CHARS_PER_TOKEN);
+	return tokens;
 }
 
 function getLastAssistantUsageInfo(messages: readonly Message[]): { usage: Usage; index: number } | undefined {
