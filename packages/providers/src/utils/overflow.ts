@@ -78,15 +78,50 @@ const NON_OVERFLOW_PATTERNS = [
 ];
 
 /**
+ * Wording that rejects a request without naming a reason.
+ *
+ * The Step gateway returns the same `invalid_request_error` body
+ * (`The input you provided is invalid [code=30003]`) when input plus the output
+ * reservation exceed the window, and it can also mean a genuinely malformed
+ * request. Matching the text alone would compact perfectly valid small requests,
+ * so this only counts as overflow when the caller passes size evidence proving
+ * the rejected request was near the window.
+ */
+const AMBIGUOUS_OVERFLOW_PATTERNS = [/the input you provided is invalid/i];
+
+/** Share of the window a rejected request must have consumed to read the rejection as overflow. */
+export const AMBIGUOUS_OVERFLOW_WINDOW_RATIO = 0.95;
+
+/**
+ * Share of the window the prompt alone must fill. Without it, a model whose output
+ * limit is large relative to its window (200K window, 128K output) would read the
+ * same wording as overflow at about 31% of the window, compacting malformed small
+ * requests for nothing.
+ */
+export const AMBIGUOUS_OVERFLOW_MIN_INPUT_RATIO = 0.5;
+
+/** Prompt size of a request that was rejected, measured before it was sent. */
+export interface OverflowSizeEvidence {
+	/** Estimated prompt tokens of the rejected request. */
+	inputTokens: number;
+	/** Output reservation the same request asked for. */
+	maxTokens: number;
+}
+
+/**
  * Check if an assistant message represents a context overflow error.
  *
- * This handles three cases:
+ * This handles four cases:
  * 1. Error-based overflow: Most providers return stopReason "error" with a
  *    specific error message pattern.
  * 2. Silent overflow: Some providers accept overflow requests and return
  *    successfully. For these, we check if usage.input exceeds the context window.
  * 3. Length-stop overflow: Xiaomi MiMo can return "length" with zero output when
  *    the input fills the context window.
+ * 4. Unnamed rejection near the window: some gateways answer an oversized request
+ *    with a generic invalid-request body and no reason. That wording alone is not
+ *    enough, so those callers use {@link isUnnamedOverflowRejection} with size
+ *    evidence instead of this function.
  *
  * ## Reliability by Provider
  *
@@ -106,6 +141,7 @@ const NON_OVERFLOW_PATTERNS = [
  * - Kimi For Coding: "exceeded model token limit: X (requested: Y)"
  * - DS4: "Prompt has X tokens, but the configured context size is Y tokens"
  * - DashScope/Qwen: "Range of input length should be [1, X]"
+ * - Step gateway: unnamed "The input you provided is invalid" plus size evidence
  *
  * **Unreliable detection:**
  * - z.ai: Sometimes accepts overflow silently (detectable via usage.input > contextWindow),
@@ -160,6 +196,37 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 	}
 
 	return false;
+}
+
+/**
+ * Check whether a rejection uses wording that does not name a reason, and the
+ * rejected request was big enough to explain it as overflow.
+ *
+ * Some gateways answer an oversized request with a generic invalid-request body
+ * ("The input you provided is invalid") that carries no overflow signal at all.
+ * The same body can also mean a genuinely malformed request, so size evidence
+ * decides: the prompt must fill at least {@link AMBIGUOUS_OVERFLOW_MIN_INPUT_RATIO}
+ * of the window, and at least {@link AMBIGUOUS_OVERFLOW_WINDOW_RATIO} once its
+ * output reservation is added.
+ *
+ * @param message - The assistant message to check
+ * @param contextWindow - Model context window
+ * @param evidence - Lazily measured prompt size; only called when the wording matches
+ * @returns true when the rejection is best explained by context overflow
+ */
+export function isUnnamedOverflowRejection(
+	message: AssistantMessage,
+	contextWindow: number,
+	evidence: () => OverflowSizeEvidence | undefined,
+): boolean {
+	if (contextWindow <= 0 || message.stopReason !== "error" || !message.errorMessage) return false;
+	const text = message.errorMessage;
+	if (NON_OVERFLOW_PATTERNS.some((pattern) => pattern.test(text))) return false;
+	if (!AMBIGUOUS_OVERFLOW_PATTERNS.some((pattern) => pattern.test(text))) return false;
+	const size = evidence();
+	if (!size || size.inputTokens < contextWindow * AMBIGUOUS_OVERFLOW_MIN_INPUT_RATIO) return false;
+	const requested = size.inputTokens + Math.max(0, size.maxTokens);
+	return requested >= contextWindow * AMBIGUOUS_OVERFLOW_WINDOW_RATIO;
 }
 
 /**

@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { buildBaseOptions } from "../src/api/simple-options.ts";
 import type { AssistantMessage, Context, Model, Usage } from "../src/types.ts";
-import { estimateContextTokens } from "../src/utils/estimate.ts";
+import { estimateContextTokens, estimateTextTokens, textUtf8ByteLength } from "../src/utils/estimate.ts";
 
 function createUsage(totalTokens: number): Usage {
 	return {
@@ -164,5 +164,44 @@ describe("context token estimation", () => {
 			trailingTokens: 1,
 			lastUsageIndex: 3,
 		});
+	});
+});
+
+describe("UTF-8 token estimation", () => {
+	it("keeps ASCII text at four characters per token", () => {
+		const text = "a".repeat(4_000);
+		expect(textUtf8ByteLength(text)).toBe(4_000);
+		expect(estimateTextTokens(text)).toBe(1_000);
+	});
+
+	it("prices CJK text at its real UTF-8 cost instead of a quarter of it", () => {
+		// One han character is three UTF-8 bytes: ~0.75 token, not ~0.25.
+		const text = "构建失败：解析器在第四十二行抛出断言错误".repeat(100);
+		expect(textUtf8ByteLength(text)).toBe(text.length * 3);
+		expect(estimateTextTokens(text)).toBe(Math.ceil((text.length * 3) / 4));
+		expect(estimateTextTokens(text)).toBeGreaterThan(Math.ceil(text.length / 4) * 2.9);
+	});
+
+	it("counts astral characters as four bytes", () => {
+		const emoji = "\u{1f600}";
+		expect(textUtf8ByteLength(emoji)).toBe(4);
+		expect(estimateTextTokens(emoji.repeat(250))).toBe(250);
+	});
+
+	it("prices mixed content block by block", () => {
+		const context: Context = {
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "ab".repeat(1_000) },
+						{ type: "image", mimeType: "image/png", data: "ignored" },
+					],
+					timestamp: 1,
+				},
+			],
+		};
+		// 2,000 ASCII bytes = 500 tokens, plus the fixed 1,200-token image estimate.
+		expect(estimateContextTokens(context).tokens).toBe(1_700);
 	});
 });

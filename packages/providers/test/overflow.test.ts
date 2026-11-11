@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../src/types.ts";
-import { isContextOverflow, isRecoverableLength } from "../src/utils/overflow.ts";
+import { isContextOverflow, isRecoverableLength, isUnnamedOverflowRejection } from "../src/utils/overflow.ts";
 
 function createErrorMessage(errorMessage: string): AssistantMessage {
 	return {
@@ -173,5 +173,51 @@ describe("isContextOverflow", () => {
 	it("does not treat zero-output length stops far below context as context overflow", () => {
 		const message = createLengthStopMessage({ input: 100, cacheRead: 0, output: 0 });
 		expect(isContextOverflow(message, 200000)).toBe(false);
+	});
+});
+
+describe("unnamed overflow rejection", () => {
+	const gateway = (message: string) => createErrorMessage(message);
+	const unnamed =
+		'400 {"type":"error","error":{"type":"invalid_request_error","message":"The input you provided is invalid [trace_id=abc code=30003]"}}';
+
+	it("treats a near-window request as overflow", () => {
+		const evidence = () => ({ inputTokens: 952_000, maxTokens: 128_000 });
+		expect(isUnnamedOverflowRejection(gateway(unnamed), 1_000_000, evidence)).toBe(true);
+	});
+
+	it("does not treat the same wording on a small request as overflow", () => {
+		const evidence = () => ({ inputTokens: 20_000, maxTokens: 128_000 });
+		expect(isUnnamedOverflowRejection(gateway(unnamed), 1_000_000, evidence)).toBe(false);
+	});
+
+	it("does not measure unless the wording matches", () => {
+		let measured = 0;
+		const evidence = () => {
+			measured++;
+			return { inputTokens: 952_000, maxTokens: 128_000 };
+		};
+		expect(isUnnamedOverflowRejection(gateway("429 rate limit exceeded"), 1_000_000, evidence)).toBe(false);
+		expect(measured).toBe(0);
+	});
+
+	it("leaves text-matched overflow to isContextOverflow", () => {
+		const evidence = () => ({ inputTokens: 952_000, maxTokens: 128_000 });
+		const message = gateway("prompt is too long: 213462 tokens > 200000 maximum");
+		expect(isContextOverflow(message, 1_000_000)).toBe(true);
+		expect(isUnnamedOverflowRejection(message, 1_000_000, evidence)).toBe(false);
+	});
+
+	it("needs the prompt alone to fill half the window", () => {
+		// 70K + 128K = 198K passes the 95% check on a 200K window, but 70K of input is too
+		// small a share to blame the rejection on size.
+		const evidence = () => ({ inputTokens: 70_000, maxTokens: 128_000 });
+		expect(isUnnamedOverflowRejection(gateway(unnamed), 200_000, evidence)).toBe(false);
+		const nearFull = () => ({ inputTokens: 120_000, maxTokens: 128_000 });
+		expect(isUnnamedOverflowRejection(gateway(unnamed), 200_000, nearFull)).toBe(true);
+	});
+
+	it("requires size evidence", () => {
+		expect(isUnnamedOverflowRejection(gateway(unnamed), 1_000_000, () => undefined)).toBe(false);
 	});
 });
