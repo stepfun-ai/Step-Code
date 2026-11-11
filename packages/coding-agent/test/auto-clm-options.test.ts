@@ -11,8 +11,14 @@ const eligible = {
 };
 
 describe("host-scheduled CLM settings", () => {
-	it("enables bounded maintenance for the default clm-v1 mode", () => {
-		const settings = SettingsManager.inMemory();
+	it("bounds cold maintenance requests by default and lets 0 disable it", () => {
+		expect(resolveAutoClmSettings().coldMaxPrefillTokens).toBe(262_144);
+		expect(resolveAutoClmSettings({ coldMaxPrefillTokens: 0 }).coldMaxPrefillTokens).toBe(0);
+		expect(resolveAutoClmSettings({ coldMaxPrefillTokens: -5 }).coldMaxPrefillTokens).toBe(262_144);
+	});
+
+	it("enables bounded maintenance once clm-v1 is selected", () => {
+		const settings = SettingsManager.inMemory({ compaction: { contextProjection: "clm-v1" } });
 		expect(settings.getAutoClmSettings().enabled).toBe(true);
 		expect(settings.getContextProjectionMode()).toBe("clm-v1");
 		expect(resolveAutoClmSettings()).toMatchObject({

@@ -8,10 +8,13 @@
 import type { AgentMessage, StreamFn, ThinkingLevel } from "@step-harness/agent-core";
 import {
 	contentText,
+	estimateTextTokens,
 	isContextOverflow,
+	isUnnamedOverflowRejection,
 	type RetryCallbacks,
 	type RetryPolicy,
 	retryAssistantCall,
+	textUtf8ByteLength,
 	uuidv7,
 } from "@step-harness/providers";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "@step-harness/providers/compat";
@@ -270,64 +273,57 @@ export function shouldCompact(contextTokens: number, contextWindow: number, sett
 // Cut point detection
 // ============================================================================
 
-const ESTIMATED_IMAGE_CHARS = 4800;
+/** Fixed per-image estimate; images carry no text to measure by bytes. */
+const ESTIMATED_IMAGE_TOKENS = 1200;
 
-function estimateTextAndImageContentChars(content: string | Array<{ type: string; text?: string }>): number {
-	if (typeof content === "string") {
-		return content.length;
-	}
+/** Content blocks mix text (priced by UTF-8 bytes) with images (fixed estimate). */
+function estimateTextAndImageTokens(content: string | Array<{ type: string; text?: string }>): number {
+	if (typeof content === "string") return estimateTextTokens(content);
 
-	let chars = 0;
+	let tokens = 0;
 	for (const block of content) {
-		if (block.type === "text" && block.text) {
-			chars += block.text.length;
-		} else if (block.type === "image") {
-			chars += ESTIMATED_IMAGE_CHARS;
-		}
+		if (block.type === "text" && block.text) tokens += estimateTextTokens(block.text);
+		else if (block.type === "image") tokens += ESTIMATED_IMAGE_TOKENS;
 	}
-	return chars;
+	return tokens;
 }
 
 /**
- * Estimate token count for a message using chars/4 heuristic.
- * This is conservative (overestimates tokens).
+ * Estimate token count for a message from its UTF-8 payload size.
+ * ASCII text keeps the previous four-bytes-per-token result; CJK text is
+ * counted at its real cost instead of a quarter of it.
  */
 export function estimateTokens(message: AgentMessage): number {
-	let chars = 0;
-
 	switch (message.role) {
 		case "user": {
-			chars = estimateTextAndImageContentChars(
+			return estimateTextAndImageTokens(
 				(message as { content: string | Array<{ type: string; text?: string }> }).content,
 			);
-			return Math.ceil(chars / 4);
 		}
 		case "assistant": {
 			const assistant = message as AssistantMessage;
+			let tokens = 0;
 			for (const block of assistant.content) {
 				if (block.type === "text") {
-					chars += block.text.length;
+					tokens += estimateTextTokens(block.text);
 				} else if (block.type === "thinking") {
-					chars += block.thinking.length;
+					tokens += estimateTextTokens(block.thinking);
 				} else if (block.type === "toolCall") {
-					chars += block.name.length + safeJsonStringify(block.arguments).length;
+					tokens += estimateTextTokens(block.name) + estimateTextTokens(safeJsonStringify(block.arguments));
 				}
 			}
-			return Math.ceil(chars / 4);
+			return tokens;
 		}
 		case "custom":
 		case "toolResult": {
-			chars = estimateTextAndImageContentChars(message.content);
-			return Math.ceil(chars / 4);
+			return estimateTextAndImageTokens(message.content);
 		}
 		case "bashExecution": {
-			chars = message.command.length + message.output.length;
-			return Math.ceil(chars / 4);
+			return estimateTextTokens(message.command) + estimateTextTokens(message.output);
 		}
 		case "branchSummary":
 		case "compactionSummary": {
-			chars = message.summary.length;
-			return Math.ceil(chars / 4);
+			return estimateTextTokens(message.summary);
 		}
 	}
 
@@ -456,13 +452,10 @@ export function findCutPoint(
 
 		// Check if we've exceeded the budget
 		if (accumulatedTokens >= keepRecentTokens) {
-			// Find the closest valid cut point at or after this entry
-			for (let c = 0; c < cutPoints.length; c++) {
-				if (cutPoints[c] >= i) {
-					cutIndex = cutPoints[c];
-					break;
-				}
-			}
+			// Closest valid cut point at or after this entry. When the newest message alone exceeds
+			// the budget and is a tool result (never a cut point), nothing qualifies; keep from the
+			// newest cut point instead of keeping everything, which left nothing to summarize.
+			cutIndex = cutPoints.find((candidate) => candidate >= i) ?? cutPoints[cutPoints.length - 1];
 			break;
 		}
 	}
@@ -732,10 +725,10 @@ async function completeSummaryWithOverflowRecovery(
 ): Promise<AssistantMessage> {
 	let conversation = serializeConversation(convertToLlm(messages));
 	let context = buildSummarizationContext(buildPrompt(conversation));
-	const promptOverhead = buildPrompt("").length;
-	const estimateRequestTokens = (conversationChars: number) =>
-		Math.ceil(SUMMARIZATION_SYSTEM_PROMPT.length / 4) + Math.ceil((promptOverhead + conversationChars) / 4);
-	const originalTokens = estimateRequestTokens(conversation.length);
+	const promptOverheadBytes = textUtf8ByteLength(buildPrompt(""));
+	const estimateRequestTokens = (conversationBytes: number) =>
+		estimateTextTokens(SUMMARIZATION_SYSTEM_PROMPT) + Math.ceil((promptOverheadBytes + conversationBytes) / 4);
+	const originalTokens = estimateRequestTokens(textUtf8ByteLength(conversation));
 	let rejectedTokens = originalTokens;
 	let reductions = 0;
 	let reduceSource: ReturnType<typeof createSummarySourceReducer>;
@@ -771,7 +764,16 @@ async function completeSummaryWithOverflowRecovery(
 			usage = usage ? combineUsage(usage, response.usage) : response.usage;
 			if (options.signal?.aborted) throw new Error("Compaction cancelled");
 			// Do not infer overflow from successful usage or empty/length-limited output.
-			if (response.stopReason !== "error" || !isContextOverflow(response)) return response;
+			const overflowEvidence = () => ({
+				inputTokens: estimateRequestTokens(textUtf8ByteLength(conversation)),
+				maxTokens: requestOptions.maxTokens ?? model.maxTokens ?? 0,
+			});
+			if (
+				response.stopReason !== "error" ||
+				(!isContextOverflow(response, model.contextWindow) &&
+					!isUnnamedOverflowRejection(response, model.contextWindow, overflowEvidence))
+			)
+				return response;
 
 			const fraction = SUMMARY_OVERFLOW_TARGETS[reductions];
 			if (fraction === undefined) {
@@ -789,7 +791,7 @@ async function completeSummaryWithOverflowRecovery(
 			}
 			reductions++;
 			conversation = reduced;
-			rejectedTokens = estimateRequestTokens(conversation.length);
+			rejectedTokens = estimateRequestTokens(textUtf8ByteLength(conversation));
 			context = buildSummarizationContext(buildPrompt(conversation));
 		}
 	};

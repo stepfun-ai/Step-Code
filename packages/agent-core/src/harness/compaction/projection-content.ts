@@ -5,6 +5,7 @@
  */
 
 import type { ImageContent, Message, TextContent, ToolResultMessage, UserMessage } from "@step-harness/providers";
+import { estimateMessageTokens as estimateProviderMessageTokens } from "@step-harness/providers";
 
 // ============================================================================
 // Rewrite markers
@@ -30,7 +31,6 @@ export function containsProjectionMarker(text: string): boolean {
 // Content sizing
 // ============================================================================
 
-const CHARS_PER_TOKEN = 4;
 const ESTIMATED_IMAGE_CHARS = 4800;
 
 function safeJsonStringify(value: unknown): string {
@@ -64,14 +64,16 @@ export function totalContentChars(messages: readonly Message[]): number {
 	return chars;
 }
 
-/** chars/4 estimate, deliberately simple and deterministic. */
+/** UTF-8 bytes/4 estimate shared with the compaction trigger, deliberately simple and deterministic. */
 export function estimateProjectionTokens(messages: readonly Message[]): number {
-	return Math.ceil(totalContentChars(messages) / CHARS_PER_TOKEN);
+	let tokens = 0;
+	for (const message of messages) tokens += estimateMessageTokens(message);
+	return tokens;
 }
 
-/** chars/4 estimate for a single message. */
+/** UTF-8 bytes/4 estimate for a single message; CJK text is priced at its real cost. */
 export function estimateMessageTokens(message: Message): number {
-	return Math.ceil(messageContentChars(message) / CHARS_PER_TOKEN);
+	return estimateProviderMessageTokens(message);
 }
 
 // ============================================================================

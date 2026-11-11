@@ -360,6 +360,44 @@ describe("findCutPoint", () => {
 		expect(role === "user" || role === "assistant").toBe(true);
 	});
 
+	it("summarizes older history when the newest tool result alone exceeds the budget", () => {
+		const call: AssistantMessage = {
+			...createAssistantMessage(""),
+			content: [{ type: "toolCall", id: "call-big", name: "read", arguments: { path: "说明.md" } }],
+			stopReason: "toolUse",
+		};
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("older request")),
+			createMessageEntry(createAssistantMessage("older answer ".repeat(200))),
+			createMessageEntry(createUserMessage("read the big file")),
+			createMessageEntry(call),
+			createMessageEntry({
+				role: "toolResult",
+				toolCallId: "call-big",
+				toolName: "read",
+				content: [{ type: "text", text: "构建失败".repeat(20_000) }],
+				isError: false,
+				timestamp: Date.now(),
+			}),
+			// Trailing metadata entries carry no context; they must not hide the cut point.
+			{
+				type: "custom",
+				customType: "step.activity",
+				data: {},
+				id: "meta-1",
+				parentId: lastId,
+				timestamp: new Date().toISOString(),
+			},
+		];
+
+		const result = findCutPoint(entries, 0, entries.length, 20_000);
+
+		// Keep the oversized tool batch from its call, and summarize everything older.
+		expect(result.firstKeptEntryIndex).toBe(3);
+		expect(result.isSplitTurn).toBe(true);
+		expect(result.turnStartIndex).toBe(2);
+	});
+
 	it("should return startIndex if no valid cut points in range", () => {
 		const entries: SessionEntry[] = [createMessageEntry(createAssistantMessage("a"))];
 		const result = findCutPoint(entries, 0, entries.length, 1000);

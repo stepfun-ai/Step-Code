@@ -10,6 +10,12 @@ export interface AutoClmSettings {
 	maxOutputTokens: number;
 	minSavingsTokens: number;
 	minSavingsRatio: number;
+	/**
+	 * Largest maintenance request sent without a reusable cached prefix; 0 disables the bound.
+	 * A cold maintenance request recomputes the whole context before the task can start
+	 * (about 30s measured at 975K tokens), so above this size native compaction is used.
+	 */
+	coldMaxPrefillTokens: number;
 }
 
 export const DEFAULT_AUTO_CLM_SETTINGS: Readonly<AutoClmSettings> = Object.freeze({
@@ -21,6 +27,7 @@ export const DEFAULT_AUTO_CLM_SETTINGS: Readonly<AutoClmSettings> = Object.freez
 	maxOutputTokens: 8_192,
 	minSavingsTokens: 1_024,
 	minSavingsRatio: 0.05,
+	coldMaxPrefillTokens: 262_144,
 });
 
 function number(value: unknown, fallback: number, min: number, max: number, integer = false): number {
@@ -52,6 +59,7 @@ export function resolveAutoClmSettings(settings?: Partial<AutoClmSettings>): Aut
 		maxOutputTokens: number(raw.maxOutputTokens, defaults.maxOutputTokens, 512, 32_768, true),
 		minSavingsTokens: number(raw.minSavingsTokens, defaults.minSavingsTokens, 1, 1_000_000, true),
 		minSavingsRatio: number(raw.minSavingsRatio, defaults.minSavingsRatio, 0.01, 0.5),
+		coldMaxPrefillTokens: number(raw.coldMaxPrefillTokens, defaults.coldMaxPrefillTokens, 0, 100_000_000, true),
 	};
 }
 

@@ -17,11 +17,11 @@ const model = (contextWindow: number, id = "m", maxTokens?: number) => ({
 
 describe("compaction trigger policy", () => {
 	it.each([
-		[128_000, 115_200],
-		[131_072, 117_964],
-		[200_000, 180_000],
-		[1_000_000, 900_000],
-	])("triggers at 90%% of a %i-token window by default", (contextWindow, threshold) => {
+		[128_000, 108_800],
+		[131_072, 111_411],
+		[200_000, 170_000],
+		[1_000_000, 850_000],
+	])("triggers at 85%% of a %i-token window by default", (contextWindow, threshold) => {
 		const { settings, warnings } = resolveCompactionTriggerSettings();
 		expect(warnings).toEqual([]);
 		expect(settings.policy).toBe("v2");
@@ -71,7 +71,7 @@ describe("compaction trigger policy", () => {
 		).toBe(150_000);
 		expect(
 			resolveCompactionThreshold(model(200_000), resolveCompactionTriggerSettings({ tokenLimit: 500_000 }).settings),
-		).toBe(180_000);
+		).toBe(170_000);
 		expect(
 			resolveCompactionThreshold(
 				model(1_048_576),
@@ -83,12 +83,12 @@ describe("compaction trigger policy", () => {
 				model(200_000),
 				resolveCompactionTriggerSettings({ reserveTokens: 8_192 }).settings,
 			),
-		).toBe(180_000);
+		).toBe(170_000);
 		// A reserve that leaves no room is ignored rather than triggering on every request.
 		for (const reserveTokens of [200_000, 250_000]) {
 			expect(
 				resolveCompactionThreshold(model(200_000), resolveCompactionTriggerSettings({ reserveTokens }).settings),
-			).toBe(180_000);
+			).toBe(170_000);
 		}
 	});
 
