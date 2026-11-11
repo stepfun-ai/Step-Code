@@ -22,7 +22,7 @@ import {
 	readStepPluginManifest,
 	type StepPluginProvision,
 } from "./plugins.ts";
-import { ensureStepPageReady, isManagedStepPageCommand } from "./steppage-provision.ts";
+import { ensureStepPageReady, isManagedStepPageCommand, redactStepPageSecrets } from "./steppage-provision.ts";
 import { STEPCODE_VERSION } from "./version.ts";
 
 export { resolveStepMcpEnvironment } from "./mcp-environment.ts";
@@ -694,6 +694,7 @@ export function describeMcpStartFailure(input: {
 	provision?: StepPluginProvision;
 	error: unknown;
 	env?: NodeJS.ProcessEnv;
+	platform?: NodeJS.Platform;
 }): string {
 	const detail = input.error instanceof Error ? input.error.message : String(input.error);
 	if (
@@ -708,8 +709,17 @@ export function describeMcpStartFailure(input: {
 		return `MCP server '${input.name}' could not start: ${detail}\nAuthenticate with: step mcp login ${quoted}, then restart Step.`;
 	}
 	if (!isMissingExecutable(input.error)) return `MCP server '${input.name}' could not start: ${detail}`;
-	const install = input.provision ? provisionInstallCommand(input.provision, input.env ?? process.env) : undefined;
-	const remedy = install ? `Install it with: ${install}, then restart Step.` : "Install it, then restart Step.";
+	const nativeWindowsPreparation =
+		(input.platform ?? process.platform) === "win32" && input.provision?.installer === "steppageInstaller";
+	const install =
+		input.provision && !nativeWindowsPreparation
+			? provisionInstallCommand(input.provision, input.env ?? process.env)
+			: undefined;
+	const remedy = nativeWindowsPreparation
+		? "Run: step mcp prepare, then restart Step."
+		: install
+			? `Install it with: ${redactStepPageSecrets(install, input.env ?? process.env)}, then restart Step.`
+			: "Install it, then restart Step.";
 	return `MCP server '${input.name}' could not start: '${input.command}' is not installed or not on PATH. ${remedy}`;
 }
 
