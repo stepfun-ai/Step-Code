@@ -13,15 +13,14 @@ For TypeScript definitions in your project, inspect `node_modules/@step-harness/
 
 ## Overview
 
-[Model-managed working context (CLM)](context-management.md) is the default
-compression mode. At the existing context threshold, Step first asks the model
-to shorten eligible old observations in a validated working view. It keeps the
-canonical history and protects user requirements and current tool groups. If no
-useful edit is accepted, Step falls back to the native summary compaction
-explained below. Provider context overflow goes directly to native recovery.
-
-Use `--context-projection off` or `compaction.contextProjection = "off"` to select
-native compaction explicitly. `/compact` still requests a native summary;
+Native summary compaction, explained below, is the default compression mode.
+[Model-managed working context (CLM)](context-management.md) is opt-in: with
+`--context-projection clm-v1`, `compaction.contextProjection = "clm-v1"`, or
+`/clm on`, Step first asks the model at the threshold to shorten eligible old
+observations in a validated working view, keeping the canonical history and
+protecting user requirements and current tool groups. If no useful edit is
+accepted, it falls back to native compaction. Provider context overflow always
+goes directly to native recovery. `/compact` still requests a native summary;
 `/clm-compact` requests an explicit working-context edit. A settled CLM response
 with no queued continuation leaves routine maintenance until the next request.
 
@@ -38,7 +37,7 @@ Both use the same structured summary format and track file operations cumulative
 
 Native compaction failures include a safe configuration snapshot in the error shown by TUI, RPC, and SDK. The snapshot reports the runtime model/provider/API, context window, model output limit, selected summary output budget, observed payload output budget when available, approximate input size, reasoning option, request attempts and elapsed time, stop reason and error kind. It also includes compaction reserve/retention and retry settings.
 
-`selectedMaxTokens` is the caller's budget; `observedPayloadMaxTokens` is the numeric output cap observed through the provider payload callback after context/adapter adjustments. Custom streams that do not invoke this callback report `unknown`. Input estimates use serialized characters/4, not the provider tokenizer. Configuration provenance is currently `unknown`; values describe effective runtime settings, not a guessed disk configuration.
+`selectedMaxTokens` is the caller's budget; `observedPayloadMaxTokens` is the numeric output cap observed through the provider payload callback after context/adapter adjustments. Custom streams that do not invoke this callback report `unknown`. Input estimates use serialized UTF-8 bytes/4, not the provider tokenizer. Configuration provenance is currently `unknown`; values describe effective runtime settings, not a guessed disk configuration.
 
 Non-cancelled failures append a versioned `step-compaction-failure` custom entry to the session JSONL (when persistence is enabled). This entry is not added to model context and contains no failed summary, prompt, headers, URL, or environment dump. Credential-shaped error text is redacted. Failure to persist diagnostics does not replace the original error. Cancelled requests do not create failure entries.
 
@@ -57,11 +56,11 @@ contextTokens > min(
 )
 ```
 
-`triggerRatio` defaults to `0.9` for every model (configurable globally or per model in `~/.stepcode/config.toml` or trusted `<project-dir>/.stepcode/config.toml`). Providers clamp each request's `max_tokens` to the remaining context minus a 4096-token safety margin, so the second term keeps room for the next response: on a small window 10% of the context is less than that margin. The trigger never drops below half the window. With an 8K-or-larger output limit, a 32K window compacts at 20,480 tokens (62.5%), 64K at 53,248 (81.25%), and 128K or larger at 90%. A response truncated by the clamp still goes through the overflow/length recovery below. `tokenLimit` can only make compaction trigger earlier. An explicitly configured `reserveTokens` keeps its old effect as an additional ceiling, `contextWindow - reserveTokens`.
+`triggerRatio` defaults to `0.85` for every model (configurable globally or per model in `~/.stepcode/config.toml` or trusted `<project-dir>/.stepcode/config.toml`). Providers clamp each request's `max_tokens` to the remaining context minus a 4096-token safety margin, so the second term keeps room for the next response: on a small window 15% of the context is less than that margin plus the response reservation. The trigger never drops below half the window. With an 8K-or-larger output limit, a 32K window compacts at 20,480 tokens (62.5%), 64K at 53,248 (81.25%), and 131K or larger at 85%. On large windows the default leaves 15% of the window as headroom for the response and for estimation error, so a prompt the heuristic underestimates (images, unusual text) is less likely to exceed the provider limit before compaction runs. A response truncated by the clamp still goes through the overflow/length recovery below. `tokenLimit` can only make compaction trigger earlier. An explicitly configured `reserveTokens` keeps its old effect as an additional ceiling, `contextWindow - reserveTokens`.
 
 Step checks the threshold once immediately before every model request: before the first request of a prompt (counting the incoming prompt), before every follow-up request inside a tool loop (counting the new tool results and injected steering), and before the first request of a continuation. If the threshold is crossed, Step compacts inside the same agent run and resumes with the summary and retained messages. Steering queued while a follow-up request compacts is delivered to that same request. Input queued while the pre-run check compacts (or added by an `agent_start` listener) joins the first request and is measured again before it is sent; input typed while that first request's own check compacts is delivered with the next request. A final answer that crosses the threshold does not compact on its own; the next request compacts first. Context-overflow and truncated-length recovery still run after the failed response. If measuring or preparing maintenance throws unexpectedly, the request is sent unchanged and overflow recovery remains the fallback.
 
-Token counts use the last valid assistant usage plus estimates of messages added after it. Usage reported before the latest compaction is ignored, because it measured the previous, larger context; without trustworthy usage, the estimate also includes the system prompt and tool schemas.
+Token counts use the last valid assistant usage plus estimates of messages added after it, priced at four UTF-8 bytes per token (English prose and code sit near that ratio; CJK text is counted at its real cost instead of a quarter of it). Usage reported before the latest compaction is ignored, because it measured the previous, larger context; without trustworthy usage, the estimate also includes the system prompt and tool schemas.
 
 If automatic threshold compaction fails three times in a row, it pauses for the session and the third failure's message says so; while paused, Step does not measure or attempt automatic compaction. An unexpected error while measuring or preparing maintenance also counts, is recorded as a `step-compaction-failure` entry, and the request is sent unchanged. Cancelled compactions, extension cancellations, and errors raised after a compaction was saved do not count. A successful compaction (including `/compact`), an accepted CLM edit, a model switch, or a registry update that changes the model's context window resumes it. Overflow recovery is unaffected.
 
@@ -439,7 +438,7 @@ Configure compaction in `~/.stepcode/config.toml` or trusted `<project-dir>/.ste
 ```toml
 [compaction]
 enabled = true
-triggerRatio = 0.9
+triggerRatio = 0.85
 keepRecentTokens = 20000
 
 [compaction.modelTriggerRatios]
@@ -449,7 +448,7 @@ keepRecentTokens = 20000
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
-| `triggerRatio` | `0.9` | Fraction of the context window that triggers auto-compaction (0.5-0.95); small windows trigger earlier to keep response room |
+| `triggerRatio` | `0.85` | Fraction of the context window that triggers auto-compaction (0.5-0.95); small windows trigger earlier to keep response room |
 | `modelTriggerRatios` | none | Per-model `triggerRatio`, keyed by `provider/model-id` |
 | `tokenLimit` | none | Absolute token ceiling; can only trigger earlier |
 | `triggerPolicy` | `"v2"` | `"legacy"` restores the previous threshold and checkpoints |

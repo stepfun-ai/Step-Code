@@ -1,10 +1,16 @@
 # Model-managed working context
 
-Step Code uses CLM (`clm-v1`) as its default compression mode when automatic
-compaction is enabled. The model edits a validated working view of the
+CLM (`clm-v1`) is an opt-in compression mode; the default is native summary
+compaction (`off`). With CLM the model edits a validated working view of the
 conversation; the canonical session history remains intact. CLM uses the
 configured model and retains native summary compaction and provider-overflow
 recovery as fallbacks.
+
+Native compaction is the default because, near a full window, CLM's maintenance
+request carries almost the whole context (about 975K input tokens at a 1M window,
+roughly 30s cold) to save about 12%, so the next request is still large; native
+compaction leaves a summary plus the recent tail. Measured on a 930K-token
+session: CLM 47–72s per prompt, native 16–19s.
 
 ## Request notice stability
 
@@ -22,29 +28,30 @@ record history and can require one cache warm-up.
 
 ## Select a compression mode
 
-No flag or configuration change is needed to use CLM. An existing explicit
-`off` or `lightweight-v1` setting is preserved. To use native compaction for one run:
+Native compaction needs no flag or configuration. An existing explicit
+`clm-v1` or `lightweight-v1` setting is preserved. To use CLM for one run:
 
 ```sh
-step --context-projection off
+step --context-projection clm-v1
 ```
 
 Or in `~/.stepcode/config.toml` (project settings use the usual trust rules):
 
 ```toml
 [compaction]
-contextProjection = "off"
+contextProjection = "clm-v1"
 ```
 
 `clm-v1`, `lightweight-v1`, and `off` are mutually exclusive projection modes.
 `lightweight-v1` selects the existing deterministic request projection. `off`
 disables working-context projection and retains native automatic compaction.
-Remove an explicit mode setting, select `clm-v1`, or use `/clm on` to enable CLM.
-The `/clm on` and `/clm off` commands change only the current session.
+Select `clm-v1` or use `/clm on` to enable CLM; remove the setting to return to
+native compaction. The `/clm on` and `/clm off` commands change only the current
+session.
 
-If `compaction.enabled = false` and no mode is set, CLM is also disabled. An
-explicit `contextProjection = "clm-v1"` keeps manual working-context edits
-available while automatic maintenance remains disabled. Invalid mode values
+An explicit `contextProjection = "clm-v1"` keeps manual working-context edits
+available even when `compaction.enabled = false`, while automatic maintenance
+remains disabled. Invalid mode values
 are treated as `off`.
 
 ## Automatic CLM maintenance
@@ -56,7 +63,7 @@ next request. This avoids an unused context-edit/summary call after a completed
 task, while explicit maintenance commands and error recovery keep their normal
 behavior. By default it uses the native compact trigger,
 `contextTokens > floor(contextWindow * compaction.triggerRatio)` with a default
-ratio of 0.9, so a 131,072-token window triggers above 117,964 tokens. Smaller
+ratio of 0.85, so a 131,072-token window triggers above 111,411 tokens. Smaller
 windows trigger earlier to keep room for the next response. See
 [Compaction](compaction.md#when-it-triggers) for the exact rule, per-model ratios, and the legacy policy.
 With at least 8,000 context tokens and enough editable old text, CLM gets the first
@@ -129,7 +136,16 @@ timeoutMs = 90000
 maxOutputTokens = 8192
 minSavingsTokens = 1024
 minSavingsRatio = 0.05
+coldMaxPrefillTokens = 262144
 ```
+
+`coldMaxPrefillTokens` bounds a maintenance request that cannot reuse the
+actor's cached prefix (a cold start, a resumed session, or a draft edited since
+the last request). Such a request makes the provider recompute the whole context
+before the task can start, about 30 seconds at 975K tokens, while CLM typically
+saves only around 12%. Above the bound the host skips CLM for that boundary and
+runs native compaction, which leaves a far smaller context. Requests that reuse
+the cached prefix are not affected. `0` removes the bound.
 
 Leave `softThresholdRatio` unset to stay aligned with native compact. An explicit
 `softThresholdRatio = 0.85` requests an earlier trigger at 85%; the native reserve
@@ -318,7 +334,7 @@ pnpm --filter @step-harness/providers exec vitest run test/context-estimate.test
 
 Task success, wall-clock improvement, and real API cost require paired model
 experiments. Compare the same model and tasks under native compaction (`off`),
-lightweight projection, and default CLM, including the cost of maintenance and
+lightweight projection, and CLM, including the cost of maintenance and
 summary requests. Size validation does not establish semantic losslessness or
 a universal quality or speed improvement.
 
