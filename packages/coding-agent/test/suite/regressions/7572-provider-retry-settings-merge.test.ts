@@ -30,6 +30,7 @@ describe("regression #7572: nested provider retry settings merge", () => {
 			timeoutMs: 30000,
 			maxRetries: 2,
 			maxRetryDelayMs: 45000,
+			streamIdleTimeoutMs: 300000,
 		});
 	});
 });

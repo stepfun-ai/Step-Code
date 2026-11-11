@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@step-harness/agent-core";
 import type { AssistantMessageEventStream, ModelsSimpleStreamOptions } from "@step-harness/providers";
+import { withStreamIdleWatchdog } from "@step-harness/providers";
 import { type Api, clampThinkingLevel, type Message, type Model, streamSimple } from "@step-harness/providers/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -376,8 +377,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const websocketConnectTimeoutMs =
 				options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs();
 			const headerRunner = extensionRunnerRef.current;
+			// The stream watchdog cancels a stalled request through this controller; a caller
+			// abort still wins and reaches the provider unchanged.
+			const watchdogAbort = new AbortController();
 			const requestOptions: ModelsSimpleStreamOptions = {
 				...options,
+				signal: options?.signal ? AbortSignal.any([options.signal, watchdogAbort.signal]) : watchdogAbort.signal,
 				timeoutMs,
 				websocketConnectTimeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
@@ -399,7 +404,27 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			};
 			let stream: AssistantMessageEventStream;
 			try {
-				stream = modelRuntime.streamSimple(model, context, requestOptions);
+				stream = withStreamIdleWatchdog(modelRuntime.streamSimple(model, context, requestOptions), {
+					idleTimeoutMs: providerRetrySettings.streamIdleTimeoutMs,
+					onTimeout: () => watchdogAbort.abort(new Error("Provider stream idle timeout")),
+					fallback: () => ({
+						role: "assistant",
+						content: [],
+						api: model.api,
+						provider: model.provider,
+						model: model.id,
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "error",
+						timestamp: Date.now(),
+					}),
+				});
 			} catch (error) {
 				observeModelRequestFailure(model, modelRequestObserver, error, {
 					startedAt,

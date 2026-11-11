@@ -97,8 +97,8 @@ function syncAgentMessages(session: AgentSession, sessionManager: SessionManager
 }
 
 describe("AgentSession.getSessionStats", () => {
-	it("estimates the default CLM working context after compaction while retaining historical totals", async () => {
-		const { session, sessionManager } = await createSession();
+	it("estimates the CLM working context after compaction while retaining historical totals", async () => {
+		const { session, sessionManager } = await createSession("clm-v1");
 		try {
 			sessionManager.appendMessage(createUserMessage("first", 1));
 			sessionManager.appendMessage(createAssistantMessage("response1", 180_000, 2));

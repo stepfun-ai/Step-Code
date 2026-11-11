@@ -726,7 +726,7 @@ ${stepPermissionOptionsText}
   --export <file>                Export session file to HTML and exit
   --list-models [search]         List available models (with optional fuzzy search)
   --verbose                      Force verbose startup (overrides quietStartup setting)
-  --context-projection <mode>    Context projection: clm-v1 (default), lightweight-v1, or off
+  --context-projection <mode>    Context projection: off (default, native compaction), clm-v1, or lightweight-v1
   --tui-mode <mode>              TUI mode: regular (default) or fullscreen
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run
