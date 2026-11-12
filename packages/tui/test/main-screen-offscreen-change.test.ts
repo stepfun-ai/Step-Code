@@ -122,19 +122,196 @@ describe("main screen changes above the viewport", () => {
 		harness.tui.stop({ preserveScreen: true });
 	});
 
-	it("falls back to a full redraw when the document length changes above the viewport", async () => {
+	it("keeps terminal scrollback and the reader's position when the document length changes above the viewport", async () => {
 		const harness = createHarness(ROWS);
+		// The first frame's writes have to reach the terminal before it can be scrolled,
+		// or scrollLines() moves a buffer that does not hold the document yet.
+		await harness.terminal.flush();
+		const redrawsBefore = harness.tui.fullRedraws;
+		const bottom = harness.terminal.getViewportTop();
+		// The reader scrolled the terminal viewport up before the next frame lands.
+		harness.terminal.scrollLines(-10);
+		await harness.terminal.flush();
+		const viewportTopBefore = harness.terminal.getViewportTop();
+		const viewportBefore = harness.terminal.getViewport();
+		assert.strictEqual(viewportTopBefore, bottom - 10, "the reader must actually have scrolled up");
+		harness.resetWritten();
+
+		// The shape of a settled assistant message reflowing when generation completes:
+		// an off-screen row is rewritten and the document grows by one line.
+		harness.transcript.lines = [
+			...harness.transcript.lines.slice(0, 5),
+			"settled row",
+			...harness.transcript.lines.slice(5),
+		];
+		harness.tui.renderNow();
+		await harness.terminal.flush();
+
+		assert.strictEqual(harness.tui.fullRedraws, redrawsBefore, "must not replay the document");
+		assert.ok(!harness.written().includes(CLEAR_SCROLLBACK), "must not clear terminal scrollback");
+		assert.strictEqual(harness.terminal.getViewportTop(), viewportTopBefore, "viewport must not move");
+		assert.deepStrictEqual(harness.terminal.getViewport(), viewportBefore, "visible rows must not change");
+		// The frame wrote nothing, so the mirror is the only record of the new document:
+		// a stale one corrupts the next incremental frame even when the screen looks right.
+		const mirror = harness.tui as unknown as { previousViewportTop: number; previousLines: string[] };
+		const documentLength =
+			harness.transcript.lines.length + harness.status.lines.length + harness.dialog.lines.length + 1;
+		assert.strictEqual(mirror.previousLines.length, documentLength, "the mirror must hold the new document");
+		assert.ok(
+			mirror.previousLines.some((line) => line.includes("settled row")),
+			"the mirror must contain the inserted row",
+		);
+		assert.strictEqual(mirror.previousViewportTop, documentLength - ROWS, "the mirror must track the new window");
+
+		// The bookkeeping the skipped frame left behind has to describe the new document:
+		// the next ordinary edit must reach its row without replaying the document.
+		harness.resetWritten();
+		harness.dialog.lines = [...harness.dialog.lines.slice(0, 2), "dialog edited", ...harness.dialog.lines.slice(3)];
+		harness.tui.renderNow();
+		harness.terminal.scrollLines(200);
+		const screen = await harness.terminal.flushAndGetViewport();
+		assert.strictEqual(harness.tui.fullRedraws, redrawsBefore, "the edit must stay on the differential path");
+		assert.ok(!harness.written().includes(CLEAR_SCROLLBACK), "the edit must not clear terminal scrollback");
+		assert.ok(screen.includes("dialog edited"), "the edit after the skipped frame must reach its row");
+		assert.ok(!screen.includes("dialog 2"), "the replaced row must not survive");
+		harness.tui.stop({ preserveScreen: true });
+	});
+
+	it("repairs the rows a settle frame changed instead of replaying the document", async () => {
+		// The real dock is a handful of rows, so the status line sits inside the viewport.
+		const harness = createHarness(5);
+		await harness.terminal.flush();
+		const redrawsBefore = harness.tui.fullRedraws;
+		harness.terminal.scrollLines(-5);
+		await harness.terminal.flush();
+		const viewportTopBefore = harness.terminal.getViewportTop();
+		harness.resetWritten();
+
+		// The settled-message shape: a summary row is inserted above the viewport in the same
+		// frame that the dock's status line turns into "Done". Only that visible row changed,
+		// so it is repaired in place and scrollback survives.
+		harness.transcript.lines = [
+			...harness.transcript.lines.slice(0, 5),
+			"summary row",
+			...harness.transcript.lines.slice(5),
+		];
+		harness.status.lines = ["Done"];
+		harness.tui.renderNow();
+		await harness.terminal.flush();
+
+		assert.strictEqual(harness.tui.fullRedraws, redrawsBefore, "must not replay the document");
+		assert.ok(!harness.written().includes(CLEAR_SCROLLBACK), "must not clear terminal scrollback");
+		assert.strictEqual(harness.terminal.getViewportTop(), viewportTopBefore, "viewport must not move");
+		const screen = await harness.terminal.flushAndGetViewport();
+		assert.ok(screen.includes("Done"), "the changed row must be repainted");
+		assert.ok(!screen.includes("spinner 0"), "the previous row content must be gone");
+		// The repaired frame updated the mirror, so the next ordinary edit still lands on its
+		// row instead of being papered over by another replay.
+		const mirror = harness.tui as unknown as { previousViewportTop: number; previousLines: string[] };
+		const documentLength =
+			harness.transcript.lines.length + harness.status.lines.length + harness.dialog.lines.length + 1;
+		assert.strictEqual(mirror.previousLines.length, documentLength, "the mirror must hold the new document");
+		assert.strictEqual(mirror.previousViewportTop, documentLength - ROWS, "the mirror must track the new window");
+		harness.resetWritten();
+		harness.dialog.lines = [...harness.dialog.lines.slice(0, 3), "dialog later", ...harness.dialog.lines.slice(4)];
+		harness.tui.renderNow();
+		harness.terminal.scrollLines(200);
+		const afterEdit = await harness.terminal.flushAndGetViewport();
+		assert.strictEqual(harness.tui.fullRedraws, redrawsBefore, "the later edit must stay on the differential path");
+		assert.ok(!harness.written().includes(CLEAR_SCROLLBACK), "the later edit must not clear terminal scrollback");
+		assert.deepStrictEqual(
+			afterEdit,
+			[...harness.transcript.lines, ...harness.status.lines, ...harness.dialog.lines, "footer"].slice(-ROWS),
+			"the screen must match the document after the later edit",
+		);
+		harness.tui.stop({ preserveScreen: true });
+	});
+
+	it("replays the document when the length change also alters the visible window", async () => {
+		const harness = createHarness(ROWS);
+		await harness.terminal.flush();
+		const redrawsBefore = harness.tui.fullRedraws;
+		harness.terminal.scrollLines(-5);
+		await harness.terminal.flush();
+		harness.resetWritten();
+
+		// The window itself changes, so the frame cannot be caught up by bookkeeping alone:
+		// it replays the document, and every row still has to be reachable afterwards.
+		harness.status.lines = ["spinner 1"];
+		harness.dialog.lines = [...harness.dialog.lines, "dialog grown a", "dialog grown b", "dialog grown c"];
+		harness.tui.renderNow();
+		await harness.terminal.flush();
+
+		assert.ok(harness.tui.fullRedraws > redrawsBefore, "a changed window must replay the document");
+		const rowsAfter = harness.terminal.getScrollBuffer().filter((row) => row.length > 0);
+		for (const row of [...harness.transcript.lines, ...harness.status.lines, ...harness.dialog.lines, "footer"]) {
+			assert.ok(rowsAfter.includes(row), `document row ${JSON.stringify(row)} must not be dropped`);
+		}
+		assert.strictEqual(new Set(rowsAfter).size, rowsAfter.length, "no row may be duplicated");
+		harness.tui.stop({ preserveScreen: true });
+	});
+
+	it("does not drop rows when the document grows by a whole screen in one frame", async () => {
+		const harness = createHarness(ROWS);
+		await harness.terminal.flush();
 		const redrawsBefore = harness.tui.fullRedraws;
 		harness.resetWritten();
 
-		// A transcript append shifts every row under it, so the visible window no longer
-		// maps to the same terminal rows and the clamp would leave the screen stale.
-		harness.transcript.lines = [...harness.transcript.lines, "transcript appended"];
+		// More rows leave the screen than the screen holds, so no scroll can move them into
+		// scrollback one by one: losing no document row wins over keeping the position.
+		const grown = Array.from({ length: ROWS + 5 }, (_, index) => `grown ${index}`);
+		harness.status.lines = ["spinner 1"];
+		harness.dialog.lines = [...harness.dialog.lines, ...grown];
 		harness.tui.renderNow();
+		await harness.terminal.flush();
 
-		assert.strictEqual(harness.tui.fullRedraws, redrawsBefore + 1);
+		assert.ok(harness.tui.fullRedraws > redrawsBefore, "a whole-screen change must replay the document");
+		const rowsAfter = harness.terminal.getScrollBuffer().filter((row) => row.length > 0);
+		for (const row of [...harness.transcript.lines, ...harness.status.lines, ...harness.dialog.lines, "footer"]) {
+			assert.ok(rowsAfter.includes(row), `document row ${JSON.stringify(row)} must not be dropped`);
+		}
+		harness.tui.stop({ preserveScreen: true });
+	});
+
+	it("clears stale rows when a settled document shrinks below one screen", async () => {
+		const harness = createHarness(ROWS);
+		await harness.terminal.flush();
+		// Generation settles into a document shorter than the terminal: everything moves
+		// up, and only the rows still on screen may remain.
+		harness.transcript.lines = Array.from({ length: 3 }, (_, index) => `transcript ${index}`);
+		harness.dialog.lines = Array.from({ length: 3 }, (_, index) => `dialog ${index}`);
+		harness.tui.renderNow();
+		await harness.terminal.flush();
+
+		harness.transcript.lines = ["transcript 0 edited", "transcript 1", "transcript 2"];
+		harness.tui.renderNow();
+		await harness.terminal.flush();
+
 		const viewport = await harness.terminal.flushAndGetViewport();
-		assert.strictEqual(viewport[viewport.length - 1], "footer");
+		assert.deepStrictEqual(
+			viewport.filter((row) => row.length > 0),
+			[
+				"transcript 0 edited",
+				"transcript 1",
+				"transcript 2",
+				"spinner 0",
+				"dialog 0",
+				"dialog 1",
+				"dialog 2",
+				"footer",
+			],
+			"the screen must match the shrunken document",
+		);
+		harness.tui.stop({ preserveScreen: true });
+	});
+
+	it("refuses an over-wide line instead of letting the repaint wrap it", async () => {
+		const harness = createHarness(ROWS);
+		await harness.terminal.flush();
+		harness.status.lines = ["spinner 1"];
+		harness.dialog.lines = [...harness.dialog.lines, "x".repeat(COLS + 1)];
+
+		assert.throws(() => harness.tui.renderNow(), /exceeds terminal width/);
 		harness.tui.stop({ preserveScreen: true });
 	});
 });
