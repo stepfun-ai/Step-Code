@@ -2,9 +2,18 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AgentToolResult } from "@step-harness/agent-core";
+import {
+	type Component,
+	CURSOR_MARKER,
+	type Terminal,
+	TuiAltScreen,
+	TuiMainScreen,
+	visibleWidth,
+} from "@step-harness/pi-tui";
 import { type Model, validateToolArguments } from "@step-harness/providers";
 import { expect, test } from "vitest";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
+import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { createStepCapabilitiesExtension } from "../src/features/step-capabilities.ts";
 import { createStepPlanExtension } from "../src/features/step-plan.ts";
 import {
@@ -467,4 +476,192 @@ test("plan adapter uses Step tool names and leaves run_command unrestricted", as
 			ctx,
 		),
 	).resolves.toMatchObject({ block: true });
+});
+
+async function openClarification(params: Record<string, unknown>, fullscreen = false) {
+	const { api, tools } = createApi();
+	createStepCapabilitiesExtension({ subagent: { includeBuiltinAgents: false } })(api);
+	const ctx = createContext("/workspace");
+	initTheme("step-blue");
+	const terminal: Terminal = {
+		columns: 80,
+		rows: 40,
+		kittyProtocolActive: false,
+		start: () => {},
+		stop: () => {},
+		drainInput: async () => {},
+		write: () => {},
+		moveBy: () => {},
+		hideCursor: () => {},
+		showCursor: () => {},
+		clearLine: () => {},
+		clearFromCursor: () => {},
+		clearScreen: () => {},
+		setTitle: () => {},
+		setProgress: () => {},
+	};
+	const tui = fullscreen ? new TuiAltScreen(terminal) : new TuiMainScreen(terminal);
+	const componentPromise = new Promise<Component>((resolveComponent, rejectComponent) => {
+		ctx.ui.custom = async (factory) =>
+			new Promise((resolve, reject) => {
+				Promise.resolve(factory(tui, theme, new KeybindingsManager(), resolve)).then(
+					(component) => {
+						tui.addChild(component);
+						resolveComponent(component);
+					},
+					(error: unknown) => {
+						rejectComponent(error);
+						reject(error);
+					},
+				);
+			});
+	});
+	const result = tools.get("clarify_user")!.execute("ask", params, undefined, undefined, ctx);
+	const component = await componentPromise;
+	return {
+		component,
+		tui,
+		result,
+		close: async () => {
+			// Escape first leaves custom-answer mode, then cancels the dialog.
+			component.handleInput?.("\x1b");
+			component.handleInput?.("\x1b");
+			tui.setFocus(null);
+			tui.removeChild(component);
+			try {
+				await result;
+			} finally {
+				tui.stop();
+			}
+		},
+	};
+}
+
+function dialogAnchor(component: Component, width = 80): { row: number; col: number } {
+	const lines = component.render(width);
+	const markerRows = lines.flatMap((line, row) => (line.includes(CURSOR_MARKER) ? [row] : []));
+	expect(markerRows).toHaveLength(1);
+	const row = markerRows[0]!;
+	return { row, col: visibleWidth(lines[row]!.split(CURSOR_MARKER)[0]!) };
+}
+
+function answerCursor(component: Component, width = 80): { row: number; col: number } {
+	const anchor = dialogAnchor(component, width);
+	const answerLabelRow = component.render(width).findIndex((line) => line.includes("Your answer:"));
+	expect(answerLabelRow).toBeGreaterThanOrEqual(0);
+	expect(anchor.row).toBeGreaterThan(answerLabelRow);
+	return anchor;
+}
+
+test.each([false, true])(
+	"clarify_user keeps the focused answer cursor at the typed position (fullscreen=%s)",
+	async (fullscreen) => {
+		const dialog = await openClarification({ question: "Describe the change" }, fullscreen);
+		try {
+			expect(dialog.component.render(80).join("\n")).not.toContain(CURSOR_MARKER);
+			dialog.tui.setFocus(dialog.component);
+			const start = answerCursor(dialog.component);
+			for (const [index, char] of [..."中文abc"].entries()) {
+				dialog.component.handleInput?.(char);
+				const cursor = answerCursor(dialog.component);
+				expect(cursor.row).toBe(start.row);
+				expect(cursor.col).toBe(start.col + visibleWidth("中文abc".slice(0, index + 1)));
+			}
+			dialog.component.handleInput?.("\x1b[D");
+			expect(answerCursor(dialog.component).col).toBe(start.col + 6);
+			dialog.component.handleInput?.("\x7f");
+			expect(answerCursor(dialog.component).col).toBe(start.col + 5);
+			dialog.tui.setFocus(null);
+			expect(dialog.component.render(80).join("\n")).not.toContain(CURSOR_MARKER);
+			dialog.tui.setFocus(dialog.component);
+			expect(answerCursor(dialog.component).col).toBe(start.col + 5);
+		} finally {
+			await dialog.close();
+		}
+	},
+);
+
+test("clarify_user recomputes answer wrapping when width changes without invalidation", async () => {
+	const dialog = await openClarification({ question: "Describe the change" });
+	try {
+		dialog.tui.setFocus(dialog.component);
+		dialog.component.handleInput?.("\x1b[200~abcdefghijklmnopqrstuvwx中文\x1b[201~");
+		const wide = dialog.component.render(80);
+		const narrow = dialog.component.render(20);
+		expect(narrow).not.toBe(wide);
+		expect(narrow.every((line) => visibleWidth(line) <= 20)).toBe(true);
+		const narrowCursor = answerCursor(dialog.component, 20);
+		expect(narrowCursor.col).toBeLessThan(20);
+		expect(answerCursor(dialog.component, 80).col).toBe(29);
+		expect(visibleWidth(dialog.component.render(80)[0]!)).toBe(80);
+	} finally {
+		await dialog.close();
+	}
+});
+
+test.each([false, true])(
+	"clarify_user anchors the selected option before Enter (fullscreen=%s)",
+	async (fullscreen) => {
+		const dialog = await openClarification(
+			{ question: "Choose", options: [{ label: "中文选项", value: "option" }] },
+			fullscreen,
+		);
+		try {
+			expect(dialog.component.render(80).join("\n")).not.toContain(CURSOR_MARKER);
+			dialog.tui.setFocus(dialog.component);
+			const first = dialogAnchor(dialog.component);
+			expect(dialog.component.render(80)[first.row]).toContain("1. 中文选项");
+			dialog.component.handleInput?.("\x1b[B");
+			const next = dialogAnchor(dialog.component);
+			expect(next.row).toBeGreaterThan(first.row);
+			expect(dialog.component.render(80)[next.row]).toContain("2. Type a custom answer");
+			expect(dialog.component.render(80).join("\n")).not.toContain("Your answer:");
+			for (const width of [80, 20]) {
+				const anchor = dialogAnchor(dialog.component, width);
+				expect(anchor.col).toBe(2);
+				const line = dialog.component.render(width)[anchor.row]!;
+				expect(line.split(CURSOR_MARKER)[0]!.endsWith("> ")).toBe(true);
+			}
+			for (const width of [2, 1]) {
+				expect(dialogAnchor(dialog.component, width).col).toBe(0);
+			}
+			dialog.tui.setFocus(null);
+			expect(dialog.component.render(80).join("\n")).not.toContain(CURSOR_MARKER);
+			dialog.tui.setFocus(dialog.component);
+			expect(dialogAnchor(dialog.component)).toEqual(next);
+		} finally {
+			await dialog.close();
+		}
+	},
+);
+
+test("clarify_user preserves a dialog anchor across navigation and freeform modes", async () => {
+	const dialog = await openClarification({
+		questions: [
+			{ id: "choice", question: "Choose", options: [{ label: "Option", value: "option" }] },
+			{ id: "text", question: "Explain" },
+		],
+	});
+	try {
+		dialog.tui.setFocus(dialog.component);
+		const optionAnchor = dialogAnchor(dialog.component);
+		expect(dialog.component.render(80)[optionAnchor.row]).toContain("1. Option");
+		dialog.component.handleInput?.("2");
+		answerCursor(dialog.component);
+		dialog.component.handleInput?.("\x1b");
+		expect(dialogAnchor(dialog.component)).toEqual(optionAnchor);
+		dialog.component.handleInput?.("\t");
+		const firstLine = answerCursor(dialog.component);
+		dialog.component.handleInput?.("\x1b[13;2u");
+		dialog.component.handleInput?.("second line");
+		const multiline = answerCursor(dialog.component);
+		expect(multiline.row).toBe(firstLine.row + 1);
+		dialog.component.handleInput?.("\t");
+		expect(dialog.component.render(80).join("\n")).not.toContain(CURSOR_MARKER);
+		expect(dialog.component.render(80).join("\n")).not.toContain("Your answer:");
+		dialog.component.handleInput?.("\x1b[Z");
+		answerCursor(dialog.component);
+	} finally {
+		await dialog.close();
+	}
 });

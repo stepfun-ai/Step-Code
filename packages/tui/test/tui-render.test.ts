@@ -13,7 +13,8 @@ import {
 	setCapabilities,
 	setCellDimensions,
 } from "../src/terminal-image.ts";
-import type { Component, TUI } from "../src/tui.ts";
+import { type Component, CURSOR_MARKER, type TUI } from "../src/tui.ts";
+import { TuiAltScreen } from "../src/tui-alt-screen.ts";
 import { TuiMainScreen } from "../src/tui-main-screen.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
@@ -78,6 +79,69 @@ class LoggingVirtualTerminal extends VirtualTerminal {
 		this.writes = [];
 	}
 }
+
+class SynchronizedCursorTerminal extends LoggingVirtualTerminal {
+	readonly framePositions: { x: number; y: number }[] = [];
+
+	override write(data: string): void {
+		super.write(data);
+		if (!data.includes("\x1b[?2026l")) return;
+		// Observe this write before later cursor-restoration writes are processed.
+		const xterm = (this as unknown as { xterm: XtermTerminalType }).xterm;
+		xterm.write("", () => this.framePositions.push(this.getCursorPosition()));
+	}
+}
+
+describe("TUI synchronized cursor positioning", () => {
+	for (const [mode, Renderer] of [
+		["regular", TuiMainScreen],
+		["fullscreen", TuiAltScreen],
+	] as const) {
+		for (const showCursor of [false, true]) {
+			it(`restores the answer cursor before publishing ${mode} frames (visible=${showCursor})`, async () => {
+				const terminal = new SynchronizedCursorTerminal(40, 12);
+				const tui = new Renderer(terminal, showCursor);
+				const component = new TestComponent();
+				component.lines = ["Working 0", `中文${CURSOR_MARKER}abc`, "Footer 0"];
+				tui.addChild(component);
+				tui.start();
+				try {
+					const checkFrame = async () => {
+						await terminal.waitForRender();
+						assert.strictEqual(terminal.framePositions.length, 1);
+						assert.deepStrictEqual(terminal.framePositions[0], { x: 4, y: 1 });
+						assert.deepStrictEqual(terminal.getCursorPosition(), { x: 4, y: 1 });
+						const visibility = showCursor ? "\x1b[?25h" : "\x1b[?25l";
+						assert.ok(terminal.getWrites().endsWith(`${visibility}\x1b[?2026l`));
+						terminal.framePositions.length = 0;
+						terminal.clearWrites();
+					};
+					await checkFrame();
+					const initialRedraws = tui.fullRedraws;
+
+					// Background status updates repaint below the focused answer.
+					component.lines = ["Working 1", `中文${CURSOR_MARKER}abc`, "Footer 1"];
+					tui.requestRender();
+					await checkFrame();
+					assert.strictEqual(tui.fullRedraws, initialRedraws);
+
+					terminal.resize(20, 12);
+					await checkFrame();
+					assert.ok(tui.fullRedraws > initialRedraws);
+
+					// Retain the focused answer while deleting trailing content.
+					tui.setClearOnShrink(false);
+					component.lines = ["Working 1", `中文${CURSOR_MARKER}abc`];
+					tui.requestRender();
+					await checkFrame();
+				} finally {
+					tui.stop();
+					await terminal.flush();
+				}
+			});
+		}
+	}
+});
 
 async function withEnv<T>(updates: Record<string, string | undefined>, run: () => Promise<T>): Promise<T> {
 	const previousValues = new Map<string, string | undefined>();
@@ -177,7 +241,7 @@ describe("TUI bounded render output", () => {
 		);
 		assert.strictEqual(
 			terminal.writes.join(""),
-			`\x1b[?2026h${kittyLine}\r\n${kittyLine}\x1b[?2026l`,
+			`\x1b[?2026h${kittyLine}\r\n${kittyLine}\x1b[?25l\x1b[?2026l`,
 			"chunking must preserve the synchronized render output",
 		);
 	});

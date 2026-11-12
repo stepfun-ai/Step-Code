@@ -1,7 +1,16 @@
 /** Step's single clarification tool, rendered with Pi's native TUI primitives. */
 
 import type { AgentToolResult } from "@step-harness/agent-core";
-import { Editor, type EditorTheme, Key, matchesKey, Text, visibleWidth, wrapTextWithAnsi } from "@step-harness/pi-tui";
+import {
+	CURSOR_MARKER,
+	Editor,
+	type EditorTheme,
+	Key,
+	matchesKey,
+	Text,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@step-harness/pi-tui";
 import { type Static, Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../core/extensions/types.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
@@ -264,6 +273,7 @@ async function executeNativeDialog(
 		let inputMode = questions[0]?.options.length === 0;
 		let inputQuestionId: string | null = inputMode ? (questions[0]?.id ?? null) : null;
 		let cachedLines: string[] | undefined;
+		let cachedWidth: number | undefined;
 		const answers = new Map<string, StepQuestionnaireAnswer>();
 		const totalTabs = questions.length + 1;
 		const editorTheme: EditorTheme = {
@@ -411,7 +421,8 @@ async function executeNativeDialog(
 		};
 
 		const render = (width: number): string[] => {
-			if (cachedLines) return cachedLines;
+			if (cachedLines && cachedWidth === width) return cachedLines;
+			cachedWidth = width;
 			const renderWidth = Math.max(1, width);
 			const lines: string[] = [];
 			const question = currentQuestion();
@@ -475,8 +486,9 @@ async function executeNativeDialog(
 				lines.push("");
 				for (const [index, option] of options.entries()) {
 					const selected = index === optionIndex;
+					const anchor = selected && editor.focused && !inputMode ? CURSOR_MARKER : "";
 					addWrapped(
-						selected ? theme.fg("accent", "> ") : "  ",
+						selected ? theme.fg("accent", `> ${anchor}`) : "  ",
 						theme.fg(selected ? "accent" : "text", `${index + 1}. ${option.label}`),
 					);
 					if (option.description) {
@@ -508,10 +520,19 @@ async function executeNativeDialog(
 		};
 
 		return {
+			get focused(): boolean {
+				return editor.focused;
+			},
+			set focused(value: boolean) {
+				// The host focuses this wrapper, but the nested editor owns the answer cursor.
+				editor.focused = value;
+				cachedLines = undefined;
+			},
 			render,
 			handleInput,
 			invalidate: () => {
 				cachedLines = undefined;
+				editor.invalidate();
 			},
 		};
 	});
