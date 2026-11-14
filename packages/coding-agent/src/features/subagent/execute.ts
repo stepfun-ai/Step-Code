@@ -596,7 +596,9 @@ export async function runPreparedSubagent(
 			});
 			records[index] = completed;
 			emit(mode);
-			if (worktree && task.retainWorktree === false) await worktree.cleanup();
+			// Cleanup is best effort: a worktree that cannot be removed (Windows file locks)
+			// must not turn a completed child into a failed one.
+			if (worktree && task.retainWorktree === false) await worktree.cleanup().catch(() => undefined);
 			reportFinished(completed, index);
 			return completed;
 		} catch (error) {

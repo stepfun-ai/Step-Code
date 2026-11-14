@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,13 +26,14 @@ import { createHarness, type Harness } from "./suite/harness.ts";
 const childPath = fileURLToPath(new URL("./fixtures/subagent-stream-child.mjs", import.meta.url));
 const agentRoot = mkdtempSync(join(tmpdir(), "step-subagent-durability-"));
 const harnesses: Harness[] = [];
+const RETRY_RM = { recursive: true, force: true, maxRetries: 20, retryDelay: 50 } as const;
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
 /** The fixture reads these from the environment, so each case must not leak into the next. */
 const CHILD_ENV_KEYS = ["STREAM_TURNS", "STREAM_DELTAS", "STREAM_TOOL_BYTES", "STREAM_DELAY_MS", "STREAM_FINAL_BYTES"];
 const originalChildEnv = Object.fromEntries(CHILD_ENV_KEYS.map((key) => [key, process.env[key]]));
 
-afterEach(() => {
+afterEach(async () => {
 	process.argv = [...originalArgv];
 	process.execArgv = [...originalExecArgv];
 	for (const key of CHILD_ENV_KEYS) {
@@ -39,6 +41,10 @@ afterEach(() => {
 		if (value === undefined) delete process.env[key];
 		else process.env[key] = value;
 	}
+	// The real rpc child runs in the harness dir and is still exiting after its stdin closes.
+	// Windows refuses to remove a live process's cwd, so retry asynchronously (a sync retry
+	// would block the loop that delivers the child's EOF) before the harness cleans up.
+	await Promise.all(harnesses.map((harness) => rm(harness.tempDir, RETRY_RM)));
 	while (harnesses.length > 0) harnesses.pop()?.cleanup();
 });
 

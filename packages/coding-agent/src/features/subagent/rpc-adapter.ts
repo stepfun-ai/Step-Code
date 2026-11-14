@@ -298,8 +298,8 @@ export async function createSubagentRpcSession(
 	let tempDirRemoval: Promise<void> | undefined;
 
 	/**
-	 * Remove the temp dir at most once. Exit handling fires from both `close`
-	 * and `exitStatus`, and on Windows a second concurrent removal of the same
+	 * Remove the temp dir at most once. The spawn-error and exit handlers can
+	 * both request it, and on Windows a second concurrent removal of the same
 	 * directory fails with EPERM; unhandled, that rejection terminates the host.
 	 */
 	const removeTempDir = (): Promise<void> => {
@@ -525,7 +525,11 @@ export async function createSubagentRpcSession(
 		});
 		void removeTempDir();
 	});
+	let exitHandled = false;
+	/** Runs once: `close` and the bounded `exitStatus` drain both report the same exit. */
 	const finishExitedChild = (code: number | null): void => {
+		if (exitHandled) return;
+		exitHandled = true;
 		childExited = true;
 		if (childPid) forgetProcess(childPid);
 		dropFromRegistry();

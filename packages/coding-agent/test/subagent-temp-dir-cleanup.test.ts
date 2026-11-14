@@ -6,7 +6,11 @@ import type { StepSubagentRunInput } from "../src/features/step-subagent.ts";
 import { liveSubagentSessions } from "../src/features/subagent/lane-lifecycle.ts";
 import { createSubagentRpcSession } from "../src/features/subagent/rpc-adapter.ts";
 
-const subagentTempRemovals = vi.hoisted(() => [] as string[]);
+const removals = vi.hoisted(() => ({ async: [] as string[], sync: [] as string[] }));
+
+function isSubagentTempDir(target: unknown): boolean {
+	return path.basename(String(target)).startsWith("stepcode-subagent-");
+}
 
 // Simulate Windows refusing to remove the subagent temp dir (EPERM on rmdir);
 // every other path is removed for real.
@@ -15,8 +19,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 	return {
 		...actual,
 		rm: async (target: string, options?: Parameters<typeof actual.rm>[1]) => {
-			if (path.basename(String(target)).startsWith("stepcode-subagent-")) {
-				subagentTempRemovals.push(String(target));
+			if (isSubagentTempDir(target)) {
+				removals.async.push(String(target));
 				await actual.rm(target, options);
 				throw Object.assign(new Error(`EPERM: operation not permitted, rmdir '${target}'`), {
 					code: "EPERM",
@@ -28,11 +32,23 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 	};
 });
 
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		rmSync: (target: string, options?: Parameters<typeof actual.rmSync>[1]) => {
+			if (isSubagentTempDir(target)) removals.sync.push(String(target));
+			return actual.rmSync(target, options);
+		},
+	};
+});
+
 const workspaces: string[] = [];
 
 afterEach(async () => {
 	liveSubagentSessions.clear();
-	subagentTempRemovals.length = 0;
+	removals.async.length = 0;
+	removals.sync.length = 0;
 	await Promise.all(workspaces.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -53,10 +69,9 @@ async function fakeChild(): Promise<string> {
 	return file;
 }
 
-// Regression: on Windows the web host crashed with an unhandled
-// `EPERM: operation not permitted, rmdir ...\\stepcode-subagent-*` after a
-// subagent exited. Exit handling fired twice and raced two unawaited removals.
-test("a failed temp dir removal after child exit is attempted once and never escapes as an unhandled rejection", async () => {
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 300));
+
+async function withFakeChild(run: () => Promise<void>): Promise<unknown[]> {
 	const unhandled: unknown[] = [];
 	const onUnhandled = (reason: unknown): void => {
 		unhandled.push(reason);
@@ -65,19 +80,40 @@ test("a failed temp dir removal after child exit is attempted once and never esc
 	const originalArgv1 = process.argv[1];
 	process.argv[1] = await fakeChild();
 	try {
-		const session = await createSubagentRpcSession(runInput(), "temp-dir-cleanup-test");
-		session.stop();
-		await session.exited;
-		await new Promise((resolve) => setTimeout(resolve, 300));
-
-		expect(subagentTempRemovals).toHaveLength(1);
-		expect(unhandled).toEqual([]);
-
-		// A later terminate must not race the removal that already ran.
-		session.terminate();
-		expect(subagentTempRemovals).toHaveLength(1);
+		await run();
+		return unhandled;
 	} finally {
 		process.argv[1] = originalArgv1;
 		process.off("unhandledRejection", onUnhandled);
 	}
+}
+
+// Regression: on Windows the web host crashed with an unhandled
+// `EPERM: operation not permitted, rmdir ...\\stepcode-subagent-*` after a
+// subagent exited. Exit handling fired twice and raced two unawaited removals.
+test("a failed temp dir removal after child exit is attempted once and never escapes as an unhandled rejection", async () => {
+	const unhandled = await withFakeChild(async () => {
+		const session = await createSubagentRpcSession(runInput(), "temp-dir-cleanup-exit-test");
+		session.stop();
+		await session.exited;
+		await settle();
+		expect(removals.async).toHaveLength(1);
+
+		// The async removal already owns the directory, so terminate must not race it.
+		session.terminate();
+		expect(removals.sync).toEqual([]);
+	});
+	expect(unhandled).toEqual([]);
+}, 20_000);
+
+test("terminate removes the temp dir synchronously and the later exit does not remove it again", async () => {
+	const unhandled = await withFakeChild(async () => {
+		const session = await createSubagentRpcSession(runInput(), "temp-dir-cleanup-terminate-test");
+		session.terminate();
+		expect(removals.sync).toHaveLength(1);
+		await session.exited;
+		await settle();
+		expect(removals.async).toEqual([]);
+	});
+	expect(unhandled).toEqual([]);
 }, 20_000);

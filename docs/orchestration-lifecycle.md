@@ -156,6 +156,23 @@ the turn as failed and ends the child even for a keep-alive lane. The default is
 30 minutes, deliberately generous because a long `run_command` is silent while it
 runs; `STEP_SUBAGENT_TURN_IDLE_TIMEOUT_MS` overrides it and `0` disables it.
 
+## Child resource cleanup
+
+The RPC adapter finalizes each child exit once, even when both `close` and the
+bounded stdio drain report it. Spawn-error and exit paths share one temporary
+prompt-directory removal promise. Windows transient deletion failures receive
+up to three retries with 100 ms linear backoff; a failure after retries is best
+effort and must not reject into the host process. `terminate()` skips synchronous
+removal when that promise already owns cleanup. A successful synchronous removal
+prevents another removal on exit; a failed one can be retried after the child exits.
+
+When an isolated worktree is explicitly not retained, cleanup failure does not
+replace the child's completed result or its original failure. Failed worktree
+allocation reports the original Git error even if removing the temporary parent
+also fails. A locked directory can remain under the OS temporary root; cleanup
+failure is not evidence that the child task failed. These local error boundaries
+do not suppress unrelated unhandled rejections or uncaught exceptions globally.
+
 ## Subagent delegation authorization
 
 Delegation guidance is split by owner. The `subagent` tool description holds the
