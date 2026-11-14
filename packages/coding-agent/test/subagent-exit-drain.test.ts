@@ -70,7 +70,8 @@ process.stdin.once('data', () => {
 			} catch {}
 		}
 		state.child?.kill();
-		await rm(cwd, { recursive: true, force: true });
+		// Windows keeps a just-killed process's cwd locked (EBUSY) for a moment.
+		await rm(cwd, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 	}
 });
 
@@ -101,6 +102,6 @@ process.stdin.resume();
 		await new Promise((resolve) => unadmitted?.once("exit", resolve));
 	} finally {
 		state.child?.kill();
-		await rm(cwd, { recursive: true, force: true });
+		await rm(cwd, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 	}
 });

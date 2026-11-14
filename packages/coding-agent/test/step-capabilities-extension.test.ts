@@ -437,6 +437,42 @@ test("parallel subagents inherit the current model and receive isolated worktree
 	expect(expanded.render(100).join("\n")).toContain("Branch:");
 });
 
+// Regression: on Windows a locked worktree made `cleanup()` reject with EPERM, and the
+// success path awaited it bare, so a child that had finished was reported as failed.
+test("a worktree cleanup failure does not turn a completed subagent into a failed one", async () => {
+	const { api, tools } = createApi();
+	let cleanups = 0;
+	const extension = createStepSubagentExtension({
+		agentDir: "/tmp/step-agent-test",
+		includeBuiltinAgents: true,
+		worktreeManager: {
+			allocate: async (_cwd, label) => ({
+				path: `/tmp/worktree/${label}`,
+				branch: `step-agent/${label}`,
+				cleanup: async () => {
+					cleanups += 1;
+					throw Object.assign(new Error("EPERM: operation not permitted, rmdir"), { code: "EPERM" });
+				},
+			}),
+		},
+		runner: async () => textResult("review complete"),
+	});
+	extension(api);
+	const result = await tools
+		.get("subagent")!
+		.execute(
+			"call",
+			{ agent: "review", task: "review one", isolateWorkspace: true, retainWorktree: false },
+			undefined,
+			undefined,
+			createContext("/workspace"),
+		);
+	expect(cleanups).toBe(1);
+	const [record] = (result as AgentToolResult<{ results: StepSubagentRunResult[] }>).details.results;
+	expect(record?.exitCode).toBe(0);
+	expect(record?.errorMessage).toBeUndefined();
+});
+
 test("plan adapter uses Step tool names and leaves run_command unrestricted", async () => {
 	const { api, activeTools, commands, emit } = createApi();
 	createStepPlanExtension()(api);

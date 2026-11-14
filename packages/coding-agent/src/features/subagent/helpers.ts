@@ -85,6 +85,9 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
  * worktree outside the project avoids exposing it to the parent agent's file
  * tools while still making the path available in the result for review or
  * cherry-picking. */
+/** Windows reports transient EPERM/EBUSY while a just-released handle is still closing. */
+const TEMP_PARENT_RM_OPTIONS = { recursive: true, force: true, maxRetries: 3, retryDelay: 100 } as const;
+
 export async function allocateStepWorktree(baseCwd: string, label: string): Promise<StepWorktreeLease> {
 	const repositoryRoot = await runGit(baseCwd, ["rev-parse", "--show-toplevel"]);
 	if (!repositoryRoot) throw new Error("The child working directory is not a Git repository");
@@ -95,7 +98,8 @@ export async function allocateStepWorktree(baseCwd: string, label: string): Prom
 	try {
 		await runGit(repositoryRoot, ["worktree", "add", "-b", branch, worktreePath, "HEAD"]);
 	} catch (error) {
-		await rm(parent, { recursive: true, force: true });
+		// Keep the git failure as the reported error; the temp parent is best effort.
+		await rm(parent, TEMP_PARENT_RM_OPTIONS).catch(() => undefined);
 		throw error;
 	}
 
@@ -109,7 +113,7 @@ export async function allocateStepWorktree(baseCwd: string, label: string): Prom
 			try {
 				await runGit(repositoryRoot, ["worktree", "remove", "--force", worktreePath]);
 			} finally {
-				await rm(parent, { recursive: true, force: true });
+				await rm(parent, TEMP_PARENT_RM_OPTIONS);
 			}
 		},
 	};
