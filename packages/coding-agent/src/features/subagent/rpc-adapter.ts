@@ -295,6 +295,19 @@ export async function createSubagentRpcSession(
 	const turnIdleTimeoutMs = input.turnIdleTimeoutMs ?? resolveSubagentTurnIdleTimeoutMs();
 	let idleTimer: ReturnType<typeof setTimeout> | undefined;
 	let wallTimer: ReturnType<typeof setTimeout> | undefined;
+	let tempDirRemoval: Promise<void> | undefined;
+
+	/**
+	 * Remove the temp dir at most once. Exit handling fires from both `close`
+	 * and `exitStatus`, and on Windows a second concurrent removal of the same
+	 * directory fails with EPERM; unhandled, that rejection terminates the host.
+	 */
+	const removeTempDir = (): Promise<void> => {
+		tempDirRemoval ??= rm(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {
+			// Best effort: the directory lives under the OS temp root.
+		});
+		return tempDirRemoval;
+	};
 
 	const clearIdleWatchdog = (): void => {
 		if (!idleTimer) return;
@@ -510,7 +523,7 @@ export async function createSubagentRpcSession(
 			current.stopReason = "error";
 			current.errorMessage = processError;
 		});
-		void rm(tempDir, { recursive: true, force: true });
+		void removeTempDir();
 	});
 	const finishExitedChild = (code: number | null): void => {
 		childExited = true;
@@ -534,7 +547,7 @@ export async function createSubagentRpcSession(
 				current.errorMessage = current.errorMessage ?? `Subagent exited with code ${code ?? 1}`;
 			}
 		});
-		void rm(tempDir, { recursive: true, force: true });
+		void removeTempDir();
 	};
 	child.once("exit", () => {
 		childExited = true;
@@ -638,10 +651,14 @@ export async function createSubagentRpcSession(
 					// Already gone; the exit handlers settle the rest.
 				}
 			}
-			try {
-				rmSync(tempDir, { recursive: true, force: true });
-			} catch {
-				// Best effort: the directory lives under the OS temp root.
+			// An async removal already in flight owns the directory; racing it is what fails on Windows.
+			if (!tempDirRemoval) {
+				try {
+					rmSync(tempDir, { recursive: true, force: true });
+					tempDirRemoval = Promise.resolve();
+				} catch {
+					// Best effort: left for the async removal when the child exits.
+				}
 			}
 		},
 	};
