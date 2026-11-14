@@ -456,6 +456,12 @@ export interface ExtensionContext {
 	getSystemPrompt(): string;
 	/** Read the currently active tool definitions at call time, when the host provides a live catalog. */
 	getToolCatalog?(): readonly ToolInfo[];
+	/** Currently active tool names, when the host exposes the live tool set. */
+	getActiveTools?(): string[];
+	/** Every registered tool, including deferred and hidden ones, when the host exposes it. */
+	getAllTools?(): ToolInfo[];
+	/** Activate tools by name, when the host allows a tool to load others. */
+	setActiveTools?(toolNames: string[]): void;
 	/** Whether Pi's native provider retry loop is enabled, when exposed by the host. */
 	readonly autoRetryEnabled?: boolean;
 	/** Toggle Pi's native provider retry loop, when exposed by the host. */
@@ -568,6 +574,11 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 }
 
 /**
+ * How a registered tool reaches the model. See `ToolDefinition.exposure`.
+ */
+export type ToolExposure = "direct" | "deferred" | "hidden";
+
+/**
  * Tool definition for registerTool().
  */
 export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = unknown, TState = any> {
@@ -587,6 +598,15 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	constrainedSampling?: false | ConstrainedSamplingConfig;
 	/** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
 	renderShell?: "default" | "self";
+
+	/**
+	 * How this tool reaches the model.
+	 * - `direct`: declared like any other tool, and active at session start. The default.
+	 * - `deferred`: registered but not declared; `find_tools` loads it, and naming it in the
+	 *   tool settings or an allowlist activates it.
+	 * - `hidden`: registered but unreachable until an extension activates it explicitly.
+	 */
+	exposure?: ToolExposure;
 
 	/** Optional compatibility shim to prepare raw tool call arguments before schema validation. Must return an object conforming to TParams. */
 	prepareArguments?: (args: unknown) => Static<TParams>;
@@ -1828,7 +1848,7 @@ export type GetSessionNameHandler = () => string | undefined;
 export type GetActiveToolsHandler = () => string[];
 
 /** Tool info with name, description, parameter schema, prompt guidelines, and source metadata. */
-export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters" | "promptGuidelines"> & {
+export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters" | "promptGuidelines" | "exposure"> & {
 	sourceInfo: SourceInfo;
 };
 

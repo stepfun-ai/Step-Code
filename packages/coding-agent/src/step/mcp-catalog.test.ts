@@ -823,11 +823,14 @@ test("find_tools sees a late MCP catalog and stops returning tools removed by th
 	};
 	expect(await search()).toBe("(no matching tools)");
 	initial.release();
-	await vi.waitFor(() => expect(session.getActiveToolNames()).toContain("live__calendar"));
+	// The catalog is published deferred, so the search both finds and loads it.
+	await vi.waitFor(() => expect(session.getAllTools().map((tool) => tool.name)).toContain("live__calendar"));
+	expect(session.getActiveToolNames()).not.toContain("live__calendar");
 	expect(await search()).toContain("live__calendar");
+	expect(session.getActiveToolNames()).toContain("live__calendar");
 	expect(await search()).toContain('"calendar_id"');
 	await server.notify();
-	await vi.waitFor(() => expect(session.getActiveToolNames()).not.toContain("live__calendar"));
+	await vi.waitFor(() => expect(session.getAllTools().map((tool) => tool.name)).not.toContain("live__calendar"));
 	expect(await search()).toBe("(no matching tools)");
 });
 

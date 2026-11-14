@@ -10,7 +10,30 @@ Step listens for `notifications/tools/list_changed` from the start of the connec
 
 A closed connection removes its tools and changes its status to failed. Session shutdown removes its MCP registrations and closes the clients. Results that settle after cancellation or connection closure cannot publish a catalog. Calls already in progress retain their captured tool definition when a live catalog is updated or a tool is removed. This behavior does not add an automatic reconnect policy.
 
-`find_tools` reads the currently active session tools on every invocation, so late MCP and extension registrations become discoverable. Inactive and removed tools disappear from search. Each match includes its callable name, description, and JSON parameter schema. The optional `ExtensionContext.getToolCatalog()` accessor supplies this metadata through the runner's existing session actions. Direct SDK callers whose context does not provide that accessor retain the builtin Step catalog fallback.
+## Tool exposure
+
+Every server tool is registered as `<server>__<sanitized-tool>`. A server's `exposure` in `config.toml` decides how the model reaches it:
+
+| `exposure` | Behavior |
+| --- | --- |
+| `deferred` (default) | Registered but not declared. `find_tools` loads the matches, which become callable on the next turn. |
+| `direct` | Declared like any other active tool, for small and frequently called servers. |
+| `hidden` | Registered but unreachable; left out of the tool catalog. |
+
+The optional `description` becomes the one-line summary in the `mcp_servers` system-prompt section, which lists the servers whose tools are deferred and names `find_tools` as the way to reach them. Without that section the model cannot know the servers exist, because neither `find_tools` nor the declared tool list names them.
+
+```toml
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+description = "GitHub issues and pull requests"
+# exposure = "direct"
+```
+
+## find_tools
+
+`find_tools` ranks the deferred tools plus the active ones by intent, tool name, description, and parameter names, and activates the deferred matches so the next request declares them. Activation is recorded on the tool result, so it survives resume and fork on that branch. Removed tools disappear from search. Each match includes its callable name, description, and JSON parameter schema.
+
+The optional `ExtensionContext.getActiveTools()`, `getAllTools()`, and `setActiveTools()` accessors supply the catalog and activation through the runner's existing session actions. Direct SDK callers whose context provides only `getToolCatalog()` get the ranked answer without activation, and hosts with neither retain the builtin Step catalog fallback.
 
 Extensions can replace part of their own catalog with the existing batch API:
 
