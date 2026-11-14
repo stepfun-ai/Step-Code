@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
 	closeSync,
 	copyFileSync,
+	existsSync,
 	mkdirSync,
 	openSync,
 	readFileSync,
@@ -60,8 +61,11 @@ export type CronStatusReason = "session_missing";
 export type CronRunStatus = "delivered" | "failed" | "missed" | "skipped" | "blocked";
 
 /**
- * A scheduled job. `schemaVersion: 1` is the original CLI record; v2 adds the
- * optional desktop fields below. The CLI ignores fields it does not use.
+ * A scheduled job. `schemaVersion: 1` is the original record; v2 adds the
+ * optional host fields below (session binding, status, run accounting). Either
+ * host may write v2 now: the CLI binds a task to its session, which is one of
+ * those fields. v1 records still load, and are only ever written by an older
+ * build.
  */
 export interface CronJob {
 	schemaVersion: 1 | 2;
@@ -80,6 +84,16 @@ export interface CronJob {
 	autoExpireAt?: number;
 	workspace?: string;
 	sessionId?: string;
+	/**
+	 * Absolute path of the bound session's file.
+	 *
+	 * This is the record's proof of which conversation it belongs to: a session id
+	 * alone cannot say whether that conversation still exists, and guessing from a
+	 * directory listing was wrong for `--session <path>`, a custom session
+	 * directory, and `--no-session`. When the file is gone the task can never run
+	 * again, which is what `pauseMissingSessions` checks.
+	 */
+	sessionFile?: string;
 	/**
 	 * Set when the host created the bound session for this task rather than
 	 * binding a session the user already had. The sidebar uses it to place the
@@ -109,6 +123,7 @@ export interface CronCreateOptions {
 	id?: string;
 	workspace?: string;
 	sessionId?: string;
+	sessionFile?: string;
 	sessionCreated?: boolean;
 	title?: string;
 	status?: CronJobStatus;
@@ -426,6 +441,11 @@ function parsePersistedJob(value: unknown): CronJob | undefined {
 	if (candidate.sessionId !== undefined && (typeof candidate.sessionId !== "string" || !candidate.sessionId.trim()))
 		return undefined;
 	if (
+		candidate.sessionFile !== undefined &&
+		(typeof candidate.sessionFile !== "string" || !candidate.sessionFile.trim())
+	)
+		return undefined;
+	if (
 		candidate.title !== undefined &&
 		(typeof candidate.title !== "string" || candidate.title.length > CRON_MAX_TITLE_LENGTH)
 	)
@@ -518,8 +538,11 @@ export interface StepCronRuntimeOptions {
 	 * Which records this host delivers and may change.
 	 *
 	 * Durable records are shared by file path, so a project folder can hold a
-	 * record another host owns. Unowned records are still read and written back
-	 * unchanged; they are only never fired, listed or mutated here.
+	 * record another host owns. An unowned record is never fired, listed or
+	 * updated for its owner's sake. Two exceptions exist, both for records no
+	 * session can ever claim again: `delete` may remove them, and
+	 * `pauseMissingSessions` marks one whose bound conversation is gone so a
+	 * reader can find and clear it.
 	 */
 	ownsJob?: (job: CronJob) => boolean;
 }
@@ -541,6 +564,18 @@ export interface CronRuntimeLike {
 	update?(id: string, patch: CronUpdatePatch): CronJob;
 	setEnabled?(id: string, enabled: boolean): boolean;
 	runNow?(id: string): CronJob;
+	/**
+	 * Pause records whose bound session no longer exists, and make them deletable.
+	 *
+	 * A task belongs to one conversation. When that conversation is gone — the file
+	 * was deleted, or the reader moved to another machine — nothing can ever claim
+	 * the record again: it is never listed, never fired, and its expiry only runs
+	 * for records this host owns. Without this it stayed in the file forever.
+	 *
+	 * `exists` answers whether a path is still there; it is given the record's
+	 * recorded session file, not an id.
+	 */
+	pauseMissingSessions?(exists: (path: string) => boolean): void;
 	onTurnEnd(): void;
 	stop(): void;
 }
@@ -662,7 +697,10 @@ export class StepCronRuntime {
 		const nominalNext =
 			(!recurring ? options.runAt : undefined) ??
 			(options.intervalHours ? createdAt + options.intervalHours * 60 * 60 * 1000 : expression.next(createdAt));
-		const desktopFields =
+		// A record is v2 when it carries any of the fields v1 did not have. The
+		// session binding counts: that is what makes a task belong to one
+		// conversation.
+		const hasV2Fields =
 			options.workspace !== undefined ||
 			options.sessionId !== undefined ||
 			options.title !== undefined ||
@@ -684,7 +722,13 @@ export class StepCronRuntime {
 					? createdAt + (options.autoExpireMs ?? AUTO_EXPIRE_MS)
 					: undefined;
 		const job = this.withLatestJobs(() => {
-			if (this.jobs.size >= this.maxJobs)
+			// Count only the records this host owns. The file is shared, so counting
+			// every row let another session's tasks — or records written before tasks
+			// were bound — fill the quota while remaining invisible and undeletable
+			// here: a reader could neither schedule a new task nor clear the ones in
+			// the way.
+			const owned = [...this.jobs.values()].filter((candidate) => this.ownsJob(candidate)).length;
+			if (owned >= this.maxJobs)
 				throw new Error(`At most ${this.maxJobs} cron jobs can be scheduled; delete an existing job first`);
 			const requestedId = options.id?.trim();
 			if (requestedId !== undefined && !/^[A-Za-z0-9_-]{1,64}$/u.test(requestedId))
@@ -692,7 +736,7 @@ export class StepCronRuntime {
 			const id = requestedId || this.uniqueId();
 			if (this.jobs.has(id)) throw new Error(`Cron job id ${id} already exists`);
 			const next: CronJob = {
-				schemaVersion: desktopFields ? 2 : 1,
+				schemaVersion: hasV2Fields ? 2 : 1,
 				id,
 				cron: normalizedCron,
 				prompt: normalizedPrompt,
@@ -704,6 +748,7 @@ export class StepCronRuntime {
 				nextFireAt: this.jitter(nominalNext, createdAt, id, recurring, expression, options.jitter !== false),
 				...(options.workspace ? { workspace: path.resolve(options.workspace) } : {}),
 				...(options.sessionId ? { sessionId: options.sessionId } : {}),
+				...(options.sessionFile ? { sessionFile: path.resolve(options.sessionFile) } : {}),
 				...(options.sessionCreated ? { sessionCreated: true } : {}),
 				...(options.title ? { title: options.title.slice(0, CRON_MAX_TITLE_LENGTH) } : {}),
 				...(options.status ? { status: options.status } : {}),
@@ -887,12 +932,62 @@ export class StepCronRuntime {
 
 	delete(id: string): boolean {
 		const found = this.withLatestJobs(() => {
-			if (!this.jobs.has(id) || !this.ownsJob(this.jobs.get(id)!)) return false;
+			const job = this.jobs.get(id);
+			if (!job) return false;
+			// This session's own task, or one nothing can ever run again. A record
+			// bound to a live session stays: deleting it would remove a task that
+			// conversation is still going to run.
+			//
+			// Two kinds of record have no owner left and are accepted: no `sessionId`
+			// (written before tasks were bound), and `session_missing` (its
+			// conversation's file is gone). A record with an id but no file belongs to
+			// a host that keeps none (`--no-session`); its owner deletes it through
+			// `ownsJob`, and anyone else leaves it alone, because another host's
+			// records lack a file too.
+			if (!this.ownsJob(job) && job.sessionId !== undefined && job.statusReason !== "session_missing") return false;
 			this.removeJob(id);
 			return true;
 		});
 		this.emit("cron_deleted", { found });
 		return found;
+	}
+
+	/**
+	 * Pause records whose bound session file is gone, and let them be deleted.
+	 *
+	 * A task belongs to one conversation. Once that conversation's file no longer
+	 * exists nothing can claim the record: it is never listed, never fired, and its
+	 * expiry is only applied to records this host owns. Marking it
+	 * `session_missing` makes `delete` accept it, so it does not accumulate
+	 * forever.
+	 *
+	 * The test is the file the record names, not a directory listing: a session id
+	 * is not a location, and `--session <path>`, a custom session directory and
+	 * `--no-session` all put (or keep) the file somewhere a scan of the default
+	 * directory would miss. Guessing from a listing marked live sessions' own tasks
+	 * as gone, which no host could undo.
+	 *
+	 * A record with no `sessionFile` cannot be verified — there is nothing to check
+	 * — so it is left alone rather than guessed at. Such a record has no owner any
+	 * host can identify either, which makes it permanently invisible and
+	 * undeletable; `delete` accepts it for that reason.
+	 */
+	pauseMissingSessions(exists: (path: string) => boolean): void {
+		const missing = [...this.jobs.values()].filter(
+			(job) => job.durable && job.sessionFile !== undefined && !exists(job.sessionFile),
+		);
+		if (missing.length === 0) return;
+		this.withLatestJobs(() => {
+			for (const job of missing) {
+				const current = this.jobs.get(job.id);
+				// A finished or expired record keeps its own outcome: it is not a lost
+				// session, and overwriting the status would hide why it stopped.
+				if (!current || current.statusReason === "session_missing") continue;
+				if (current.status === "expired" || current.status === "completed") continue;
+				current.status = "paused";
+				current.statusReason = "session_missing";
+			}
+		});
 	}
 
 	tick(): void {
@@ -941,7 +1036,7 @@ export class StepCronRuntime {
 			const now = this.readNow();
 			if (
 				[...this.jobs.values()].some((job) => {
-					if (!job.durable) return false;
+					if (!job.durable || !this.ownsJob(job)) return false;
 					const expires = this.expirationOf(job);
 					return job.nextFireAt <= now || (expires !== undefined && expires <= now);
 				})
@@ -950,6 +1045,11 @@ export class StepCronRuntime {
 					// Import the complete file before any delivery can change persisted state.
 					for (const job of [...this.jobs.values()]) {
 						if (!job.durable) continue;
+						// A record another session owns is read and left untouched: its
+						// schedule, its expiry and its missed notice are that session's to
+						// advance. Recovering it here would deliver it into this
+						// conversation, which is the cross-session defect itself.
+						if (!this.ownsJob(job)) continue;
 						if (job.status !== undefined && job.status !== "enabled") continue;
 						const expires = this.expirationOf(job);
 						if (expires !== undefined && expires <= now) {
@@ -1048,7 +1148,12 @@ export class StepCronRuntime {
 	 * every one-second tick just to re-mark the same jobs deferred.
 	 */
 	private needsLockedDrain(now: number): boolean {
-		if (this.missedAllowed() && this.pendingMissed.size > 0) return true;
+		if (this.missedAllowed()) {
+			for (const id of this.pendingMissed) {
+				const job = this.jobs.get(id);
+				if (job && this.ownsJob(job)) return true;
+			}
+		}
 		for (const job of this.jobs.values()) {
 			if (!this.ownsJob(job)) continue;
 			if (job.status !== undefined && job.status !== "enabled") continue;
@@ -1069,6 +1174,13 @@ export class StepCronRuntime {
 
 	private deliverMissed(): void {
 		if (this.pendingMissed.size === 0 || !this.missedAllowed()) return;
+		// Drop the ids this session does not own instead of leaving them queued: a
+		// queue that can never drain made every tick take the storage lock to look
+		// again, and the lock is shared with every other session in the folder.
+		for (const id of [...this.pendingMissed]) {
+			const job = this.jobs.get(id);
+			if (!job || !this.ownsJob(job)) this.pendingMissed.delete(id);
+		}
 		const jobs = [...this.pendingMissed].flatMap((id) => {
 			const job = this.jobs.get(id);
 			return job && this.ownsJob(job) ? [{ ...job }] : [];
@@ -1433,12 +1545,29 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 			options.runtime ??
 			new StepCronRuntime({
 				telemetry: options.telemetry,
-				// A durable record bound to a session belongs to the host that owns
-				// that session. A CLI session loading the same project folder must not
-				// fire, list, or delete it: it has no way to see that session, and
-				// firing it would deliver a desktop task's prompt into this terminal
-				// conversation instead.
-				ownsJob: (job) => job.sessionId === undefined,
+				// A task belongs to the session that created it.
+				//
+				// Durable records live in the project folder, so every session opened
+				// there reads the same file. A job with a `sessionId` belongs to exactly
+				// that session; a CLI session opening the same folder must not fire,
+				// list or delete it — it has no way to see that conversation, and firing
+				// it would deliver the prompt into whichever terminal happens to be
+				// open. That was the behaviour for records with no `sessionId`, which
+				// is why one session's scheduled task used to fire in every other one.
+				//
+				// A record with no `sessionId` predates this rule (or was written by a
+				// host that does not bind tasks). Nothing claims it: it is never fired,
+				// and `cron_list` does not show it. Leaving it unlisted is the only
+				// outcome that cannot deliver it to a conversation it does not belong
+				// to. Such a record stays deletable, so it is not stranded.
+				ownsJob: (job) => {
+					// No readable session id means this host cannot attribute a task at
+					// all, so it claims none. Never `true`: that would fall back to
+					// "everything is mine", the cross-session defect itself.
+					const sessionId = withLiveContext(currentContext, (ctx) => ctx.sessionManager.getSessionId());
+					if (!sessionId) return false;
+					return job.sessionId !== undefined && job.sessionId === sessionId;
+				},
 				isIdle: () =>
 					Boolean(
 						withLiveContext(
@@ -1496,6 +1625,22 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 		pi.on("session_start", (_event, ctx) => {
 			setContext(_event, ctx);
 			runtime.start(ctx.cwd, ctx.isProjectTrusted());
+			// A task whose bound session file is gone can never run again. Marking
+			// it lets it be deleted instead of sitting in the shared file forever.
+			// The record names its own file, so this needs no directory scan and
+			// cannot mistake a live session's task for a lost one.
+			//
+			// A lock held by another process would throw here; startup recovery must
+			// not fail because of a housekeeping pass, so it is skipped and retried on
+			// the next start.
+			try {
+				runtime.pauseMissingSessions?.((file) => existsSync(file));
+			} catch (error) {
+				currentContext?.ui.notify(
+					`Unable to check scheduled tasks: ${error instanceof Error ? error.message : String(error)}`,
+					"warning",
+				);
+			}
 		});
 		pi.on("turn_end", (_event, ctx) => {
 			setContext(_event, ctx);
@@ -1513,7 +1658,7 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 		pi.registerTool({
 			name: "cron_create",
 			label: "Create cron job",
-			description: `Schedule a five-field local-time cron job (up to 50 jobs). Jobs fire only while StepCode is running and idle, after pending user input. Durable jobs (durable:true) persist under .stepcode/cron and survive session restarts; session jobs die with the process. Recurring jobs (recurring:true, default) expire after seven days as a runaway guard. Invalid expressions are rejected before the tool records anything.
+			description: `Schedule a five-field local-time cron job (up to 50 jobs). Jobs fire only while StepCode is running and idle, after pending user input. Durable jobs (durable:true) persist under .stepcode/cron and belong to the conversation that created them: they keep firing after a restart of that same conversation (--resume / --continue) and stay invisible to other conversations in the same folder. Session jobs die with the process. Recurring jobs (recurring:true, default) expire after seven days as a runaway guard. Invalid expressions are rejected before the tool records anything.
 
 When NOT to use: cron_create is for calendar or expression-based triggers that repeat or must survive a restart. For fanning work out to many subagents on schedule, cron_create only injects a follow-up prompt on trigger; the subsequent turn is where you would call workflow (with its own opt-in). For a multi-turn objective that should persist without a fixed calendar, use create_goal instead.
 
@@ -1527,7 +1672,24 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 				runtime.setContext(ctx.cwd);
 				const recurring = params.recurring !== false;
 				const durable = params.durable === true;
-				const result = runtime.create(params.cron, params.prompt, recurring, durable, ctx.isProjectTrusted());
+				// Bind the job to this conversation. The record lives in the project
+				// folder, which every session opened there shares; without this the job
+				// fired in whichever one happened to be active.
+				//
+				// `origin: "agent"` records who created it. Nothing reads it today —
+				// the desktop host keeps a separate store and never sees this file — so
+				// it is a description, not a mechanism. A host that ever reads these
+				// records can use it to tell them from its own.
+				// The file is the record's proof of which conversation it belongs to; a
+				// later start checks it instead of guessing from an id. A host without
+				// one (`--no-session`) records only the id, and its tasks are simply
+				// not checked for a lost session.
+				const sessionFile = ctx.sessionManager.getSessionFile?.();
+				const result = runtime.create(params.cron, params.prompt, recurring, durable, ctx.isProjectTrusted(), {
+					sessionId: ctx.sessionManager.getSessionId(),
+					...(sessionFile ? { sessionFile } : {}),
+					origin: "agent",
+				});
 				return jsonResult({ ...result.job, nextFireAt: result.nextFireAt });
 			},
 		});

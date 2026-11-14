@@ -168,6 +168,8 @@ interface Harness {
 	handlers: Map<string, Array<(event: never, ctx: ExtensionContext) => unknown>>;
 	sent: Array<{ message: Record<string, unknown>; options?: Record<string, unknown> }>;
 	ctx: ExtensionContext;
+	/** The session id `ctx.sessionManager.getSessionId()` reports; reassign to act as another session. */
+	session: { id: string; file: string | undefined };
 }
 
 function createHarness(): Harness {
@@ -175,6 +177,12 @@ function createHarness(): Harness {
 	const tools = new Map<string, ToolDefinition>();
 	const handlers = new Map<string, Array<(event: never, ctx: ExtensionContext) => unknown>>();
 	const sent: Array<{ message: Record<string, unknown>; options?: Record<string, unknown> }> = [];
+	// A task records the absolute path of its session file, so the harness has to
+	// report one; `undefined` models `--no-session`.
+	const session: { id: string; file: string | undefined } = {
+		id: "cron-session",
+		file: path.join(makeDirectory(), "cron-session.jsonl"),
+	};
 	const ctx = {
 		mode: "rpc",
 		hasUI: true,
@@ -184,7 +192,11 @@ function createHarness(): Harness {
 		hasPendingUserDecision: () => false,
 		isProjectTrusted: () => true,
 		ui: { notify: vi.fn(), confirm: vi.fn().mockResolvedValue(true) },
-		sessionManager: { getSessionId: () => "cron-session", getEntries: () => [] },
+		sessionManager: {
+			getSessionId: () => session.id,
+			getSessionFile: () => session.file,
+			getEntries: () => [],
+		},
 	} as unknown as ExtensionContext;
 	const api = {
 		registerTool(tool: ToolDefinition) {
@@ -207,7 +219,7 @@ function createHarness(): Harness {
 		appendEntry: () => {},
 		getFlag: () => false,
 	} as unknown as ExtensionAPI;
-	return { api, tools, handlers, sent, ctx, commands };
+	return { api, tools, handlers, sent, ctx, commands, session };
 }
 
 test("cron extension exposes create/list/update/delete and steer delivery", async () => {
@@ -712,7 +724,11 @@ test("missed notices and /cron status include the original prompts", async () =>
 		storagePath: path.join(harness.ctx.cwd, ".stepcode", "cron", "tasks.json"),
 		jitterRatio: 0,
 	});
-	const missed = first.create("* * * * *", "check the failed deployment", false, true).job;
+	// Bound to this session, as every task the CLI creates now is: a record with no
+	// session id is not claimed by any session and would never be reported.
+	const missed = first.create("* * * * *", "check the failed deployment", false, true, true, {
+		sessionId: harness.session.id,
+	}).job;
 	createStepCronExtension({ enabled: true })(harness.api);
 	await emitCron(harness, "session_start");
 	expect(harness.sent[0]?.message.content).toContain(missed.prompt);
@@ -1139,5 +1155,472 @@ describe("desktop cron task fields", () => {
 		allow = true;
 		runtime.tick();
 		expect(deliveries).toHaveLength(1);
+	});
+});
+
+describe("a task belongs to the session that created it", () => {
+	/** Two sessions sharing one project folder, which is what makes the file shared. */
+	function twoSessionsInOneFolder() {
+		const cwd = makeDirectory();
+		const first = createHarness();
+		Object.assign(first.ctx, { cwd });
+		first.session.id = "session-first";
+		const second = createHarness();
+		Object.assign(second.ctx, { cwd });
+		second.session.id = "session-second";
+		return { first, second };
+	}
+
+	test("the record names the creating session", async () => {
+		vi.useFakeTimers();
+		const { first } = twoSessionsInOneFolder();
+		createStepCronExtension({ enabled: true })(first.api);
+		await emitCron(first, "session_start");
+		const created = (await first.tools
+			.get("cron_create")!
+			.execute(
+				"create",
+				{ cron: "* * * * *", prompt: "audit", durable: true } as never,
+				undefined,
+				undefined,
+				first.ctx,
+			)) as { details: CronJob };
+		expect(created.details.sessionId).toBe("session-first");
+		// The file is what a later start checks; recording only the id would leave
+		// nothing to verify, and an id is not a location.
+		expect(created.details.sessionFile).toBe(first.session.file);
+		await emitCron(first, "session_shutdown");
+	});
+
+	test("a host with no session file records no file, and its tasks are not guessed at", async () => {
+		// `--no-session` keeps the transcript in memory. There is no path to check,
+		// so a later start must leave the record alone rather than call it missing.
+		vi.useFakeTimers();
+		const harness = createHarness();
+		harness.session.file = undefined;
+		createStepCronExtension({ enabled: true })(harness.api);
+		await emitCron(harness, "session_start");
+		const created = (await harness.tools
+			.get("cron_create")!
+			.execute(
+				"create",
+				{ cron: "* * * * *", prompt: "no file", durable: true } as never,
+				undefined,
+				undefined,
+				harness.ctx,
+			)) as {
+			details: CronJob;
+		};
+		expect(created.details.sessionId).toBe("cron-session");
+		expect("sessionFile" in created.details).toBe(false);
+		await emitCron(harness, "session_shutdown");
+	});
+
+	test("another session in the same folder neither lists nor fires it", async () => {
+		// The defect: the record lived in the shared project folder with no
+		// `sessionId`, so every session opened there claimed it and the job's prompt
+		// fired into whichever terminal was active.
+		vi.useFakeTimers();
+		const { first, second } = twoSessionsInOneFolder();
+		createStepCronExtension({ enabled: true })(first.api);
+		await emitCron(first, "session_start");
+		await first.tools
+			.get("cron_create")!
+			.execute(
+				"create",
+				{ cron: "* * * * *", prompt: "audit", durable: true } as never,
+				undefined,
+				undefined,
+				first.ctx,
+			);
+		await emitCron(first, "session_shutdown");
+
+		createStepCronExtension({ enabled: true })(second.api);
+		await emitCron(second, "session_start");
+		const listed = (await second.tools
+			.get("cron_list")!
+			.execute("list", {} as never, undefined, undefined, second.ctx)) as {
+			details: CronJob[];
+		};
+		expect(listed.details).toEqual([]);
+		vi.advanceTimersByTime(120_000);
+		expect(second.sent).toEqual([]);
+		await emitCron(second, "session_shutdown");
+	});
+
+	test("the creating session still lists it after a restart", async () => {
+		// `--resume` reads the id back from the session file's header, so the same
+		// conversation reclaims its task; a restart is a new extension over the same
+		// folder and the same session id.
+		vi.useFakeTimers();
+		const cwd = makeDirectory();
+		const before = createHarness();
+		Object.assign(before.ctx, { cwd });
+		before.session.id = "session-a";
+		createStepCronExtension({ enabled: true })(before.api);
+		await emitCron(before, "session_start");
+		await before.tools
+			.get("cron_create")!
+			.execute(
+				"create",
+				{ cron: "* * * * *", prompt: "audit", durable: true } as never,
+				undefined,
+				undefined,
+				before.ctx,
+			);
+		await emitCron(before, "session_shutdown");
+
+		const after = createHarness();
+		Object.assign(after.ctx, { cwd });
+		after.session.id = "session-a";
+		createStepCronExtension({ enabled: true })(after.api);
+		await emitCron(after, "session_start");
+		const listed = (await after.tools
+			.get("cron_list")!
+			.execute("list", {} as never, undefined, undefined, after.ctx)) as {
+			details: CronJob[];
+		};
+		expect(listed.details.map((job) => job.prompt)).toEqual(["audit"]);
+		await emitCron(after, "session_shutdown");
+	});
+
+	test("session_start does not deliver another session's due task", async () => {
+		// Startup recovery used to walk every durable record without consulting
+		// ownership, so a task belonging to a session that had exited was delivered
+		// into whichever session opened the folder next — the reported defect, on
+		// the one path that runs before any tick.
+		//
+		// `autoExpireAt` is in the past on purpose: that is the branch that actually
+		// fires. A record that has merely come due without expiring takes the
+		// "advance and defer" path, which a version without the ownership check
+		// would also leave silent — the test would pass either way.
+		vi.useFakeTimers();
+		const cwd = makeDirectory();
+		const now = Date.now();
+		new CronFileStore(path.join(cwd, ".stepcode", "cron", "tasks.json")).save([
+			{
+				schemaVersion: 2,
+				id: "theirs",
+				cron: "* * * * *",
+				prompt: "THEIR SECRET TASK",
+				recurring: true,
+				durable: true,
+				createdAt: now - 120_000,
+				nextFireAt: now - 60_000,
+				autoExpireAt: now - 30_000,
+				sessionId: "session-theirs",
+			},
+		]);
+		const harness = createHarness();
+		Object.assign(harness.ctx, { cwd });
+		harness.session.id = "session-mine";
+		createStepCronExtension({ enabled: true })(harness.api);
+		await emitCron(harness, "session_start");
+		expect(harness.sent).toEqual([]);
+		// Untouched: its schedule is that session's to advance, not ours.
+		const stored = new CronFileStore(path.join(cwd, ".stepcode", "cron", "tasks.json")).load();
+		expect(stored[0]?.nextFireAt).toBe(now - 60_000);
+		await emitCron(harness, "session_shutdown");
+	});
+
+	test("unowned records neither fill the create quota nor become undeletable", async () => {
+		// Records written before tasks were bound have no owner. Counting them
+		// blocked new tasks, and refusing to delete them left the reader with no way
+		// to clear the ones in the way.
+		vi.useFakeTimers();
+		const cwd = makeDirectory();
+		const now = Date.now();
+		const file = path.join(cwd, ".stepcode", "cron", "tasks.json");
+		new CronFileStore(file).save(
+			Array.from({ length: 50 }, (_, index) => ({
+				schemaVersion: 1 as const,
+				id: `legacy-${index}`,
+				cron: "0 9 * * *",
+				prompt: `old ${index}`,
+				recurring: true,
+				durable: true,
+				createdAt: now - 1_000,
+				nextFireAt: now + 3_600_000,
+			})),
+		);
+		const harness = createHarness();
+		Object.assign(harness.ctx, { cwd });
+		harness.session.id = "session-mine";
+		createStepCronExtension({ enabled: true })(harness.api);
+		await emitCron(harness, "session_start");
+		// 50 unowned records must not fill the quota.
+		const created = (await harness.tools
+			.get("cron_create")!
+			.execute(
+				"create",
+				{ cron: "0 10 * * *", prompt: "new", durable: true } as never,
+				undefined,
+				undefined,
+				harness.ctx,
+			)) as {
+			details: CronJob;
+		};
+		expect(created.details.sessionId).toBe("session-mine");
+		// A record no session owns can be removed, so it is not stranded.
+		const deleted = (await harness.tools
+			.get("cron_delete")!
+			.execute("delete", { id: "legacy-0" } as never, undefined, undefined, harness.ctx)) as {
+			details: { found: boolean };
+		};
+		expect(deleted.details.found).toBe(true);
+		await emitCron(harness, "session_shutdown");
+	});
+
+	test("a task bound to a deleted session is paused and can be removed", async () => {
+		// Nothing can claim a task whose conversation is gone: it is never listed,
+		// never fired, and its expiry only runs for records this host owns. Without
+		// marking it, the record sat in the shared file forever with no way out.
+		vi.useFakeTimers();
+		const cwd = makeDirectory();
+		const now = Date.now();
+		const file = path.join(cwd, ".stepcode", "cron", "tasks.json");
+		new CronFileStore(file).save([
+			{
+				schemaVersion: 2,
+				id: "gone",
+				cron: "0 9 * * *",
+				prompt: "bound to a deleted conversation",
+				recurring: true,
+				durable: true,
+				createdAt: now - 1_000,
+				nextFireAt: now + 3_600_000,
+				sessionId: "session-that-was-deleted",
+				// A path that does not exist: the record names its own proof, so no
+				// directory scan is involved.
+				sessionFile: path.join(cwd, "sessions", "20260101_session-that-was-deleted.jsonl"),
+			},
+		]);
+		const harness = createHarness();
+		Object.assign(harness.ctx, { cwd });
+		harness.session.id = "session-mine";
+		createStepCronExtension({ enabled: true })(harness.api);
+		await emitCron(harness, "session_start");
+		const stored = new CronFileStore(file).load();
+		expect(stored[0]?.status).toBe("paused");
+		expect(stored[0]?.statusReason).toBe("session_missing");
+		// Its bound session is gone, so this is the only place that can clear it.
+		const deleted = (await harness.tools
+			.get("cron_delete")!
+			.execute("delete", { id: "gone" } as never, undefined, undefined, harness.ctx)) as {
+			details: { found: boolean };
+		};
+		expect(deleted.details.found).toBe(true);
+		await emitCron(harness, "session_shutdown");
+	});
+
+	test("a session file outside the default directory still counts as alive", async () => {
+		// `--session <path>` keeps whatever path it was given, and a custom session
+		// directory puts the file elsewhere. A record names its own file, so neither
+		// looks lost — judging by an id and a directory listing marked live
+		// sessions' own tasks as gone, and nothing could undo that.
+		vi.useFakeTimers();
+		const cwd = makeDirectory();
+		const now = Date.now();
+		const file = path.join(cwd, ".stepcode", "cron", "tasks.json");
+		const elsewhere = path.join(makeDirectory(), "hand-picked-name.jsonl");
+		writeFileSync(elsewhere, "{}\n");
+		new CronFileStore(file).save([
+			{
+				schemaVersion: 2,
+				id: "outside",
+				cron: "0 9 * * *",
+				prompt: "bound to a session file with a non-standard name",
+				recurring: true,
+				durable: true,
+				createdAt: now - 1_000,
+				nextFireAt: now + 3_600_000,
+				sessionId: "session-elsewhere",
+				sessionFile: elsewhere,
+			},
+		]);
+		const harness = createHarness();
+		Object.assign(harness.ctx, { cwd });
+		harness.session.id = "session-mine";
+		createStepCronExtension({ enabled: true })(harness.api);
+		await emitCron(harness, "session_start");
+		const stored = new CronFileStore(file).load();
+		expect(stored[0]?.status).toBeUndefined();
+		expect(stored[0]?.statusReason).toBeUndefined();
+		await emitCron(harness, "session_shutdown");
+	});
+
+	test("a record written before session files were recorded is left alone", async () => {
+		// Such a record carries only an id, and an id is not a location. There is
+		// nothing to verify, so nothing is guessed.
+		vi.useFakeTimers();
+		const cwd = makeDirectory();
+		const now = Date.now();
+		const file = path.join(cwd, ".stepcode", "cron", "tasks.json");
+		new CronFileStore(file).save([
+			{
+				schemaVersion: 2,
+				id: "old-style",
+				cron: "0 9 * * *",
+				prompt: "only a session id",
+				recurring: true,
+				durable: true,
+				createdAt: now - 1_000,
+				nextFireAt: now + 3_600_000,
+				sessionId: "session-unknown",
+			},
+		]);
+		const harness = createHarness();
+		Object.assign(harness.ctx, { cwd });
+		harness.session.id = "session-mine";
+		createStepCronExtension({ enabled: true })(harness.api);
+		await emitCron(harness, "session_start");
+		const stored = new CronFileStore(file).load();
+		expect(stored[0]?.status).toBeUndefined();
+		expect(stored[0]?.statusReason).toBeUndefined();
+		await emitCron(harness, "session_shutdown");
+	});
+
+	test("a task from a host with no session file is still removable by its own session", async () => {
+		// `--no-session` records an id but no file, so no start can verify it. Its
+		// own conversation still owns it through the id, which is what keeps the
+		// record from being stranded.
+		vi.useFakeTimers();
+		const harness = createHarness();
+		harness.session.file = undefined;
+		harness.session.id = "session-no-file";
+		createStepCronExtension({ enabled: true })(harness.api);
+		await emitCron(harness, "session_start");
+		const created = (await harness.tools
+			.get("cron_create")!
+			.execute(
+				"create",
+				{ cron: "0 9 * * *", prompt: "no file", durable: true } as never,
+				undefined,
+				undefined,
+				harness.ctx,
+			)) as { details: CronJob };
+		expect("sessionFile" in created.details).toBe(false);
+		// Not paused: there is nothing to check.
+		const listed = (await harness.tools
+			.get("cron_list")!
+			.execute("list", {} as never, undefined, undefined, harness.ctx)) as { details: CronJob[] };
+		expect(listed.details.map((job) => job.id)).toEqual([created.details.id]);
+		const deleted = (await harness.tools
+			.get("cron_delete")!
+			.execute("delete", { id: created.details.id } as never, undefined, undefined, harness.ctx)) as {
+			details: { found: boolean };
+		};
+		expect(deleted.details.found).toBe(true);
+		await emitCron(harness, "session_shutdown");
+	});
+
+	test("a finished task keeps its outcome instead of being marked as a lost session", async () => {
+		// Overwriting it with `paused` would hide why it stopped, and the record is
+		// not a lost session in the first place.
+		vi.useFakeTimers();
+		const cwd = makeDirectory();
+		const now = Date.now();
+		const file = path.join(cwd, ".stepcode", "cron", "tasks.json");
+		const gone = path.join(cwd, "sessions", "gone.jsonl");
+		new CronFileStore(file).save([
+			{
+				schemaVersion: 2,
+				id: "done",
+				cron: "0 9 * * *",
+				prompt: "finished",
+				recurring: true,
+				durable: true,
+				createdAt: now - 10_000,
+				nextFireAt: now + 3_600_000,
+				sessionId: "session-gone",
+				sessionFile: gone,
+				status: "completed",
+			},
+		]);
+		const harness = createHarness();
+		Object.assign(harness.ctx, { cwd });
+		harness.session.id = "session-mine";
+		createStepCronExtension({ enabled: true })(harness.api);
+		await emitCron(harness, "session_start");
+		const stored = new CronFileStore(file).load();
+		expect(stored[0]?.status).toBe("completed");
+		expect(stored[0]?.statusReason).toBeUndefined();
+		await emitCron(harness, "session_shutdown");
+	});
+
+	test("a task whose bound session still exists is left alone", async () => {
+		vi.useFakeTimers();
+		const cwd = makeDirectory();
+		const now = Date.now();
+		const file = path.join(cwd, ".stepcode", "cron", "tasks.json");
+		new CronFileStore(file).save([
+			{
+				schemaVersion: 2,
+				id: "alive",
+				cron: "0 9 * * *",
+				prompt: "still bound",
+				recurring: true,
+				durable: true,
+				createdAt: now - 1_000,
+				nextFireAt: now + 3_600_000,
+				sessionId: "session-other",
+				sessionFile: path.join(cwd, "sessions", "20260101_session-other.jsonl"),
+			},
+		]);
+		const harness = createHarness();
+		Object.assign(harness.ctx, { cwd });
+		harness.session.id = "session-mine";
+		// The bound session's file is present, so its task stays live.
+		const sessionFile = path.join(cwd, "sessions", "20260101_session-other.jsonl");
+		mkdirSync(path.dirname(sessionFile), { recursive: true });
+		writeFileSync(sessionFile, "{}\n");
+		createStepCronExtension({ enabled: true })(harness.api);
+		await emitCron(harness, "session_start");
+		const stored = new CronFileStore(file).load();
+		expect(stored[0]?.status).toBeUndefined();
+		expect(stored[0]?.statusReason).toBeUndefined();
+		// Still not ours to delete: that conversation is live.
+		const deleted = (await harness.tools
+			.get("cron_delete")!
+			.execute("delete", { id: "alive" } as never, undefined, undefined, harness.ctx)) as {
+			details: { found: boolean };
+		};
+		expect(deleted.details.found).toBe(false);
+		await emitCron(harness, "session_shutdown");
+	});
+
+	test("a record with no session id is not claimed by any session", async () => {
+		// Records written before tasks were bound cannot be attributed, and firing
+		// one into an unrelated conversation is the defect this fixes. They stay on
+		// disk, unlisted, rather than being delivered somewhere arbitrary.
+		vi.useFakeTimers();
+		const cwd = makeDirectory();
+		const store = new CronFileStore(path.join(cwd, ".stepcode", "cron", "tasks.json"));
+		store.save([
+			{
+				schemaVersion: 1,
+				id: "legacy",
+				cron: "* * * * *",
+				prompt: "old",
+				recurring: true,
+				durable: true,
+				createdAt: Date.now() - 1_000,
+				nextFireAt: Date.now() + 1_000,
+			},
+		]);
+		const harness = createHarness();
+		Object.assign(harness.ctx, { cwd });
+		harness.session.id = "session-any";
+		createStepCronExtension({ enabled: true })(harness.api);
+		await emitCron(harness, "session_start");
+		const listed = (await harness.tools
+			.get("cron_list")!
+			.execute("list", {} as never, undefined, undefined, harness.ctx)) as {
+			details: CronJob[];
+		};
+		expect(listed.details).toEqual([]);
+		vi.advanceTimersByTime(120_000);
+		expect(harness.sent).toEqual([]);
+		await emitCron(harness, "session_shutdown");
 	});
 });
