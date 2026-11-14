@@ -344,9 +344,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	extendResources(paths: ResourceExtensionPaths): void {
-		const skillPaths = this.normalizeExtensionPaths(paths.skillPaths ?? []);
-		const promptPaths = this.normalizeExtensionPaths(paths.promptPaths ?? []);
-		const themePaths = this.normalizeExtensionPaths(paths.themePaths ?? []);
+		const skillPaths = this.noSkills ? [] : this.normalizeExtensionPaths(paths.skillPaths ?? []);
+		const promptPaths = this.noPromptTemplates ? [] : this.normalizeExtensionPaths(paths.promptPaths ?? []);
+		const themePaths = this.noThemes ? [] : this.normalizeExtensionPaths(paths.themePaths ?? []);
 
 		for (const entry of skillPaths) {
 			this.extensionSkillSourceInfos.set(entry.path, createSourceInfo(entry.path, entry.metadata));
