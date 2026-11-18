@@ -14,7 +14,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import type { AgentToolResult } from "@step-harness/agent-core";
+import type { AgentMessage, AgentToolResult } from "@step-harness/agent-core";
 import { type Static, Type } from "typebox";
 import type {
 	ExtensionAPI,
@@ -23,6 +23,7 @@ import type {
 	ExtensionFactory,
 } from "../core/extensions/types.ts";
 import type { StepTelemetryProperties, StepTelemetryReporter } from "../step/telemetry.ts";
+import { CronExecutionScope, renderCronExecution } from "./cron-execution.ts";
 
 const TICK_INTERVAL_MS = 1_000;
 /** Cross-process pickup cadence; firing precision comes from the in-memory view. */
@@ -433,6 +434,7 @@ function parsePersistedJob(value: unknown): CronJob | undefined {
 		candidate.lastFiredAt === undefined ? 0 : candidate.lastFiredAt,
 		candidate.autoExpireAt === undefined ? 0 : candidate.autoExpireAt,
 		candidate.expiresAt === undefined ? 0 : candidate.expiresAt,
+		candidate.runAt === undefined ? 0 : candidate.runAt,
 	];
 	if (!numbers.every((value) => typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= 8.64e15))
 		return undefined;
@@ -584,6 +586,8 @@ export interface CronDelivery {
 	kind: "fire" | "missed";
 	job?: CronJob;
 	jobs?: CronJob[];
+	/** Identity of this one execution of `job`; set for every `fire` delivery. */
+	runId?: string;
 	/** A host-initiated run (`runNow`) leaves the schedule untouched. */
 	manual?: boolean;
 }
@@ -1212,6 +1216,7 @@ export class StepCronRuntime {
 		const expires = this.expirationOf(job);
 		const expired = expires !== undefined && now >= expires;
 		let nextFireAt: number | undefined;
+		const runId = randomUUID();
 		try {
 			if (job.recurring && !expired && !manual) {
 				const expression = SimpleCronExpression.parse(job.cron);
@@ -1220,7 +1225,7 @@ export class StepCronRuntime {
 						? now + job.intervalHours * 60 * 60 * 1000
 						: this.jitter(expression.next(now), now, job.id, true, expression, job.jitter !== false);
 			}
-			this.sendMessage({ kind: "fire", job: { ...job }, ...(manual ? { manual: true } : {}) });
+			this.sendMessage({ kind: "fire", job: { ...job }, runId, ...(manual ? { manual: true } : {}) });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			if (job.schemaVersion === 2 || job.status !== undefined) {
@@ -1235,6 +1240,7 @@ export class StepCronRuntime {
 		job.lastFiredAt = now;
 		if (job.schemaVersion === 2 || job.status !== undefined) {
 			job.runCount = (job.runCount ?? 0) + 1;
+			job.lastRunId = runId;
 			job.lastStatus = "delivered";
 			delete job.lastError;
 		}
@@ -1438,6 +1444,14 @@ export interface StepCronExtensionOptions {
 	enabled?: boolean;
 	readOnly?: boolean;
 	/**
+	 * Host-owned execution authorization; keeps tool definitions and the system prompt unchanged.
+	 *
+	 * Without one, the extension owns a scope and holds it for each job it fires
+	 * itself, from delivery until the run settles. A host that passes its own
+	 * scope owns admission and release for every execution, including this one.
+	 */
+	executionScope?: CronExecutionScope;
+	/**
 	 * Ask the user before an agent creates, updates or deletes a task.
 	 *
 	 * This is a host capability, not a product default: the desktop host has a
@@ -1509,6 +1523,64 @@ function withLiveContext<T>(context: ExtensionContext | undefined, read: (ctx: E
 	}
 }
 
+/**
+ * What a fired job's `step-cron` message records. The stored content stays the
+ * readable `[cron] <prompt>` every view shows; the model-facing assignment is
+ * rebuilt from these fields on each request, so it is identical every time.
+ */
+export interface CronFireDetails {
+	kind: "fire";
+	id: string;
+	runId: string;
+	prompt: string;
+	cron: string;
+	recurring: boolean;
+	durable: boolean;
+	intervalHours?: number;
+	runAt?: number;
+}
+
+function readCronFireDetails(details: unknown): CronFireDetails | undefined {
+	if (!details || typeof details !== "object") return undefined;
+	const value = details as Record<string, unknown>;
+	const { kind, id, runId, prompt, cron, recurring, durable, intervalHours, runAt } = value;
+	if (
+		kind !== "fire" ||
+		typeof id !== "string" ||
+		typeof runId !== "string" ||
+		typeof prompt !== "string" ||
+		typeof cron !== "string" ||
+		typeof recurring !== "boolean" ||
+		(intervalHours !== undefined && typeof intervalHours !== "number") ||
+		(runAt !== undefined && typeof runAt !== "number")
+	)
+		return undefined;
+	return {
+		kind,
+		id,
+		runId,
+		prompt,
+		cron,
+		recurring,
+		durable: durable === true,
+		...(intervalHours !== undefined ? { intervalHours } : {}),
+		...(runAt !== undefined ? { runAt } : {}),
+	};
+}
+
+/**
+ * Show the model a fired job as its execution assignment. Only messages this
+ * extension wrote (content still `[cron] <prompt>`) are projected: a host that
+ * stores its own assignment keeps it, and older `[cron]` messages without fire
+ * details pass through unchanged.
+ */
+function projectCronExecution(message: AgentMessage): AgentMessage | undefined {
+	if (message.role !== "custom" || message.customType !== "step-cron") return undefined;
+	const fire = readCronFireDetails(message.details);
+	if (!fire || message.content !== `[cron] ${fire.prompt}`) return undefined;
+	return { ...message, content: renderCronExecution(fire, fire.runId) };
+}
+
 async function requireCronApproval(
 	ctx: ExtensionContext,
 	action: "create" | "update" | "delete",
@@ -1539,6 +1611,29 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 			if (!options.requireApproval) return;
 			if (!ctx.hasUI) throw new Error(`Cron ${action} requires user approval, but this host has no dialog surface`);
 			return requireCronApproval(ctx, action, detail);
+		};
+		const executionScope = options.executionScope ?? new CronExecutionScope();
+		/** Releases the scope entered for a job this extension fired; undefined for host-owned scopes. */
+		let releaseExecution: (() => void) | undefined;
+		const settleExecution = () => {
+			const release = releaseExecution;
+			releaseExecution = undefined;
+			release?.();
+		};
+		/**
+		 * Every schedule write passes the execution gate before approval and again
+		 * after it, with the session identity captured before the await: an
+		 * execution can begin while the dialog is open.
+		 */
+		const authorizeMutation = async (
+			ctx: ExtensionContext,
+			action: "create" | "update" | "delete",
+			detail: () => string,
+		) => {
+			const sessionId = ctx.sessionManager.getSessionId();
+			executionScope.assertCanMutate(sessionId);
+			await approve(ctx, action, detail());
+			executionScope.assertCanMutate(sessionId);
 		};
 		let currentContext: ExtensionContext | undefined;
 		const runtime =
@@ -1606,15 +1701,36 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 					}
 					const job = delivery.job;
 					if (!job) return;
-					pi.sendMessage(
-						{
-							customType: "step-cron",
-							content: `[cron] ${job.prompt}`,
-							display: true,
-							details: { id: job.id, cron: job.cron, recurring: job.recurring, durable: job.durable },
-						},
-						{ deliverAs: "steer", triggerTurn: true },
-					);
+					const runId = delivery.runId ?? randomUUID();
+					if (!options.executionScope) {
+						const sessionId = withLiveContext(currentContext, (ctx) => ctx.sessionManager.getSessionId());
+						if (!sessionId) throw new Error("No live session to run the scheduled task in");
+						releaseExecution = executionScope.begin(sessionId, runId);
+					}
+					try {
+						const details: CronFireDetails = {
+							kind: "fire",
+							id: job.id,
+							runId,
+							prompt: job.prompt,
+							cron: job.cron,
+							recurring: job.recurring,
+							durable: job.durable,
+							...(job.intervalHours !== undefined ? { intervalHours: job.intervalHours } : {}),
+							...(job.runAt !== undefined ? { runAt: job.runAt } : {}),
+						};
+						pi.sendMessage(
+							{ customType: "step-cron", content: `[cron] ${job.prompt}`, display: true, details },
+							{ deliverAs: "steer", triggerTurn: true },
+						);
+					} catch (error) {
+						settleExecution();
+						throw error;
+					}
+					// The idle gate normally makes this message start a run, released on
+					// agent_settled. A message that started none (a host-initiated run held
+					// behind a pending decision) has no settlement to wait for.
+					if (withLiveContext(currentContext, (ctx) => ctx.isIdle()) !== false) settleExecution();
 				},
 			});
 
@@ -1647,12 +1763,26 @@ export function createStepCronExtension(options: StepCronExtensionOptions = {}):
 			runtime.onTurnEnd();
 		});
 		pi.on("agent_settled", (_event, ctx) => {
+			// Release before onTurnEnd: it may fire the next due job, which enters again.
+			settleExecution();
 			setContext(_event, ctx);
 			runtime.onTurnEnd();
 		});
 		pi.on("session_shutdown", () => {
+			// The session that held the execution is gone; its successor starts unrestricted.
+			settleExecution();
 			runtime.stop();
 			currentContext = undefined;
+		});
+		pi.on("context", (event) => {
+			let projected = false;
+			const messages = event.messages.map((message) => {
+				const assignment = projectCronExecution(message);
+				if (!assignment) return message;
+				projected = true;
+				return assignment;
+			});
+			return projected ? { messages } : undefined;
 		});
 
 		pi.registerTool({
@@ -1667,7 +1797,7 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 			parameters: CronCreateParams,
 			execute: async (_id, params, _signal, _onUpdate, ctx) => {
 				if (options.readOnly) throw new Error("This task session cannot create cron jobs");
-				await approve(ctx, "create", `${params.cron} - ${params.prompt.slice(0, 120)}`);
+				await authorizeMutation(ctx, "create", () => `${params.cron} - ${params.prompt.slice(0, 120)}`);
 				currentContext = ctx;
 				runtime.setContext(ctx.cwd);
 				const recurring = params.recurring !== false;
@@ -1713,7 +1843,7 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 			parameters: CronDeleteParams,
 			execute: async (_id, params, _signal, _onUpdate, ctx) => {
 				if (options.readOnly) throw new Error("This task session cannot delete cron jobs");
-				await approve(ctx, "delete", params.id);
+				await authorizeMutation(ctx, "delete", () => params.id);
 				currentContext = ctx;
 				runtime.setContext(ctx.cwd);
 				const found = runtime.delete(params.id);
@@ -1729,7 +1859,7 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 				parameters: CronUpdateParams,
 				execute: async (_id, params, _signal, _onUpdate, ctx) => {
 					if (options.readOnly) throw new Error("This task session cannot update cron jobs");
-					await approve(ctx, "update", describeUpdateTarget(runtime, params));
+					await authorizeMutation(ctx, "update", () => describeUpdateTarget(runtime, params));
 					if (!runtime.update) throw new Error("This host does not support updating cron jobs");
 					currentContext = ctx;
 					runtime.setContext(ctx.cwd);

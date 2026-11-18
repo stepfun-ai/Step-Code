@@ -317,15 +317,22 @@
        * Parse a skill block from message text.
        * Returns null if the text doesn't contain a skill block.
        * Matches the format: <skill name="..." location="...">\n...\n</skill>\n\nuser message
+       * Keep in sync with src/utils/skill-block.ts, including the encoding="xml" form.
        */
       function parseSkillBlock(text) {
-        const match = text.match(/^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/);
+        const match = text.match(/^<skill name="([^"]+)" location="([^"]+)"( encoding="xml")?>\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/);
         if (!match) return null;
+        const encoded = match[3] !== undefined;
+        const decode = (value) =>
+          encoded
+            ? value.replaceAll('&quot;', '"').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&')
+            : value;
         return {
-          name: match[1],
-          location: match[2],
-          content: match[3],
-          userMessage: match[4]?.trim() || undefined,
+          name: decode(match[1]),
+          location: decode(match[2]),
+          content: decode(match[4]),
+          userMessage: match[5]?.trim() || undefined,
+          encoded,
         };
       }
 

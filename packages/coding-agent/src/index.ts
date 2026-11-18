@@ -499,6 +499,7 @@ export {
 	createUsageTotals,
 	getUsageCostBreakdown,
 } from "./core/usage-totals.ts";
+export { CronExecutionScope, renderCronExecution } from "./features/cron-execution.ts";
 export {
 	createStepExtension,
 	createStepExtensionInline,

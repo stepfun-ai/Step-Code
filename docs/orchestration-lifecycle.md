@@ -370,6 +370,17 @@ needs-input still display.
 
 ## Cron scheduling and delivery
 
+A fired job is delivered as one execution of an existing task. Its stored
+message stays `[cron] <prompt>`; the model sees the `renderCronExecution`
+assignment, rebuilt from the message details on every request, and a
+`CronExecutionScope` refuses cron write tools until the run fully settles,
+without removing their definitions or rewriting the system prompt. The cron
+extension owns that scope for jobs it fires; an embedding host that admits
+saved tasks itself passes its own scope and owns admission, retries,
+cancellation and cleanup. See
+[scheduled execution](../packages/coding-agent/docs/scheduled-execution.md)
+for the API and lifecycle contract.
+
 `cron_create` accepts numeric five-field local-time cron expressions. Fields
 support wildcards, lists, ascending ranges, and integer steps on a wildcard or
 range. Seconds and timezone fields are unsupported. Invalid tokens and prompts

@@ -1,5 +1,6 @@
 import { readFileSync } from "fs";
 import { describe, expect, it } from "vitest";
+import { parseSkillBlock } from "../src/utils/skill-block.ts";
 
 describe("export HTML skill block rendering", () => {
 	const templateJs = readFileSync(new URL("../src/core/export-html/template.js", import.meta.url), "utf-8");
@@ -36,5 +37,18 @@ describe("export HTML skill block rendering", () => {
 		// The sidebar tree should display both the skill name and the user prompt,
 		// not just one or the other.
 		expect(templateJs).toMatch(/tree-role-skill/);
+	});
+
+	it("parses skill blocks exactly like the shared parser", () => {
+		const source = templateJs.match(/function parseSkillBlock\(text\) \{[\s\S]*?\n {6}\}\n/)?.[0];
+		expect(source).toBeDefined();
+		const parseInTemplate = new Function(`${source}\nreturn parseSkillBlock;`)() as typeof parseSkillBlock;
+		for (const text of [
+			'<skill name="literal" location="/skills/a&amp;b.md">\nKeep &lt;tag&gt; text.\n</skill>\n\nprompt',
+			'<skill name="encoded" location="/skills/a&amp;b.md" encoding="xml">\nKeep &amp;lt;tag&amp;gt; &quot;q&quot;.\n</skill>\n\n<skill name="next" location="/n" encoding="xml">\nNext\n</skill>\n\ntask',
+			"plain text",
+		]) {
+			expect(parseInTemplate(text)).toEqual(parseSkillBlock(text));
+		}
 	});
 });
