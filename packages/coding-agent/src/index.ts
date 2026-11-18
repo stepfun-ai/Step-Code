@@ -927,7 +927,6 @@ export { detectSupportedImageMimeTypeFromFile } from "./utils/mime.ts";
 export { openBrowser } from "./utils/open-browser.ts";
 export { armParentDeathGuard, type ParentDeathGuard } from "./utils/parent-death-guard.ts";
 export { canonicalizePath, getCwdRelativePath, isLocalPath, resolvePath } from "./utils/paths.ts";
-export { getPiUserAgent } from "./utils/pi-user-agent.ts";
 // Shell utilities
 export { getPowerShellConfig, getShellConfig, killTrackedDetachedChildren } from "./utils/shell.ts";
 export { loadAllHighlightLanguages } from "./utils/syntax-highlight.ts";
