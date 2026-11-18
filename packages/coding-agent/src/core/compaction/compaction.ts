@@ -470,8 +470,15 @@ export function findCutPoint(
 		cutIndex--;
 	}
 
-	// Determine if this is a split turn
-	const cutEntry = entries[cutIndex];
+	// Determine if this is a split turn. The metadata entries pulled in above
+	// (trace records such as `step.turn` or `step.usage_provenance` written after a
+	// reply) carry no message, so whether the cut starts a turn is decided by the
+	// first kept entry that the model actually sees.
+	let visibleIndex = cutIndex;
+	while (visibleIndex < endIndex - 1 && sessionEntryToContextMessages(entries[visibleIndex]).length === 0) {
+		visibleIndex++;
+	}
+	const cutEntry = entries[visibleIndex];
 	const startsTurn = isTurnStartEntry(cutEntry);
 	const turnStartIndex = startsTurn ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
 
