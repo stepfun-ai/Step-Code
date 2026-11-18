@@ -1,7 +1,7 @@
 import { dirname } from "node:path";
 import { contentText, type Message, type ToolResultMessage } from "@step-harness/providers";
 import { resolvePath } from "../../utils/paths.ts";
-import { parseSkillBlock } from "../../utils/skill-block.ts";
+import { type ParsedSkillBlock, parseSkillBlock } from "../../utils/skill-block.ts";
 
 /** Instructions actually loaded in a conversation, including partial reads. */
 export interface SkillInstruction {
@@ -100,13 +100,15 @@ export function collectSkillInstructions(
 
 	for (const message of messages) {
 		if (message.role === "user") {
-			// Multiple explicit skills share a leading sequence; the remaining task is not an instruction block.
-			let text = contentText(message.content, "");
-			let block = parseSkillBlock(text);
+			// Only encoded blocks chain: a host writes each selected skill as its own
+			// leading block. Text after an unmarked block is the user's own, even when it
+			// looks like another skill.
+			let block = parseSkillBlock(contentText(message.content, ""));
 			while (block) {
 				remember({ location: resolvePath(block.location, context.cwd), content: block.content });
-				text = block.userMessage ?? "";
-				block = parseSkillBlock(text);
+				const next: ParsedSkillBlock | null =
+					block.encoded && block.userMessage ? parseSkillBlock(block.userMessage) : null;
+				block = next?.encoded ? next : null;
 			}
 		} else if (message.role === "toolResult" && !message.isError) {
 			const call = reads.get(message);

@@ -240,11 +240,129 @@ test("cron extension exposes create/list/update/delete and steer delivery", asyn
 	expect(result.details.cron).toBe("* * * * *");
 	vi.advanceTimersByTime(120_000);
 	expect(harness.sent[0]).toMatchObject({
-		message: { customType: "step-cron", content: "[cron] audit" },
+		message: {
+			customType: "step-cron",
+			content: "[cron] audit",
+			display: true,
+			details: { kind: "fire", id: result.details.id, prompt: "audit", recurring: false },
+		},
 		options: { deliverAs: "steer", triggerTurn: true },
 	});
+	const sent = harness.sent[0]!.message as { content: unknown; details: { runId: string } };
+	const fired = { role: "custom", timestamp: 1, ...sent };
+	const ordinary = { role: "custom", customType: "step-cron", content: "[cron] old", details: { id: "old" } };
+	const project = () =>
+		(
+			harness.handlers.get("context")![0]!(
+				{ type: "context", messages: [fired, ordinary] } as never,
+				harness.ctx,
+			) as {
+				messages: Array<{ content: unknown }>;
+			}
+		).messages;
+	const [assignment, legacy] = project();
+	const runId = fired.details.runId;
+	expect(assignment?.content).toContain(
+		`<scheduled-task-execution task-id="${result.details.id}" run-id="${runId}" cron="* * * * *" recurring="false">`,
+	);
+	expect(assignment?.content).toContain("<task>\naudit\n</task>");
+	expect(legacy).toBe(ordinary);
+	expect(project()[0]?.content).toBe(assignment?.content);
+	const context = harness.handlers.get("context")![0]!;
+	const hostWritten = { ...fired, content: "<scheduled-task-execution>host assignment</scheduled-task-execution>" };
+	expect(context({ type: "context", messages: [hostWritten, ordinary] } as never, harness.ctx)).toBeUndefined();
+	expect(fired.content).toBe("[cron] audit");
 	for (const handler of harness.handlers.get("session_shutdown") ?? [])
 		await handler({ type: "session_shutdown" } as never, harness.ctx);
+});
+
+/** Model a session whose fired message starts a run that lasts until agent_settled. */
+function trackRuns(harness: Harness, startsRun: () => boolean = () => true) {
+	const state = { running: false, failDelivery: false };
+	Object.assign(harness.ctx, { isIdle: () => !state.running });
+	const send = harness.api.sendMessage.bind(harness.api);
+	Object.assign(harness.api, {
+		sendMessage: (message: never, options: never) => {
+			if (state.failDelivery) throw new Error("delivery refused");
+			send(message, options);
+			if (startsRun()) state.running = true;
+		},
+	});
+	return state;
+}
+
+test("a job the extension fires holds schedule writes until its run settles", async () => {
+	vi.useFakeTimers();
+	vi.setSystemTime(new Date(2026, 0, 1, 12, 0));
+	const harness = createHarness();
+	const runs = trackRuns(harness);
+	createStepCronExtension({ enabled: true, allowUpdate: true })(harness.api);
+	await emitCron(harness, "session_start");
+	const create = (prompt: string) =>
+		harness.tools
+			.get("cron_create")!
+			.execute("create", { cron: "* * * * *", prompt, recurring: false }, undefined, undefined, harness.ctx);
+	const job = ((await create("audit")) as { details: CronJob }).details;
+	await create("second audit");
+	vi.advanceTimersByTime(120_000);
+	// The first job's run holds the session busy; the second stays due.
+	expect(harness.sent).toHaveLength(1);
+
+	await expect(create("duplicate")).rejects.toThrow("scheduled execution cannot");
+	await expect(
+		harness.tools
+			.get("cron_update")!
+			.execute("update", { id: job.id, prompt: "changed" } as never, undefined, undefined, harness.ctx),
+	).rejects.toThrow("scheduled execution cannot");
+	await expect(
+		harness.tools.get("cron_delete")!.execute("delete", { id: job.id } as never, undefined, undefined, harness.ctx),
+	).rejects.toThrow("scheduled execution cannot");
+	// Another session sharing the extension instance is not the one executing.
+	harness.session.id = "other-session";
+	await expect(create("elsewhere")).resolves.toBeDefined();
+	harness.session.id = "cron-session";
+
+	// Settling releases before the next due job fires and enters again.
+	runs.running = false;
+	await emitCron(harness, "agent_settled");
+	expect(harness.sent).toHaveLength(2);
+	expect(harness.sent[1]?.message.content).toBe("[cron] second audit");
+	await expect(create("during the second run")).rejects.toThrow("scheduled execution cannot");
+	runs.running = false;
+	await emitCron(harness, "agent_settled");
+	await expect(create("after settle")).resolves.toBeDefined();
+	await emitCron(harness, "session_shutdown");
+});
+
+test("a delivery that throws or starts no run, and a shutdown, release the execution", async () => {
+	vi.useFakeTimers();
+	vi.setSystemTime(new Date(2026, 0, 1, 12, 0));
+	const harness = createHarness();
+	let startsRun = false;
+	const runs = trackRuns(harness, () => startsRun);
+	runs.failDelivery = true;
+	createStepCronExtension({ enabled: true })(harness.api);
+	await emitCron(harness, "session_start");
+	const create = (prompt: string) =>
+		harness.tools
+			.get("cron_create")!
+			.execute("create", { cron: "* * * * *", prompt, recurring: false }, undefined, undefined, harness.ctx);
+	await create("audit");
+	vi.advanceTimersByTime(120_000);
+	expect(harness.sent).toHaveLength(0);
+	await expect(create("after a refused delivery")).resolves.toBeDefined();
+
+	// Delivered, but held behind a decision: no run starts, so nothing would settle it.
+	runs.failDelivery = false;
+	vi.advanceTimersByTime(60_000);
+	expect(harness.sent.length).toBeGreaterThan(0);
+	await expect(create("after a queued delivery")).resolves.toBeDefined();
+
+	startsRun = true;
+	vi.advanceTimersByTime(60_000);
+	await expect(create("blocked")).rejects.toThrow("scheduled execution cannot");
+	await emitCron(harness, "session_shutdown");
+	await expect(create("after shutdown")).resolves.toBeDefined();
 });
 
 test("a task session cannot create, update, or delete cron jobs", async () => {
@@ -589,7 +707,7 @@ describe("cron reliability", () => {
 		// Past the bounded cross-process refresh cadence.
 		now = job.nextFireAt + 30_000;
 		reader.tick();
-		expect(sendMessage).toHaveBeenCalledWith({ kind: "fire", job });
+		expect(sendMessage).toHaveBeenCalledWith({ kind: "fire", job, runId: expect.any(String) });
 		reader.stop();
 	});
 
@@ -618,7 +736,7 @@ describe("cron reliability", () => {
 		expect(sendMessage).not.toHaveBeenCalled();
 		idle = true;
 		busy.tick();
-		expect(sendMessage).toHaveBeenCalledWith({ kind: "fire", job });
+		expect(sendMessage).toHaveBeenCalledWith({ kind: "fire", job, runId: expect.any(String) });
 		busy.stop();
 	});
 
@@ -833,7 +951,7 @@ test("an unschedulable persisted recurrence does not block other jobs on restart
 		expect(store.load()).toEqual([unschedulable, future]);
 		now = future.nextFireAt;
 		runtime.tick();
-		expect(sendMessage).toHaveBeenLastCalledWith({ kind: "fire", job: future });
+		expect(sendMessage).toHaveBeenLastCalledWith({ kind: "fire", job: future, runId: expect.any(String) });
 		expect(store.load()).toEqual([unschedulable]);
 	} finally {
 		runtime.stop();

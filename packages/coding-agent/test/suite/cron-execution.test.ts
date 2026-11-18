@@ -1,8 +1,8 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@step-harness/providers";
-import { describe, expect, it } from "vitest";
-import { readSavedSkillInstructions } from "../../src/core/compaction/skill-instructions.ts";
+import { describe, expect, it, vi } from "vitest";
+import { collectSkillInstructions, readSavedSkillInstructions } from "../../src/core/compaction/skill-instructions.ts";
 import { createSyntheticSourceInfo } from "../../src/core/source-info.ts";
 import { CronExecutionScope, renderCronExecution } from "../../src/features/cron-execution.ts";
 import { type CronJob, createStepCronExtension, StepCronRuntime } from "../../src/features/step-cron.ts";
@@ -50,7 +50,26 @@ describe("scheduled execution", () => {
 			location: "/skills/a&b.md",
 			content: 'Keep &lt;tag&gt; "quoted".',
 			userMessage: "TASK_ARGUMENT",
+			encoded: true,
 		});
+	});
+
+	it("retains only the first unmarked skill block, as before encoded blocks existed", () => {
+		const text = [
+			'<skill name="invoked" location="/skills/invoked.md">\nInvoked body.\n</skill>',
+			'<skill name="pasted" location="/skills/pasted.md">\nPasted body.\n</skill>',
+			"user text",
+		].join("\n\n");
+		const retained = collectSkillInstructions([{ role: "user", content: text, timestamp: 1 }]);
+		expect(retained).toEqual([{ location: "/skills/invoked.md", content: "Invoked body." }]);
+		const mixed = [
+			'<skill name="first" location="/skills/first.md" encoding="xml">\nFirst.\n</skill>',
+			'<skill name="pasted" location="/skills/pasted.md">\nPasted body.\n</skill>',
+			"task",
+		].join("\n\n");
+		expect(collectSkillInstructions([{ role: "user", content: mixed, timestamp: 1 }])).toEqual([
+			{ location: "/skills/first.md", content: "First." },
+		]);
 	});
 
 	it("expands only selected readable skills without letting their text close the assignment", async () => {
@@ -83,6 +102,82 @@ describe("scheduled execution", () => {
 			expect(text).not.toContain('<skill name="missing"');
 			expect(renderCronExecution(job, "unselected", [skill])).not.toContain("Selected skill.");
 		} finally {
+			harness.cleanup();
+		}
+	});
+
+	it("runs a job fired by the default delivery path without schedule writes or a prefix change", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+		vi.setSystemTime(new Date(2026, 0, 1, 12, 0));
+		const harness = await createHarness({
+			extensionFactories: [createStepCronExtension()],
+			bindings: { mode: "rpc" },
+		});
+		try {
+			const prefixes: string[] = [];
+			const capture = (context: { tools?: unknown; systemPrompt?: string }) =>
+				prefixes.push(JSON.stringify({ tools: context.tools, system: context.systemPrompt }));
+			const createCall = (prompt: string) =>
+				fauxAssistantMessage(fauxToolCall("cron_create", { cron: "* * * * *", prompt, recurring: false }), {
+					stopReason: "toolUse",
+				});
+			harness.setResponses([
+				(context) => {
+					capture(context);
+					return createCall("audit the build");
+				},
+				(context) => {
+					capture(context);
+					return fauxAssistantMessage("scheduled");
+				},
+			]);
+			await harness.session.prompt("Schedule a build audit");
+			const assigned = (context: { messages: unknown[] }) => {
+				const text = context.messages.map(getMessageText).join("\n");
+				expect(text).toContain("<task>\naudit the build\n</task>");
+				expect(text).not.toContain("[cron] audit the build");
+			};
+			harness.setResponses([
+				(context) => {
+					capture(context);
+					assigned(context);
+					return createCall("audit the build");
+				},
+				(context) => {
+					capture(context);
+					assigned(context);
+					return fauxAssistantMessage("audited");
+				},
+			]);
+			await vi.advanceTimersByTimeAsync(120_000);
+			await harness.session.waitForIdle();
+			const fired = harness.session.messages.find(
+				(message) => message.role === "custom" && message.customType === "step-cron",
+			);
+			expect(fired?.role === "custom" && fired.content).toBe("[cron] audit the build");
+			const results = harness.session.messages.flatMap((message) =>
+				message.role === "toolResult" && message.toolName === "cron_create" ? [message] : [],
+			);
+			expect(results.map((message) => message.isError)).toEqual([false, true]);
+			expect(JSON.stringify(results[1]?.content)).toContain("scheduled execution cannot");
+
+			harness.setResponses([
+				(context) => {
+					capture(context);
+					return createCall("a follow-up the user asked for");
+				},
+				(context) => {
+					capture(context);
+					return fauxAssistantMessage("scheduled again");
+				},
+			]);
+			await harness.session.prompt("Schedule another audit");
+			const last = harness.session.messages.filter((message) => message.role === "toolResult").at(-1);
+			expect(last?.role === "toolResult" && last.isError).toBe(false);
+			expect(prefixes).toHaveLength(6);
+			expect(new Set(prefixes).size).toBe(1);
+		} finally {
+			vi.useRealTimers();
 			harness.cleanup();
 		}
 	});

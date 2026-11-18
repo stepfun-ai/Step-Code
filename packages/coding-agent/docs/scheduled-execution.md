@@ -1,13 +1,45 @@
-# Saved-task execution for embedding hosts
+# Scheduled-task execution
 
-This opt-in API separates execution of a saved task from schedule management.
-It does not change the default CLI cron delivery path.
+A fired scheduled task is one execution of an existing task, not a request to
+schedule it again. `createStepCronExtension` delivers every job it fires this
+way, and embedding hosts that admit saved tasks themselves use the same pieces:
+`CronExecutionScope` and `renderCronExecution`, both exported from
+`@step-harness/coding-agent`.
 
-## Host contract
+## Default delivery
 
-Import `CronExecutionScope`, `renderCronExecution` and `createStepCronExtension`
-from `@step-harness/coding-agent`. Own one scope per independently admitted
-session, and pass it as `executionScope` when creating the cron extension.
+Each `fire` delivery carries a fresh `runId`, also recorded as the job's
+`lastRunId` for host-bound (schema v2) records. The extension:
+
+1. appends a displayed `step-cron` custom message whose stored content stays
+   `[cron] <prompt>`, with `details` (`kind: "fire"`, `id`, `runId`, `prompt`
+   and the schedule fields). Transcript, tree, search, HTML export and RPC
+   clients therefore present the saved prompt as before;
+2. projects that message for the model through its `context` handler, replacing
+   the content with `renderCronExecution` built from `details`. The projection
+   is deterministic, so every request in the run carries the same assignment.
+   Only messages whose content is still `[cron] <prompt>` are projected:
+   earlier messages without `kind: "fire"` and host-written assignments pass
+   through unchanged. Compaction and branch summaries, maintenance requests and
+   side questions read the stored `[cron] <prompt>`;
+3. enters its own scope for the session before sending and releases it on
+   `agent_settled` (full settlement, after retries and compaction recovery) or
+   `session_shutdown`. The idle gate admits a job only when no run is active
+   and no user input or decision is pending, so the message starts a new run.
+   If sending throws or the session is still idle afterwards (the message was
+   queued behind a decision), the scope is released at once.
+
+While the scope is held, `cron_create`, `cron_update` and `cron_delete` reject
+in that session. Input the user sends during the fired run joins that run and is
+subject to the same rejection; schedules can be changed again once it settles.
+Reloading extensions mid-run starts a fresh extension with no held scope. A
+missed one-shot notice is a report, not an execution, and is not scoped.
+
+## Host-owned admission
+
+A host that admits saved tasks itself passes its own scope as
+`executionScope`. The extension then gates writes with that scope and does not
+enter or release it; the host owns both.
 
 1. Wait for session startup and admit the scheduled input only while idle, with
    no pending user messages or user decisions. Do not apply this scope to a
@@ -23,10 +55,12 @@ session, and pass it as `executionScope` when creating the cron extension.
    releasing it. Recreated extensions must receive the same active scope until
    that execution is settled. A new session has its own authorization.
 
-`begin` rejects overlapping runs and empty identities. Cleanup is idempotent:
-an old release function cannot unlock a later execution. The scope is runtime
-authorization, not persisted session state; resuming history does not re-enter
-it merely because an old message contains the execution wrapper.
+`begin` rejects overlapping runs, naming the active session and run, and empty
+identities; in the default path an overlapping fire is reported as a delivery
+failure and retried. Cleanup is idempotent: an old release function cannot
+unlock a later execution. The scope is runtime authorization, not persisted
+session state; resuming history does not re-enter it merely because an old
+message contains the execution wrapper.
 
 ## Stable prefix, enforced writes
 
@@ -35,11 +69,8 @@ when entering or leaving the scope. Like plan mode, this is a permission
 restriction, not a missing capability. `cron_list` remains usable. The three
 cron write tools reject at execution before approval and again after an approval
 awaits, using the session identity captured before the await. A remembered tool
-call or broad permission preset cannot bypass these checks. Ordinary user runs
-can manage schedules again after release; user slash commands are separate from
-model tool calls. While the scope is held, these tool checks also reject a user
-run incorrectly admitted into the same session: the safe failure is rejection,
-not permission to modify schedules. The host must hold admission until cleanup.
+call or broad permission preset cannot bypass these checks. User slash commands
+are separate from model tool calls.
 
 This avoids cache invalidation caused by changing the tool/system prefix. It
 does not guarantee a cache hit: provider policy, retention, model changes,
@@ -56,18 +87,16 @@ explicit intervals emit `interval-hours`; absolute one-shot times emit
 Selected readable skills are expanded as leading individual blocks before the
 assignment. The shared compaction collector retains every block's full decoded
 instructions and file location, even when the generated summary omits them.
-Missing or removed
-skills are skipped so delivery still proceeds. A leading skill command only
-expands once in the normal input path, so multiple saved skills cannot be
-represented as command prefixes.
+Missing or removed skills are skipped so delivery still proceeds. A leading
+skill command only expands once in the normal input path, so multiple saved
+skills cannot be represented as command prefixes. The default delivery path
+has no skill catalog and expands none.
 
-Task/skill bodies and identity attributes are XML-escaped to preserve their
+Task/skill bodies and all wrapper attributes are XML-escaped to preserve their
 wrappers. Skill blocks declare `encoding="xml"`, so the shared parser decodes
-the loaded text and location once for instruction retention; unmarked blocks
-keep their existing literal interpretation. The assignment explains that entities denote literal characters, not
-entity-encoded task outputs. Saved task and skill files are unchanged. Hosts
-should present the saved plain prompt separately from this model-facing wrapper.
-HTML exports use their existing generic custom-message presentation when the
-host marks the assignment for display; they do not provide specialized scheduled
-assignment or multi-skill folding. Sending encoded blocks as ordinary user text
-also does not opt the HTML renderer into the new parser format.
+the loaded text and location once; unmarked blocks keep their literal
+interpretation. Only encoded blocks chain: after an unmarked block, the rest of
+the message is user text even if it resembles another skill, so ordinary skill
+invocations retain exactly one block. The assignment explains that entities
+denote literal characters, not entity-encoded task outputs. Saved task and
+skill files are unchanged. The HTML export parser accepts the same encoded form.

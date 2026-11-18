@@ -9,7 +9,11 @@ export class CronExecutionScope {
 
 	/** Enter after idle admission. The host releases in finally after full settlement or cancellation. */
 	begin(sessionId: string, runId: string): () => void {
-		if (this.active) throw new Error("A scheduled execution is already active");
+		if (this.active) {
+			throw new Error(
+				`A scheduled execution is already active (session ${this.active.sessionId}, run ${this.active.runId})`,
+			);
+		}
 		if (!sessionId.trim() || !runId.trim())
 			throw new Error("Scheduled execution requires session and run identities");
 		const active = { sessionId, runId };
@@ -31,7 +35,11 @@ export class CronExecutionScope {
 }
 
 /** An append-only assignment: saved task execution is not a request to create its schedule. */
-export function renderCronExecution(job: CronJob, runId: string, skills: readonly Skill[] = []): string {
+export function renderCronExecution(
+	job: Pick<CronJob, "id" | "cron" | "prompt" | "recurring" | "intervalHours" | "runAt" | "inputs">,
+	runId: string,
+	skills: readonly Skill[] = [],
+): string {
 	const blocks = (job.inputs?.skills ?? []).flatMap((name) => {
 		const skill = skills.find((candidate) => candidate.name === name);
 		if (!skill) return [];
@@ -47,14 +55,14 @@ export function renderCronExecution(job: CronJob, runId: string, skills: readonl
 	});
 	const schedule =
 		!job.recurring && job.runAt !== undefined
-			? `run-at-ms="${job.runAt}"`
+			? `run-at-ms="${xml(String(job.runAt))}"`
 			: job.intervalHours !== undefined
-				? `interval-hours="${job.intervalHours}"`
+				? `interval-hours="${xml(String(job.intervalHours))}"`
 				: `cron="${xml(job.cron)}"`;
 	const assignment = [
 		`<scheduled-task-execution task-id="${xml(job.id)}" run-id="${xml(runId)}" ${schedule} recurring="${job.recurring}">`,
 		"This is one execution of an existing scheduled task, not a request to create a schedule. Execute the task below now and return its result.",
-		"Do not create, update, or delete scheduled tasks during this execution. Scheduling and configured result delivery are handled by the host.",
+		"Do not create, update, or delete scheduled tasks during this execution; such changes are refused until it finishes. Scheduling and configured result delivery are handled by the host.",
 		"XML entities in task and skill text denote literal characters; do not entity-encode the task's output.",
 		"<task>",
 		xml(job.prompt),
