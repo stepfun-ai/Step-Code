@@ -60,6 +60,7 @@ import {
 	streamSimple,
 } from "@step-harness/providers/compat";
 import { getAgentDir } from "../config.ts";
+import { AUTO_RESUME_PROMPT } from "../step/permissions.ts";
 import { redactSecretString } from "../step/secret-redaction.ts";
 import { getThemeByName, theme } from "../theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
@@ -93,6 +94,7 @@ import {
 import { StableContextNotices } from "./compaction/live-context/stable-notices.ts";
 import { formatRetryPolicy, formatSummaryDiagnostics, SummaryFailure } from "./compaction/summary-diagnostics.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
+import { SessionExecutionTrace } from "./execution-trace.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
 import {
@@ -134,7 +136,7 @@ import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import { isRateLimitError, rateLimitDelay } from "./rate-limit.ts";
-import { readRequestUsage } from "./request-provenance.ts";
+import type { RequestLedger } from "./request-provenance.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import type { AgentRunFailure } from "./run-failure.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
@@ -304,6 +306,13 @@ export interface AgentSessionConfig {
 	sessionStartEvent?: SessionStartEvent;
 	/** Optional product identity used by the default system prompt. */
 	systemPromptProduct?: SystemPromptProduct;
+	/**
+	 * Settled model requests from the agent's stream function, so the session can
+	 * record every request (failures and summaries included) as
+	 * `step.usage_provenance`. Without one only replies whose provenance rides on
+	 * the message are recorded.
+	 */
+	requestLedger?: RequestLedger;
 }
 
 export interface ExtensionBindings {
@@ -594,6 +603,11 @@ export class AgentSession {
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
 		this._systemPromptProduct = config.systemPromptProduct;
+		this._trace = new SessionExecutionTrace({
+			append: (customType, data) => this.sessionManager.appendCustomEntry(customType, data),
+			sessionId: () => this.sessionManager.getSessionId(),
+			...(config.requestLedger ? { ledger: config.requestLedger } : {}),
+		});
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
@@ -704,6 +718,7 @@ export class AgentSession {
 	 */
 	private _installAgentToolHooks(): void {
 		this.agent.transformToolResult = (content, signal) => this._boundToolContent(content, signal);
+		this.agent.onToolExecutionStarted = this._trace.onToolStarted;
 
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
 			const runner = this._extensionRunner;
@@ -1410,12 +1425,14 @@ export class AgentSession {
 		resolve();
 	}
 
-	private async _emitAgentSettled(): Promise<void> {
+	private async _emitAgentSettled(aborted = false): Promise<void> {
 		this._isAgentRunActive = false;
 		// Capture and clear before notifying: a listener may start the next run, and
 		// that run must not inherit this one's failure.
 		const failure = this._runFailure;
 		this._runFailure = undefined;
+		// Close the turn before listeners run: one of them may start the next turn.
+		this._trace.onRunSettled(failure !== undefined, aborted);
 		try {
 			await this._extensionRunner.emit(failure ? { type: "agent_settled", failure } : { type: "agent_settled" });
 			this._emit(failure ? { type: "agent_settled", failure } : { type: "agent_settled" });
@@ -1440,11 +1457,17 @@ export class AgentSession {
 	private _lastAutoCompactionFailure: string | undefined = undefined;
 	/** Session entry the last assistant message was persisted as, for pairing a recovery. */
 	private _lastAssistantEntryId: string | undefined = undefined;
+	/** What the session writes about how it ran (tool calls, turns, thinking, requests); see `execution-trace.ts`. */
+	private readonly _trace: SessionExecutionTrace;
 	/** Recovery prompt selected at the end of a turn and waiting for its continuation to start. */
 	private _pendingIncompleteTurnRecovery: CustomMessage | undefined = undefined;
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
+		// Record tool timing before anything else awaits: the entries carry the loop's
+		// own timestamps, and writing the end first keeps it ahead of the result message.
+		this._trace.onAgentEvent(event, signal?.aborted === true);
+
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -1458,6 +1481,7 @@ export class AgentSession {
 			if (messageText) {
 				// Check steering queue first
 				const steeringIndex = this._steeringMessages.indexOf(messageText);
+				this._trace.onUserMessageStart(steeringIndex !== -1);
 				if (steeringIndex !== -1) {
 					this._steeringMessages.splice(steeringIndex, 1);
 					this._emitQueueUpdate();
@@ -1488,12 +1512,13 @@ export class AgentSession {
 			// Check if this is a custom message from extensions
 			if (event.message.role === "custom") {
 				// Persist as CustomMessageEntry
-				this.sessionManager.appendCustomMessageEntry(
+				const entryId = this.sessionManager.appendCustomMessageEntry(
 					event.message.customType,
 					event.message.content,
 					event.message.display,
 					event.message.details,
 				);
+				this._trace.onCustomMessagePersisted(entryId, event.message.customType, this._isAgentRunActive);
 			} else if (
 				event.message.role === "user" ||
 				event.message.role === "assistant" ||
@@ -1501,11 +1526,15 @@ export class AgentSession {
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
 				const entryId = this.sessionManager.appendMessage(event.message);
+				if (event.message.role === "user") {
+					this._trace.onUserMessagePersisted(entryId, contentText(event.message.content, ""), AUTO_RESUME_PROMPT);
+				}
 				// The entry id lets a later recovery message name the turn it answers.
-				if (event.message.role === "assistant") this._lastAssistantEntryId = entryId;
-				if (event.message.role === "assistant" && this._extensionRunner?.hasHandlers("usage_recorded")) {
-					const provenance = readRequestUsage(event.message);
-					if (provenance) await this._extensionRunner.emit({ type: "usage_recorded", entryId, provenance });
+				if (event.message.role === "assistant") {
+					this._lastAssistantEntryId = entryId;
+					const provenance = this._trace.onReplyPersisted(event.message as AssistantMessage, entryId);
+					if (provenance && this._extensionRunner?.hasHandlers("usage_recorded"))
+						await this._extensionRunner.emit({ type: "usage_recorded", entryId, provenance });
 				}
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
@@ -1768,12 +1797,15 @@ export class AgentSession {
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		} else if (event.type === "tool_execution_end") {
+			const started = this._trace.takeEndingToolStart(event.toolCallId);
 			const extensionEvent: ToolExecutionEndEvent = {
 				type: "tool_execution_end",
 				toolCallId: event.toolCallId,
 				toolName: event.toolName,
 				result: event.result,
 				isError: event.isError,
+				...(event.executed === undefined ? {} : { executed: event.executed }),
+				...(started ?? {}),
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		}
@@ -1827,6 +1859,12 @@ export class AgentSession {
 		);
 		this._liveContext?.dispose();
 		this._disconnectFromAgent();
+		// Calls still running were aborted above and their end events will not reach
+		// this session any more; close them in the trace now. A caller that keeps the
+		// agent must not keep writing this session's trace either.
+		if (this.agent.onToolExecutionStarted === this._trace.onToolStarted)
+			this.agent.onToolExecutionStarted = undefined;
+		this._trace.dispose();
 		this._eventListeners = [];
 		this._automaticTurnGuards.clear();
 		this._failingTurnGuards.clear();
@@ -2235,7 +2273,7 @@ export class AgentSession {
 			this._flushPendingBashMessages();
 			this._flushPendingCustomMessages();
 			this._agentRunAbortController = undefined;
-			await this._emitAgentSettled();
+			await this._emitAgentSettled(runAbortController.signal.aborted);
 			// _retryAttempt is per-run state. The three normal exits already zero it
 			// (successful response, retries exhausted, backoff cancelled), but an
 			// exception escaping agent.continue() on a retry continuation bypasses
@@ -3270,19 +3308,21 @@ export class AgentSession {
 		env: Record<string, string> | undefined,
 		reason: "manual" | "threshold" | "overflow",
 	): Promise<CompactionResult> {
-		return compact(
-			preparation,
-			requestModel,
-			apiKey,
-			headers,
-			customInstructions,
-			signal,
-			this.thinkingLevel,
-			this.agent.streamFunction,
-			env,
-			this.settingsManager.getRetrySettings(),
-			this._summarizationRetryCallbacks({ source: "compaction", reason }),
-			undefined, // sessionId
+		return this._trace.withSummaryPurpose("compaction", () =>
+			compact(
+				preparation,
+				requestModel,
+				apiKey,
+				headers,
+				customInstructions,
+				signal,
+				this.thinkingLevel,
+				this.agent.streamFunction,
+				env,
+				this.settingsManager.getRetrySettings(),
+				this._summarizationRetryCallbacks({ source: "compaction", reason }),
+				undefined, // sessionId
+			),
 		);
 	}
 
@@ -3396,7 +3436,15 @@ export class AgentSession {
 				details = { ...(details && typeof details === "object" ? details : {}), liveContext: liveCompaction.tail };
 			}
 			this._liveContext?.invalidate();
-			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+			const compactionEntryId = this.sessionManager.appendCompaction(
+				summary,
+				firstKeptEntryId,
+				tokensBefore,
+				details,
+				fromExtension,
+				usage,
+			);
+			this._trace.recordSummary("compaction", compactionEntryId);
 			this._thresholdCompactionFailures = 0;
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
@@ -3619,6 +3667,8 @@ export class AgentSession {
 			// Case 1: remove the failed or truncated message from agent state, compact, and
 			// retry once. The message remains in session history but is excluded from retry context.
 			this._overflowRecoveryAttempted = true;
+			// The request sent after compaction repeats the one that overflowed.
+			this._trace.onRetryScheduled();
 			const messages = this.agent.state.messages;
 			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
 				this.agent.state.messages = messages.slice(0, -1);
@@ -3820,7 +3870,15 @@ export class AgentSession {
 				details = { ...(details && typeof details === "object" ? details : {}), liveContext: liveCompaction.tail };
 			}
 			this._liveContext?.invalidate();
-			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+			const compactionEntryId = this.sessionManager.appendCompaction(
+				summary,
+				firstKeptEntryId,
+				tokensBefore,
+				details,
+				fromExtension,
+				usage,
+			);
+			this._trace.recordSummary("compaction", compactionEntryId);
 			committed = true;
 			this._thresholdCompactionFailures = 0;
 			const newEntries = this.sessionManager.getEntries();
@@ -4415,6 +4473,8 @@ export class AgentSession {
 			? rateLimitDelay(attempt, message.retryAfterMs)
 			: settings.baseDelayMs * 2 ** (attempt - 1);
 		this._retryAbortController = new AbortController();
+		// The next reply request repeats the one that just failed.
+		this._trace.onRetryScheduled();
 
 		this._emit({
 			type: "auto_retry_start",
@@ -4439,6 +4499,7 @@ export class AgentSession {
 			const attempt = this._retryAttempt;
 			this._retryAttempt = 0;
 			this._rateLimitRetryAttempt = 0;
+			this._trace.onRetryCancelled();
 			this._emit({
 				type: "auto_retry_end",
 				success: false,
@@ -4713,19 +4774,26 @@ export class AgentSession {
 				const model = this.model!;
 				const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
 				const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
-				const result = await generateBranchSummary(entriesToSummarize, {
-					model: requestModel,
-					apiKey,
-					headers,
-					env,
-					signal: this._branchSummaryAbortController.signal,
-					customInstructions,
-					replaceInstructions,
-					reserveTokens: branchSummarySettings.reserveTokens,
-					streamFn: this.agent.streamFunction,
-					retry: this.settingsManager.getRetrySettings(),
-					callbacks: this._summarizationRetryCallbacks({ source: "branchSummary" }),
-				});
+				const signal = this._branchSummaryAbortController.signal;
+				const result = await this._trace.withSummaryPurpose("branch_summary", () =>
+					generateBranchSummary(entriesToSummarize, {
+						model: requestModel,
+						apiKey,
+						headers,
+						env,
+						signal,
+						customInstructions,
+						replaceInstructions,
+						reserveTokens: branchSummarySettings.reserveTokens,
+						streamFn: this.agent.streamFunction,
+						retry: this.settingsManager.getRetrySettings(),
+						callbacks: this._summarizationRetryCallbacks({ source: "branchSummary" }),
+					}),
+				);
+				if (result.aborted || result.error) {
+					// No summary entry will name these requests; keep them on record anyway.
+					this._trace.recordSummary("branch_summary", undefined);
+				}
 				if (result.aborted) {
 					return { cancelled: true, aborted: true };
 				}
@@ -4774,6 +4842,7 @@ export class AgentSession {
 					summaryUsage,
 				);
 				summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
+				this._trace.recordSummary("branch_summary", summaryId);
 
 				// Attach label to the summary entry
 				if (label) {

@@ -56,15 +56,9 @@ export function registerUsageRecording(pi: ExtensionAPI, resources: (() => Usage
 	pi.on("before_agent_start", (_event, ctx) => {
 		collectResources(ctx);
 	});
-	pi.on("usage_recorded", (event, ctx) => {
-		if (event.provenance.sessionId === ctx.sessionManager.getSessionId())
-			append("step.usage_provenance", {
-				version: 1,
-				...event.provenance,
-				originSessionId: event.provenance.sessionId,
-				usageEntryId: event.entryId,
-			});
-	});
+	// `step.usage_provenance` is written by the session itself (`AgentSession`), for
+	// every request and whichever extensions are mounted; writing it here too would
+	// duplicate each record.
 	pi.on("tool_execution_start", (event, ctx) => {
 		const sessionId = ctx.sessionManager.getSessionId(),
 			startedAt = Date.now(),

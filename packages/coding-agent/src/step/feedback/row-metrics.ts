@@ -12,6 +12,7 @@
  * session on disk to serve support would be the wrong trade.
  */
 
+import { isThinkingTimingEntryType } from "../../core/thinking-timing.ts";
 import type { FeedbackRequestProvenance } from "./session-summary.ts";
 
 /** Metrics attached to one transcript row under the `feedback` key. */
@@ -167,7 +168,7 @@ function collectMetrics(entries: readonly (Record<string, unknown> | undefined)[
 			});
 			return;
 		}
-		if (entry.customType === "stepcode-web.thinking-timing") {
+		if (isThinkingTimingEntryType(typeof entry.customType === "string" ? entry.customType : undefined)) {
 			const messageTimestamp = data.messageTimestamp;
 			const timings = asRecord(data.thinkingTimings);
 			if (typeof messageTimestamp !== "number" || !timings) return;

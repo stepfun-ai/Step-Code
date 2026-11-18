@@ -17,6 +17,7 @@ import fs from "node:fs/promises";
 import { createInterface } from "node:readline";
 import type { Usage } from "@step-harness/providers";
 import type { SessionEntry } from "../../core/session-manager.ts";
+import { LEGACY_THINKING_TIMING_ENTRY_TYPE, THINKING_TIMING_ENTRY_TYPE } from "../../core/thinking-timing.ts";
 import { isToolCommandFailure } from "../../core/tools/command-outcome.ts";
 import { redactSecretString } from "../secret-redaction.ts";
 import { collapseHomePaths } from "./redact-home.ts";
@@ -388,6 +389,9 @@ function createSummary(options: FeedbackSummaryOptions): {
 			case "step.usage_provenance": {
 				const requestId = payload.requestId;
 				if (typeof requestId !== "string" || !requestId) return;
+				// A summary request (compaction, branch summary) is not a conversation reply;
+				// the report's request counts and "last request" describe replies.
+				if (payload.purpose !== undefined) return;
 				counts.modelRequests += 1;
 				// The timing of the attempt this provenance belongs to.
 				const attempt =
@@ -420,7 +424,8 @@ function createSummary(options: FeedbackSummaryOptions): {
 				};
 				return;
 			}
-			case "stepcode-web.thinking-timing": {
+			case THINKING_TIMING_ENTRY_TYPE:
+			case LEGACY_THINKING_TIMING_ENTRY_TYPE: {
 				const timings = payload.thinkingTimings;
 				if (!timings || typeof timings !== "object") return;
 				for (const timing of Object.values(timings as Record<string, unknown>)) {

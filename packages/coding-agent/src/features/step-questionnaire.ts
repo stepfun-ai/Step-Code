@@ -95,6 +95,8 @@ export interface StepQuestionnaireDetails {
 	questions: NormalizedQuestion[];
 	answers: StepQuestionnaireAnswer[];
 	cancelled: boolean;
+	/** How long the dialog waited for the person; set once it was shown. */
+	waitingForUserMs?: number;
 }
 
 function response(details: StepQuestionnaireDetails, text: string): AgentToolResult<StepQuestionnaireDetails> {

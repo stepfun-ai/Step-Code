@@ -48,6 +48,8 @@ export interface PlanReviewDetails {
 	planModeExited?: boolean;
 	/** The note the user typed, for the "feedback" outcome. */
 	feedback?: string;
+	/** How long the in-process review dialog waited for the user; absent when no dialog was shown. */
+	waitingForUserMs?: number;
 }
 
 /** What the user decided in the review dialog. */

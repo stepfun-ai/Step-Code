@@ -255,7 +255,9 @@ describe("Step permission presets", () => {
 				},
 				context,
 			);
-			expect(result).toEqual(approved ? undefined : { block: true, reason: "Tool call denied: run_command" });
+			expect(result).toEqual(
+				approved ? undefined : { block: true, reason: "Tool call denied: run_command", blockedBy: "user" },
+			);
 		}
 		expect(confirm).toHaveBeenCalledTimes(2);
 		for (const toolCallId of ids) {

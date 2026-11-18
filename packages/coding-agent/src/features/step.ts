@@ -400,6 +400,7 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 				return {
 					block: true,
 					reason: "then_run requires run_command, which is not available in this session; retry without then_run",
+					blockedBy: "then_run_unavailable",
 				};
 			}
 			// Plan mode decides its own denials here, ahead of the approval prompt.
