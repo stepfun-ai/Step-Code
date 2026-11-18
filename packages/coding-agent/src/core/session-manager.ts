@@ -44,6 +44,11 @@ export interface SessionHeader {
 	origin?: typeof CHILD_SESSION_ORIGIN;
 	/** Id of the session whose agent spawned this child, when known. */
 	parentSessionId?: string;
+	/**
+	 * The parent session's tool call (subagent or workflow) that spawned this child.
+	 * Tells apart children of different calls in the same parent session.
+	 */
+	parentToolCallId?: string;
 }
 
 export interface NewSessionOptions {
@@ -51,6 +56,7 @@ export interface NewSessionOptions {
 	parentSession?: string;
 	origin?: typeof CHILD_SESSION_ORIGIN;
 	parentSessionId?: string;
+	parentToolCallId?: string;
 }
 
 export interface SessionEntryBase {
@@ -907,6 +913,7 @@ export class SessionManager {
 			parentSession: options?.parentSession,
 			...(options?.origin ? { origin: options.origin } : {}),
 			...(options?.parentSessionId ? { parentSessionId: options.parentSessionId } : {}),
+			...(options?.parentToolCallId ? { parentToolCallId: options.parentToolCallId } : {}),
 		};
 		this.fileEntries = [header];
 		this.byId.clear();

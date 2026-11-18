@@ -119,7 +119,7 @@ function validLaneSnapshot(value: unknown): value is SubagentLaneSnapshot {
 				return false;
 			return (
 				LIVE_STRING_FIELDS.every((key) => record[key] === undefined || typeof record[key] === "string") &&
-				[record.startedAt, record.updatedAt, record.step].every(
+				[record.startedAt, record.updatedAt, record.endedAt, record.step].every(
 					(field) => field === undefined || nonnegativeNumber(field),
 				) &&
 				(record.pendingReply === undefined || typeof record.pendingReply === "boolean") &&
@@ -205,6 +205,30 @@ export interface AgentNotificationDetails {
 	agents?: string[];
 	/** Unescaped body below the headline (output, failure reasons, progress). */
 	detail?: string;
+	/**
+	 * Each task's child session and timing at the moment of the notice. A lane's
+	 * tool result is written while it still runs, so this is where its end time
+	 * becomes known (see `StepSubagentResultRecord.endedAt`).
+	 */
+	results?: AgentNotificationResult[];
+}
+
+export interface AgentNotificationResult {
+	agent: string;
+	status: StepSubagentResultRecord["status"];
+	sessionId?: string;
+	startedAt?: number;
+	endedAt?: number;
+}
+
+function notificationResults(records: readonly StepSubagentResultRecord[]): AgentNotificationResult[] {
+	return records.map((record) => ({
+		agent: record.agent,
+		status: record.status,
+		...(record.sessionId === undefined ? {} : { sessionId: record.sessionId }),
+		...(record.startedAt === undefined ? {} : { startedAt: record.startedAt }),
+		...(record.endedAt === undefined ? {} : { endedAt: record.endedAt }),
+	}));
 }
 
 /** Minimum interval between background_progress notifications per lane. */
@@ -274,6 +298,7 @@ export function notifyLaneEvent(
 		status: lane.status,
 		agents: [...new Set(lane.details.results.map((record) => record.agent))],
 		detail: trimmed || undefined,
+		...(event === "background_progress" ? {} : { results: notificationResults(lane.details.results) }),
 	};
 	pi.sendMessage(
 		{

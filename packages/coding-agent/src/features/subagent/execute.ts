@@ -80,14 +80,16 @@ function resultRecord(
 	result: StepSubagentRunResult,
 	extra: Partial<Pick<StepSubagentResultRecord, "agentSource" | "step" | "worktreePath" | "worktreeBranch">> = {},
 ): StepSubagentResultRecord {
+	const status = statusForResult(result);
 	return {
 		agent,
 		agentSource: extra.agentSource ?? "unknown",
 		task,
-		status: statusForResult(result),
+		status,
 		...result,
 		...extra,
 		usage: cloneUsage(result.usage),
+		...(status === "running" ? {} : { endedAt: Date.now() }),
 	};
 }
 
@@ -106,7 +108,8 @@ function makeEmptyResult(agent: string, task: string): StepSubagentResultRecord 
 }
 
 function makeSkippedResult(record: StepSubagentResultRecord): StepSubagentResultRecord {
-	return { ...record, status: "skipped", updatedAt: Date.now() };
+	const now = Date.now();
+	return { ...record, status: "skipped", updatedAt: now, endedAt: now };
 }
 
 /**
@@ -274,6 +277,8 @@ export interface PreparedSubagentRun {
 	scope: StepAgentScope;
 	discovery: StepAgentDiscoveryResult;
 	tasks: StepSubagentTaskInput[];
+	/** The parent's tool call that requested this run; stamped on every child session it starts. */
+	parentToolCallId?: string;
 }
 
 export type SubagentPreflight =
@@ -362,10 +367,18 @@ export async function executeSubagent(
 	ctx: ExtensionContext,
 	options: SubagentExecutionOptions,
 	laneRuntime?: StepSubagentLaneRuntime,
+	parentToolCallId?: string,
 ): Promise<AgentToolResult<StepSubagentDetails>> {
 	const preflight = await prepareSubagentRun(params, ctx, options);
 	if (!preflight.ok) return preflight.result;
-	return runPreparedSubagent(preflight.run, signal, onUpdate, ctx, options, laneRuntime);
+	return runPreparedSubagent(
+		parentToolCallId ? { ...preflight.run, parentToolCallId } : preflight.run,
+		signal,
+		onUpdate,
+		ctx,
+		options,
+		laneRuntime,
+	);
 }
 
 export async function runPreparedSubagent(
@@ -563,6 +576,7 @@ export async function runPreparedSubagent(
 			const child = await options.runner({
 				parentCwd,
 				parentSessionId,
+				...(prepared.parentToolCallId ? { parentToolCallId: prepared.parentToolCallId } : {}),
 				agent,
 				task: task.task,
 				cwd: childCwd,

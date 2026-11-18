@@ -80,6 +80,8 @@ export interface WorkflowRuntimeOptions {
 	/** Grace for an injected runner to settle after cancellation. Production children exit within 10s. */
 	runnerCleanupTimeoutMs?: number;
 	context?: ExtensionContext;
+	/** The `workflow` tool call that started this run; see `WorkflowAgentRunInput.parentToolCallId`. */
+	parentToolCallId?: string;
 	nestedWorkflow?: (name: string, args: unknown, parent: WorkflowRuntime, depth: number) => Promise<unknown>;
 	signal?: AbortSignal;
 	vmExecutor?: (
@@ -118,6 +120,7 @@ export class WorkflowRuntime {
 	private readonly runner: WorkflowAgentRunner;
 	private readonly telemetry?: StepTelemetryReporter;
 	private readonly context?: ExtensionContext;
+	private readonly parentToolCallId?: string;
 	private readonly now: () => number;
 	private readonly vmExecutor: NonNullable<WorkflowRuntimeOptions["vmExecutor"]>;
 	private readonly nestedWorkflow?: WorkflowRuntimeOptions["nestedWorkflow"];
@@ -165,6 +168,7 @@ export class WorkflowRuntime {
 		this.runner = options.runner ?? createDefaultWorkflowAgentRunner();
 		this.telemetry = options.telemetry;
 		this.context = options.context;
+		this.parentToolCallId = options.parentToolCallId;
 		this.signal = AbortSignal.any([
 			this.controller.signal,
 			...[options.signal, options.context?.signal].filter((signal): signal is AbortSignal => signal !== undefined),
@@ -547,6 +551,7 @@ export class WorkflowRuntime {
 						}, this.agentTimeoutMs);
 					});
 					runnerInvoked = true;
+					const parentSessionId = this.context?.sessionManager?.getSessionId?.();
 					runnerPromise = this.runner({
 						prompt: attemptPrompt,
 						options: normalizedOptions,
@@ -554,6 +559,8 @@ export class WorkflowRuntime {
 						signal: attemptController.signal,
 						runId: this.runId,
 						agentId,
+						...(parentSessionId ? { parentSessionId } : {}),
+						...(this.parentToolCallId ? { parentToolCallId: this.parentToolCallId } : {}),
 						onToolExecutionStart: (toolName) => {
 							const effect = classifyWorkflowToolEffect(toolName);
 							if (effect !== "none") worldAccess = true;

@@ -201,7 +201,7 @@ Mechanics:
 				"Use iterate({spec, ...}) for the Planner → single-writer Developer → independent QA loop with built-in coverage, stagnation, max-iteration, empty-objective, and budget stops; hand-roll agent() with readOnly/writable mounts when roles or stop conditions differ.",
 			],
 			parameters: WorkflowParams,
-			execute: async (_toolCallId, params, signal, onUpdate, ctx) => {
+			execute: async (toolCallId, params, signal, onUpdate, ctx) => {
 				const controller = new AbortController();
 				const abort = (): void => controller.abort();
 				if (signal?.aborted) abort();
@@ -237,6 +237,7 @@ Mechanics:
 						maxAgents: options.maxAgents,
 						agentTimeoutMs: request.agentTimeoutMs ?? options.agentTimeoutMs,
 						context: { ...ctx, signal: controller.signal },
+						parentToolCallId: toolCallId,
 						signal: controller.signal,
 						vmExecutor: options.vmExecutor,
 						nestedWorkflow: async (name, nestedArgs, parent, depth) => {
