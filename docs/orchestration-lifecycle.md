@@ -370,6 +370,14 @@ needs-input still display.
 
 ## Cron scheduling and delivery
 
+An embedding host can opt into `CronExecutionScope` and `renderCronExecution`
+for saved-task runs. The assignment identifies an existing task; execution
+authorization refuses cron write tools until full settlement without removing
+their definitions or rewriting the system prompt. The host owns idle admission,
+retries, cancellation and cleanup. Default CLI scheduling is unchanged.
+See [scheduled execution](../packages/coding-agent/docs/scheduled-execution.md)
+for the API and lifecycle contract.
+
 `cron_create` accepts numeric five-field local-time cron expressions. Fields
 support wildcards, lists, ascending ranges, and integer steps on a wildcard or
 range. Seconds and timezone fields are unsupported. Invalid tokens and prompts

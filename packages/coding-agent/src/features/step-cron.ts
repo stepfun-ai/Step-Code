@@ -23,6 +23,7 @@ import type {
 	ExtensionFactory,
 } from "../core/extensions/types.ts";
 import type { StepTelemetryProperties, StepTelemetryReporter } from "../step/telemetry.ts";
+import type { CronExecutionScope } from "./cron-execution.ts";
 
 const TICK_INTERVAL_MS = 1_000;
 /** Cross-process pickup cadence; firing precision comes from the in-memory view. */
@@ -1437,6 +1438,8 @@ export interface StepCronExtensionOptions {
 	telemetry?: StepTelemetryReporter;
 	enabled?: boolean;
 	readOnly?: boolean;
+	/** Host-owned execution authorization; keeps tool definitions and the system prompt unchanged. */
+	executionScope?: CronExecutionScope;
 	/**
 	 * Ask the user before an agent creates, updates or deletes a task.
 	 *
@@ -1667,7 +1670,10 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 			parameters: CronCreateParams,
 			execute: async (_id, params, _signal, _onUpdate, ctx) => {
 				if (options.readOnly) throw new Error("This task session cannot create cron jobs");
+				const sessionId = ctx.sessionManager.getSessionId();
+				options.executionScope?.assertCanMutate(sessionId);
 				await approve(ctx, "create", `${params.cron} - ${params.prompt.slice(0, 120)}`);
+				options.executionScope?.assertCanMutate(sessionId);
 				currentContext = ctx;
 				runtime.setContext(ctx.cwd);
 				const recurring = params.recurring !== false;
@@ -1713,7 +1719,10 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 			parameters: CronDeleteParams,
 			execute: async (_id, params, _signal, _onUpdate, ctx) => {
 				if (options.readOnly) throw new Error("This task session cannot delete cron jobs");
+				const sessionId = ctx.sessionManager.getSessionId();
+				options.executionScope?.assertCanMutate(sessionId);
 				await approve(ctx, "delete", params.id);
+				options.executionScope?.assertCanMutate(sessionId);
 				currentContext = ctx;
 				runtime.setContext(ctx.cwd);
 				const found = runtime.delete(params.id);
@@ -1729,7 +1738,10 @@ Scheduling: recurring jobs get a stable task-ID offset of up to 30 minutes late,
 				parameters: CronUpdateParams,
 				execute: async (_id, params, _signal, _onUpdate, ctx) => {
 					if (options.readOnly) throw new Error("This task session cannot update cron jobs");
+					const sessionId = ctx.sessionManager.getSessionId();
+					options.executionScope?.assertCanMutate(sessionId);
 					await approve(ctx, "update", describeUpdateTarget(runtime, params));
+					options.executionScope?.assertCanMutate(sessionId);
 					if (!runtime.update) throw new Error("This host does not support updating cron jobs");
 					currentContext = ctx;
 					runtime.setContext(ctx.cwd);

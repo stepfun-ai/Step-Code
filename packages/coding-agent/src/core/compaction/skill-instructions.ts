@@ -100,8 +100,14 @@ export function collectSkillInstructions(
 
 	for (const message of messages) {
 		if (message.role === "user") {
-			const block = parseSkillBlock(contentText(message.content, ""));
-			if (block) remember({ location: resolvePath(block.location, context.cwd), content: block.content });
+			// Multiple explicit skills share a leading sequence; the remaining task is not an instruction block.
+			let text = contentText(message.content, "");
+			let block = parseSkillBlock(text);
+			while (block) {
+				remember({ location: resolvePath(block.location, context.cwd), content: block.content });
+				text = block.userMessage ?? "";
+				block = parseSkillBlock(text);
+			}
 		} else if (message.role === "toolResult" && !message.isError) {
 			const call = reads.get(message);
 			if (!call || call.toolName !== message.toolName) continue;
