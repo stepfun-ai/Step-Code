@@ -69,6 +69,46 @@ export interface BeforeToolCallResult {
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
 	 */
 	terminate?: boolean;
+	/**
+	 * Who blocked the call, as a host-defined code (for example a permission rule
+	 * or a mode that forbids the tool). The loop does not interpret it; it is
+	 * forwarded on `tool_execution_end.notExecuted` so a host can record why the
+	 * call never ran. Ignored unless `block` is true.
+	 */
+	blockedBy?: string;
+}
+
+/**
+ * Why a tool call reached `tool_execution_end` without its `execute` running.
+ *
+ * - `tool_not_found`: no tool with that name is registered for the run.
+ * - `invalid_arguments`: argument preparation or schema validation failed.
+ * - `output_truncated`: the assistant message hit the output limit, so its arguments may be incomplete.
+ * - `skipped_after_stop`: an earlier call in a sequential batch ended the turn.
+ * - `aborted_before_start`: the run was aborted before the call started.
+ */
+export type ToolNotRunReason =
+	| "tool_not_found"
+	| "invalid_arguments"
+	| "output_truncated"
+	| "skipped_after_stop"
+	| "aborted_before_start";
+
+/**
+ * A tool call that never executed. `blocked` means `beforeToolCall` refused it
+ * (or threw, which blocks the call); `by` carries `BeforeToolCallResult.blockedBy`
+ * or `"hook_error"` when the hook threw.
+ */
+export type ToolNotExecuted = { kind: "blocked"; by?: string } | { kind: "not_run"; reason: ToolNotRunReason };
+
+/** Passed to `onToolExecutionStarted` immediately before a tool's `execute` runs. */
+export interface ToolExecutionStartedContext {
+	/** The assistant message that requested the tool call. */
+	assistantMessage: AssistantMessage;
+	/** The raw tool call block from `assistantMessage.content`. */
+	toolCall: AgentToolCall;
+	/** Epoch milliseconds when execution starts. */
+	at: number;
 }
 
 /**
@@ -331,6 +371,15 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
 
 	/**
+	 * Notification that a tool is about to execute: arguments are valid, `beforeToolCall`
+	 * allowed it, and its `execute` is called next. Not called for calls that never run.
+	 * In parallel mode this fires when each call actually starts, after the whole batch
+	 * has been prepared, so it can be later than `tool_execution_start`.
+	 *
+	 * Synchronous and best-effort: a throwing callback is ignored and does not affect execution.
+	 */
+	onToolExecutionStarted?: (context: ToolExecutionStartedContext) => void;
+	/**
 	 * Final content-only transform for every tool outcome, including validation failures,
 	 * denied calls and truncated-call rejections. Runs after execution hooks and before
 	 * terminal events or result messages; it cannot override usage or termination policy.
@@ -503,7 +552,20 @@ export type AgentEvent =
 	// Only emitted for assistant messages during streaming
 	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
 	| { type: "message_end"; message: AgentMessage }
-	// Tool execution lifecycle
-	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
+	// Tool execution lifecycle. `at` is the epoch milliseconds when the loop emitted the
+	// event; it is set by the agent loop and optional only for other event producers.
+	// `tool_execution_start` is emitted before approval and preparation, not when the
+	// tool starts running (see `AgentLoopConfig.onToolExecutionStarted`).
+	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any; at?: number }
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
-	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
+	| {
+			type: "tool_execution_end";
+			toolCallId: string;
+			toolName: string;
+			result: any;
+			isError: boolean;
+			at?: number;
+			/** False when the call never executed; `notExecuted` then says why. */
+			executed?: boolean;
+			notExecuted?: ToolNotExecuted;
+	  };

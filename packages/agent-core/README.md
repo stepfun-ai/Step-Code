@@ -103,9 +103,9 @@ prompt("Read config.json")
 ├─ message_start      { assistantMessage with toolCall }
 ├─ message_update...
 ├─ message_end        { assistantMessage }
-├─ tool_execution_start  { toolCallId, toolName, args }
+├─ tool_execution_start  { toolCallId, toolName, args, at }
 ├─ tool_execution_update { partialResult }           // If tool streams
-├─ tool_execution_end    { toolCallId, result }
+├─ tool_execution_end    { toolCallId, result, at, executed }
 ├─ message_start/end  { toolResultMessage }
 ├─ turn_end           { message, toolResults: [toolResult] }
 │
@@ -129,6 +129,12 @@ The mode can be set globally via `toolExecution` in the agent config, or per-too
 The `beforeToolCall` hook runs after `tool_execution_start` and validated argument parsing. It can block execution and attach `terminate: true` to the blocked result. The `afterToolCall` hook runs after tool execution finishes and before `tool_execution_end` and final tool result message events are emitted.
 
 Tools, blocked `beforeToolCall` results, and `afterToolCall` overrides can return `terminate: true` to hint that the automatic follow-up LLM call should be skipped. The loop only stops early when every finalized tool result in that batch sets `terminate: true`. Mixed batches continue normally.
+
+Tool timing and outcomes:
+
+- `tool_execution_start` and `tool_execution_end` carry `at`, the epoch milliseconds when the loop emitted them. `tool_execution_start` fires before approval and argument validation, so it marks when a call was queued, not when it ran.
+- `onToolExecutionStarted({ assistantMessage, toolCall, at })` (on `AgentOptions`, `AgentLoopConfig`, or the `Agent` instance) is called immediately before a tool's `execute`. It is not called for calls that never run. In parallel mode it fires per call when execution actually begins, after the whole batch was prepared. It is synchronous and best-effort; a throw is ignored.
+- `tool_execution_end.executed` is `false` when the call never ran, and `notExecuted` says why: `{ kind: "blocked", by }` when `beforeToolCall` returned `block: true` (`by` is the hook's optional `blockedBy` code) or threw (`by: "hook_error"`); `{ kind: "not_run", reason }` with `tool_not_found`, `invalid_arguments`, `output_truncated`, `skipped_after_stop`, or `aborted_before_start`.
 
 `transformToolResult` is an optional final content-only transform on `AgentOptions`
 and `AgentLoopConfig`. It runs before terminal tool events and result messages for
