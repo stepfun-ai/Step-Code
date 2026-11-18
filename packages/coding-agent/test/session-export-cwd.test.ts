@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { exportSessionToJsonl } from "../src/core/session-export.ts";
-import { SessionManager } from "../src/core/session-manager.ts";
+import { getDefaultSessionDir, SessionManager } from "../src/core/session-manager.ts";
 
 const tempDirs: string[] = [];
 
@@ -22,7 +22,7 @@ function makeTempDir(): string {
 describe("exportSessionToJsonl output base", () => {
 	test("a relative output path lands in the session working directory", () => {
 		const sessionCwd = makeTempDir();
-		const sessionManager = SessionManager.create(sessionCwd);
+		const sessionManager = SessionManager.create(sessionCwd, getDefaultSessionDir(sessionCwd, sessionCwd));
 
 		const written = exportSessionToJsonl(sessionManager, "out.jsonl");
 
@@ -36,7 +36,7 @@ describe("exportSessionToJsonl output base", () => {
 		const sessionCwd = makeTempDir();
 		const elsewhere = makeTempDir();
 		const target = join(elsewhere, "custom.jsonl");
-		const sessionManager = SessionManager.create(sessionCwd);
+		const sessionManager = SessionManager.create(sessionCwd, getDefaultSessionDir(sessionCwd, sessionCwd));
 
 		const written = exportSessionToJsonl(sessionManager, target);
 

@@ -12,7 +12,7 @@ import {
 } from "../../../src/core/agent-session-runtime.ts";
 import { AuthStorage } from "../../../src/core/auth-storage.ts";
 import { ModelRuntime } from "../../../src/core/model-runtime.ts";
-import { SessionManager } from "../../../src/core/session-manager.ts";
+import { getDefaultSessionDir, SessionManager } from "../../../src/core/session-manager.ts";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionFactory } from "../../../src/index.ts";
 
 function getText(message: AgentSession["messages"][number]): string {
@@ -98,7 +98,7 @@ describe("regression #2860: replaced session callbacks", () => {
 		const runtime = await createAgentSessionRuntime(createRuntime, {
 			cwd: tempDir,
 			agentDir: tempDir,
-			sessionManager: SessionManager.create(tempDir),
+			sessionManager: SessionManager.create(tempDir, getDefaultSessionDir(tempDir, tempDir)),
 		});
 
 		const rebindSession = async (): Promise<void> => {
