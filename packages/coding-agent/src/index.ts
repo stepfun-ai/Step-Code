@@ -44,6 +44,7 @@ export {
 	type PromptOptions,
 	parseSkillBlock,
 	type SessionStats,
+	type SubmitOptions,
 } from "./core/agent-session.ts";
 export { SessionImportFileNotFoundError } from "./core/agent-session-runtime.ts";
 export { readStoredCredential } from "./core/auth-storage.ts";

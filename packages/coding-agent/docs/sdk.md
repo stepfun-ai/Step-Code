@@ -101,7 +101,12 @@ interface AgentSession {
   // Send a prompt and wait for completion
   prompt(text: string, options?: PromptOptions): Promise<void>;
 
-  // Queue messages during streaming
+  // Submit what the user typed: commands run now, messages run or join the run
+  submit(text: string, options?: SubmitOptions): Promise<void>;
+  // Whether `text` is a command the kernel runs instead of sending to the model
+  isCommandInput(text: string): boolean;
+
+  // Queue messages during streaming (they refuse commands; prefer submit)
   steer(text: string): Promise<void>;
   followUp(text: string): Promise<void>;
 
@@ -235,6 +240,11 @@ interface PromptOptions {
   source?: InputSource;
   preflightResult?: (success: boolean) => void;
 }
+
+// submit() takes the same options, minus the queueing choice it decides itself
+interface SubmitOptions extends Omit<PromptOptions, "streamingBehavior"> {
+  duringRun?: "steer" | "followUp";
+}
 ```
 
 `preflightResult` is called once per `prompt()` invocation:
@@ -269,6 +279,18 @@ await session.prompt("After you're done, also check X", { streamingBehavior: "fo
 - **`preflightResult(true)`**: Means the prompt was accepted, queued, or handled immediately.
 - **`preflightResult(false)`**: Means preflight rejected before acceptance.
 
+**Prefer `submit()` from a host.** It is `prompt()` with the queueing choice made from the state at the call, so a host never has to look at `isStreaming` first:
+
+```typescript
+// A command runs immediately; text runs as a turn or joins the running one.
+await session.submit(input, { duringRun: "steer" });   // default
+await session.submit(input, { duringRun: "followUp" });
+```
+
+The distinction that matters: a command is not a message. `prompt()` and `submit()` dispatch it before they look at the run, so it executes during streaming and during compaction. `steer()` and `followUp()` are for a host that has already decided a line is a message — they throw for commands, and a host that queues one itself sends the literal line to the model. `isCommandInput(text)` answers the same question without side effects, for a host that keeps its own editable queue and must not park a command there.
+
+One case stays with the host: compaction refuses new prompts outright, commands aside, so text submitted while the context is being compacted throws. A host that queues during compaction (both the CLI and the Web host do) keeps that queue and calls `submit()` when compaction ends.
+
 For explicit queueing during streaming:
 
 ```typescript
@@ -279,7 +301,7 @@ await session.steer("New instruction");
 await session.followUp("After you're done, also do this");
 ```
 
-Both `steer()` and `followUp()` expand file-based prompt templates but error on extension commands (extension commands cannot be queued).
+Both `steer()` and `followUp()` expand file-based prompt templates but refuse commands (registered extension commands and the session's own `/clm` family).
 
 ### Agent and AgentState
 

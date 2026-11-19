@@ -175,7 +175,7 @@ export interface RuntimeContext {
 	handleShareCommand(): Promise<void>;
 	handleStepLogoutCommand(): Promise<void>;
 	handleThinkingCommand(searchTerm?: string): void;
-	isExtensionCommand(text: string): boolean;
+	isCommandInput(text: string): boolean;
 	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void;
 	showModelSelector(initialSearchInput?: string): void;
 	addCommandInputToChat(text: string): void;

@@ -12,6 +12,7 @@ export {
 	type ModelCycleResult,
 	type PromptOptions,
 	type SessionStats,
+	type SubmitOptions,
 } from "./agent-session.ts";
 export {
 	AgentSessionRuntime,
