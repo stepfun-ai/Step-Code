@@ -38,13 +38,13 @@ describe("InteractiveMode compaction events", () => {
 	test("forwards terminal input to the active automatic CLM queue so maintenance is interrupted", async () => {
 		const fakeThis = {
 			compactionQueuedMessages: [],
-			session: { isAutoClmCompacting: true, prompt: vi.fn().mockResolvedValue(undefined) },
+			session: { isAutoClmCompacting: true, submit: vi.fn().mockResolvedValue(undefined) },
 			editor: { addToHistory: vi.fn(), setText: vi.fn() },
 			updatePendingMessagesDisplay: vi.fn(), showStatus: vi.fn(), showError: vi.fn(),
 		};
 		const queue = Reflect.get(InteractiveMode.prototype, "queueCompactionMessage") as (this: typeof fakeThis, text: string, mode: "steer" | "followUp") => void;
 		queue.call(fakeThis, "Preserve output order", "steer");
-		expect(fakeThis.session.prompt).toHaveBeenCalledWith("Preserve output order", { streamingBehavior: "steer", images: undefined });
+		expect(fakeThis.session.submit).toHaveBeenCalledWith("Preserve output order", { duringRun: "steer", images: undefined });
 		expect(fakeThis.compactionQueuedMessages).toEqual([]);
 	});
 	test("uses the cache miss notice setting for compaction and branch summary costs", () => {
@@ -279,10 +279,11 @@ describe("InteractiveMode compaction events", () => {
 			session: {
 				clearQueue: vi.fn(),
 				prompt: vi.fn().mockResolvedValue(undefined),
+				submit: vi.fn().mockResolvedValue(undefined),
 				steer: vi.fn().mockResolvedValue(undefined),
 				followUp: vi.fn().mockResolvedValue(undefined),
 			},
-			isExtensionCommand: vi.fn().mockReturnValue(false),
+			isCommandInput: vi.fn().mockReturnValue(false),
 			updatePendingMessagesDisplay: vi.fn(),
 			showError: vi.fn(),
 		};
@@ -294,7 +295,7 @@ describe("InteractiveMode compaction events", () => {
 
 		await flushCompactionQueue.call(fakeThis, { willRetry: false });
 
-		expect(fakeThis.session.prompt).toHaveBeenCalledWith("change direction", { streamingBehavior: "steer" });
+		expect(fakeThis.session.submit).toHaveBeenCalledWith("change direction", { duringRun: "steer" });
 		expect(fakeThis.compactionQueuedMessages).toEqual([]);
 		expect(fakeThis.showError).not.toHaveBeenCalled();
 	});

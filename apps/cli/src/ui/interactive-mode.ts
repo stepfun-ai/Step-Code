@@ -155,7 +155,6 @@ import { wireInteractiveRuntime, wireStartupInput } from "./runtime/index.ts";
 import {
 	clipboardPaste,
 	handleStartupSubmit,
-	isExtensionCommand,
 	rightClickPaste,
 	wireKeyHandlers,
 	wireSubmitHandler,
@@ -4126,9 +4125,9 @@ export class InteractiveMode {
 		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
 		if (!text) return;
 
-		// Queue input during compaction (extension commands execute immediately)
+		// Queue input during compaction (commands execute immediately)
 		if (this.session.isCompacting) {
-			if (this.isExtensionCommand(text)) {
+			if (this.isCommandInput(text)) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
 				await this.session.prompt(text);
@@ -4142,15 +4141,15 @@ export class InteractiveMode {
 		}
 
 		// Alt+Enter queues a follow-up message (waits until agent finishes)
-		// This handles extension commands (execute immediately), prompt template expansion, and queueing
+		// This handles commands (execute immediately), prompt template expansion, and queueing
 		if (this.session.isStreaming) {
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
 			const { text: message, images } = await resolvePastedImages(this.pastedImages, text, {
 				autoResizeImages: this.settingsManager.getImageAutoResize(),
 			});
-			await this.session.prompt(message, {
-				streamingBehavior: "followUp",
+			await this.session.submit(message, {
+				duringRun: "followUp",
 				images: images.length ? images : undefined,
 			});
 			this.updatePendingMessagesDisplay();
@@ -4431,7 +4430,7 @@ export class InteractiveMode {
 		if (this.session.isAutoClmCompacting) {
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
-			void this.session.prompt(text, { streamingBehavior: mode, images }).catch((error) => {
+			void this.session.submit(text, { duringRun: mode, images }).catch((error) => {
 				this.editor.setText(text);
 				this.showError(error instanceof Error ? error.message : String(error));
 			});
@@ -4465,8 +4464,9 @@ export class InteractiveMode {
 		return name;
 	}
 
-	isExtensionCommand(text: string): boolean {
-		return isExtensionCommand(this.session.extensionRunner, text);
+	/** Would `text` run as a command now, rather than become a message or wait in a queue? */
+	isCommandInput(text: string): boolean {
+		return this.session.isCommandInput(text);
 	}
 
 	async flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void> {
@@ -4493,7 +4493,7 @@ export class InteractiveMode {
 			if (options?.willRetry) {
 				// When retry is pending, queue messages for the retry turn
 				for (const message of queuedMessages) {
-					if (this.isExtensionCommand(message.text)) {
+					if (this.isCommandInput(message.text)) {
 						await this.session.prompt(message.text);
 					} else if (message.mode === "followUp") {
 						await this.session.followUp(message.text, message.images);
@@ -4505,17 +4505,17 @@ export class InteractiveMode {
 				return;
 			}
 
-			// Find first non-extension-command message to use as prompt
-			const firstPromptIndex = queuedMessages.findIndex((message) => !this.isExtensionCommand(message.text));
+			// Find first non-command message to use as prompt
+			const firstPromptIndex = queuedMessages.findIndex((message) => !this.isCommandInput(message.text));
 			if (firstPromptIndex === -1) {
-				// All extension commands - execute them all
+				// All commands - execute them all
 				for (const message of queuedMessages) {
 					await this.session.prompt(message.text);
 				}
 				return;
 			}
 
-			// Execute any extension commands before the first prompt
+			// Execute any commands before the first prompt
 			const preCommands = queuedMessages.slice(0, firstPromptIndex);
 			const firstPrompt = queuedMessages[firstPromptIndex];
 			const rest = queuedMessages.slice(firstPromptIndex + 1);
@@ -4526,8 +4526,8 @@ export class InteractiveMode {
 
 			// Start a prompt when idle, or queue it into a run still finishing compaction.
 			const promptPromise = this.session
-				.prompt(firstPrompt.text, {
-					streamingBehavior: firstPrompt.mode,
+				.submit(firstPrompt.text, {
+					duringRun: firstPrompt.mode,
 					images: firstPrompt.images?.length ? firstPrompt.images : undefined,
 				})
 				.catch((error) => {
@@ -4536,7 +4536,7 @@ export class InteractiveMode {
 
 			// Queue remaining messages
 			for (const message of rest) {
-				if (this.isExtensionCommand(message.text)) {
+				if (this.isCommandInput(message.text)) {
 					await this.session.prompt(message.text);
 				} else if (message.mode === "followUp") {
 					await this.session.followUp(message.text, message.images);

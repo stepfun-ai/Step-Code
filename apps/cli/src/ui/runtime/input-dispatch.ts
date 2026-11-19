@@ -25,7 +25,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-	type AgentSession,
 	APP_NAME,
 	cleanPastedPath,
 	extensionForImageMimeType,
@@ -39,15 +38,6 @@ import {
 import type { RuntimeContext } from "./context.ts";
 import { handleEscape } from "./interrupt.ts";
 import { resolvePastedImages } from "./pasted-images.ts";
-
-/** Pure recognizer: is `text` a slash command provided by a loaded extension? */
-export function isExtensionCommand(extensionRunner: AgentSession["extensionRunner"], text: string): boolean {
-	if (!text.startsWith("/")) return false;
-
-	const spaceIndex = text.indexOf(" ");
-	const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-	return !!extensionRunner.getCommand(commandName);
-}
 
 export async function rightClickPaste(ctx: RuntimeContext): Promise<void> {
 	const target = ctx.renderer.getFocusedComponent();
@@ -431,7 +421,7 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 
 		// Queue input during compaction (extension commands execute immediately)
 		if (ctx.session.isCompacting) {
-			if (ctx.isExtensionCommand(text)) {
+			if (ctx.isCommandInput(text)) {
 				ctx.editor.addToHistory?.(text);
 				ctx.editor.setText("");
 				await ctx.session.prompt(text);
@@ -452,7 +442,7 @@ export function wireSubmitHandler(ctx: RuntimeContext): void {
 			const { text: message, images } = await resolvePastedImages(ctx.pastedImages, text, {
 				autoResizeImages: ctx.settingsManager.getImageAutoResize(),
 			});
-			await ctx.session.prompt(message, { streamingBehavior: "steer", images: images.length ? images : undefined });
+			await ctx.session.submit(message, { duringRun: "steer", images: images.length ? images : undefined });
 			ctx.updatePendingMessagesDisplay();
 			ctx.redraw.requestRender();
 			return;

@@ -345,6 +345,16 @@ export interface ModelMutationOptions {
 	persist?: boolean;
 }
 
+/**
+ * Options for `AgentSession.submit()`: everything `prompt()` takes, except the
+ * queueing choice, which is a preference rather than a requirement because
+ * `submit()` reads the run state itself.
+ */
+export interface SubmitOptions extends Omit<PromptOptions, "streamingBehavior"> {
+	/** How the input joins a run that is already going. Defaults to "steer". */
+	duringRun?: "steer" | "followUp";
+}
+
 /** Result from cycleModel() */
 export interface ModelCycleResult {
 	model: Model<any>;
@@ -398,6 +408,25 @@ function estimateRequestOverheadTokens(context: AgentContext): number {
 
 /** Consecutive automatic threshold-compaction failures after which v2 pauses automatic compaction. */
 const AUTO_COMPACTION_FAILURE_LIMIT = 3;
+
+/**
+ * Commands `_handleLiveContextCommand` answers itself, before any registered
+ * extension command. They are dispatched by `prompt()` like any other command,
+ * so a host that queues or steers them as text sends the literal line to the
+ * model instead.
+ */
+const LIVE_CONTEXT_COMMAND_NAMES: ReadonlySet<string> = new Set(["clm", "clm-compact"]);
+
+/**
+ * The `<name>` of a leading `/<name>` line, split the way the kernel splits it
+ * (up to the first space), or undefined when `text` is not one. `/skill:x` and
+ * `/template` are names too — they are simply not commands.
+ */
+function slashCommandNameOf(text: string): string | undefined {
+	if (!text.startsWith("/")) return undefined;
+	const spaceIndex = text.indexOf(" ");
+	return spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+}
 
 // ============================================================================
 // AgentSession Class
@@ -1222,7 +1251,7 @@ export class AgentSession {
 	}
 
 	private async _handleLiveContextCommand(name: string, args: string): Promise<boolean> {
-		if (name !== "clm" && name !== "clm-compact") return false;
+		if (!LIVE_CONTEXT_COMMAND_NAMES.has(name)) return false;
 		const ctx = this._extensionRunner.createCommandContext();
 		const action = name === "clm-compact" ? "compact" : args.trim() || "status";
 		if ((action === "on" || action === "off" || action === "reset" || action === "compact") && !this.isIdle) {
@@ -2346,6 +2375,44 @@ export class AgentSession {
 	}
 
 	/**
+	 * Whether `text` is a line the kernel runs on the spot instead of handing to
+	 * the model: a live-context command (`/clm`) or a registered extension command
+	 * (`/goal`, `/btw`, a plugin's own). Prompt templates and `/skill:` lines are
+	 * not — they expand into a message.
+	 *
+	 * A host that keeps its own queue asks this before queueing, because a command
+	 * must never wait there: `prompt()` dispatches it immediately, and `steer()` /
+	 * `followUp()` refuse it outright.
+	 */
+	isCommandInput(text: string): boolean {
+		const name = slashCommandNameOf(text);
+		return name !== undefined && this._isCommandName(name);
+	}
+
+	/** Whether a command is registered under `name`, in the order `prompt()` dispatches. */
+	private _isCommandName(name: string): boolean {
+		return LIVE_CONTEXT_COMMAND_NAMES.has(name) || this._extensionRunner.getCommand(name) !== undefined;
+	}
+
+	/**
+	 * Submit input the user just produced, from any host surface.
+	 *
+	 * This is the entry that cannot get the order wrong, and the one a host should
+	 * call: `prompt()` dispatches a command before it looks at the run, so a
+	 * command runs here immediately whether or not one is in flight. Everything
+	 * else starts a turn when idle and joins the running one otherwise, as
+	 * `duringRun` asks — decided here, from the state at the call, so a run that
+	 * starts in between cannot turn the input into a rejected prompt.
+	 *
+	 * `steer()` and `followUp()` remain for a host that has already decided; they
+	 * throw for commands, which is the mistake this method exists to prevent.
+	 */
+	async submit(text: string, options?: SubmitOptions): Promise<void> {
+		const { duringRun, ...rest } = options ?? {};
+		return this.prompt(text, { ...rest, streamingBehavior: duringRun ?? "steer" });
+	}
+
+	/**
 	 * Send a prompt to the agent.
 	 * - Handles extension commands (registered via pi.registerCommand) immediately, even during streaming
 	 * - Expands file-based prompt templates by default
@@ -2549,8 +2616,8 @@ export class AgentSession {
 		source: InputSource = "interactive",
 	): Promise<boolean> {
 		// Parse command name and args
+		const commandName = slashCommandNameOf(text) ?? "";
 		const spaceIndex = text.indexOf(" ");
-		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
 
 		if (await this._handleLiveContextCommand(commandName, args)) {
@@ -2637,15 +2704,13 @@ export class AgentSession {
 	 * Queue a steering message while the agent is running.
 	 * Delivered after the current assistant turn finishes executing its tool calls,
 	 * before the next LLM call.
-	 * Expands skill commands and prompt templates. Errors on extension commands.
+	 * Expands skill commands and prompt templates. Refuses commands.
 	 * @param images Optional image attachments to include with the message
-	 * @throws Error if text is an extension command
+	 * @throws Error if text is a command
 	 */
 	async steer(text: string, images?: ImageContent[]): Promise<void> {
-		// Check for extension commands (cannot be queued)
-		if (text.startsWith("/")) {
-			this._throwIfExtensionCommand(text);
-		}
+		// A command is not a message: it runs on the spot, so it cannot be queued.
+		this._throwIfCommand(text);
 
 		// Expand skill commands and prompt templates
 		let expandedText = this._expandSkillCommand(text);
@@ -2657,15 +2722,13 @@ export class AgentSession {
 	/**
 	 * Queue a follow-up message to be processed after the agent finishes.
 	 * Delivered only when agent has no more tool calls or steering messages.
-	 * Expands skill commands and prompt templates. Errors on extension commands.
+	 * Expands skill commands and prompt templates. Refuses commands.
 	 * @param images Optional image attachments to include with the message
-	 * @throws Error if text is an extension command
+	 * @throws Error if text is a command
 	 */
 	async followUp(text: string, images?: ImageContent[]): Promise<void> {
-		// Check for extension commands (cannot be queued)
-		if (text.startsWith("/")) {
-			this._throwIfExtensionCommand(text);
-		}
+		// A command is not a message: it runs on the spot, so it cannot be queued.
+		this._throwIfCommand(text);
 
 		// Expand skill commands and prompt templates
 		let expandedText = this._expandSkillCommand(text);
@@ -2718,18 +2781,18 @@ export class AgentSession {
 	}
 
 	/**
-	 * Throw an error if the text is an extension command.
+	 * Throw an error if `text` is a command the kernel runs immediately.
+	 *
+	 * A command is not a message: it would be dispatched by `prompt()` (or
+	 * `submit()`) whether or not a run is going, and running it as a queued user
+	 * turn would either be refused or send the literal line to the model.
 	 */
-	private _throwIfExtensionCommand(text: string): void {
-		const spaceIndex = text.indexOf(" ");
-		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-		const command = this._extensionRunner.getCommand(commandName);
-
-		if (command) {
-			throw new Error(
-				`Extension command "/${commandName}" cannot be queued. Use prompt() or execute the command when not streaming.`,
-			);
-		}
+	private _throwIfCommand(text: string): void {
+		const commandName = slashCommandNameOf(text);
+		if (commandName === undefined || !this._isCommandName(commandName)) return;
+		throw new Error(
+			`Command "/${commandName}" cannot be queued as a message. Use prompt() or submit() to run it, during or between runs.`,
+		);
 	}
 
 	/**
