@@ -19,7 +19,7 @@ import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-sessi
 import { AuthStorage } from "../../src/core/auth-storage.ts";
 import type { ExtensionRunner } from "../../src/core/extensions/index.ts";
 import { convertToLlm } from "../../src/core/messages.ts";
-import { SessionManager } from "../../src/core/session-manager.ts";
+import { getDefaultSessionDir, SessionManager } from "../../src/core/session-manager.ts";
 import type { Settings } from "../../src/core/settings-manager.ts";
 import { SettingsManager } from "../../src/core/settings-manager.ts";
 import type { SystemPromptProduct } from "../../src/core/system-prompt.ts";
@@ -118,7 +118,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	const withConfiguredAuth = options.withConfiguredAuth ?? true;
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
-	const sessionManager = options.sessionPersistence ? SessionManager.create(tempDir) : SessionManager.inMemory();
+	// Persisted sessions stay beside the workspace, never in the user's real agent
+	// directory (STEP_CODING_AGENT_DIR is inherited when tests run inside StepCode).
+	const sessionAgentDir = `${tempDir}-agent`;
+	const sessionManager = options.sessionPersistence
+		? SessionManager.create(tempDir, getDefaultSessionDir(tempDir, sessionAgentDir))
+		: SessionManager.inMemory();
 	const settingsManager = SettingsManager.inMemory(options.settings);
 
 	const authStorage = AuthStorage.inMemory();
@@ -232,6 +237,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			if (existsSync(tempDir)) {
 				rmSync(tempDir, { recursive: true });
 			}
+			rmSync(sessionAgentDir, { recursive: true, force: true });
 		},
 	};
 }

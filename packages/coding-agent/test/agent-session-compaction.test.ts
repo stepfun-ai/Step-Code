@@ -16,7 +16,7 @@ import { streamSimple } from "@step-harness/providers/compat";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentSession, type AgentSessionEvent } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import { SessionManager } from "../src/core/session-manager.ts";
+import { getDefaultSessionDir, SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createCodingTools } from "../src/index.ts";
 import { API_KEY, createTestResourceLoader, stepModel } from "./utilities.ts";
@@ -57,7 +57,9 @@ describe.skipIf(!API_KEY)("AgentSession compaction e2e", () => {
 			},
 		});
 
-		sessionManager = inMemory ? SessionManager.inMemory() : SessionManager.create(tempDir);
+		sessionManager = inMemory
+			? SessionManager.inMemory()
+			: SessionManager.create(tempDir, getDefaultSessionDir(tempDir, tempDir));
 		const settingsManager = SettingsManager.create(tempDir, tempDir);
 		// Use minimal keepRecentTokens so small test conversations have something to summarize
 		settingsManager.applyOverrides({ compaction: { keepRecentTokens: 1 } });
