@@ -248,13 +248,18 @@ describe("AgentSession bash and persistence characterization", () => {
 		await harness.session.prompt("start");
 
 		const entries = harness.sessionManager.getEntries();
-		expect(entries.map((entry) => entry.type)).toEqual([
+		// Execution-trace records (`step.turn`, `step.tool_execution`) sit between the
+		// messages; they are `custom` entries and never reach the model.
+		expect(entries.filter((entry) => entry.type !== "custom").map((entry) => entry.type)).toEqual([
 			"custom_message",
 			"message",
 			"message",
 			"message",
 			"message",
 		]);
+		expect(
+			entries.filter((entry) => entry.type === "custom").every((entry) => entry.customType.startsWith("step.")),
+		).toBe(true);
 		expect(harness.session.messages.map((message) => message.role)).toEqual([
 			"custom",
 			"user",
@@ -303,7 +308,11 @@ describe("AgentSession bash and persistence characterization", () => {
 		await harness.session.abort();
 		await promptPromise;
 
-		const lastEntry = harness.sessionManager.getEntries()[harness.sessionManager.getEntries().length - 1];
+		// The last message entry; the turn's closing trace record follows it.
+		const lastEntry = harness.sessionManager
+			.getEntries()
+			.filter((entry) => entry.type !== "custom")
+			.at(-1);
 		expect(lastEntry?.type).toBe("message");
 		if (lastEntry?.type === "message") {
 			expect(lastEntry.message.role).toBe("assistant");

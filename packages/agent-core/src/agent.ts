@@ -106,6 +106,7 @@ export interface AgentOptions {
 	onResponse?: SimpleStreamOptions["onResponse"];
 	beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
+	onToolExecutionStarted?: AgentLoopConfig["onToolExecutionStarted"];
 	transformToolResult?: AgentLoopConfig["transformToolResult"];
 	shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext, signal?: AbortSignal) => boolean | Promise<boolean>;
 	prepareNextTurn?: (
@@ -222,6 +223,8 @@ export class Agent {
 		context: AfterToolCallContext,
 		signal?: AbortSignal,
 	) => Promise<AfterToolCallResult | undefined>;
+	/** See {@link AgentLoopConfig.onToolExecutionStarted}. */
+	public onToolExecutionStarted?: AgentLoopConfig["onToolExecutionStarted"];
 	public transformToolResult?: AgentLoopConfig["transformToolResult"];
 	public shouldStopAfterTurn?: (
 		context: ShouldStopAfterTurnContext,
@@ -263,6 +266,7 @@ export class Agent {
 		this.onResponse = runtimeOptions.onResponse;
 		this.beforeToolCall = runtimeOptions.beforeToolCall;
 		this.afterToolCall = runtimeOptions.afterToolCall;
+		this.onToolExecutionStarted = runtimeOptions.onToolExecutionStarted;
 		this.transformToolResult = runtimeOptions.transformToolResult;
 		this.shouldStopAfterTurn = runtimeOptions.shouldStopAfterTurn;
 		this.prepareNextTurn = runtimeOptions.prepareNextTurn;
@@ -545,6 +549,7 @@ export class Agent {
 			toolExecution: this.toolExecution,
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
+			onToolExecutionStarted: this.onToolExecutionStarted,
 			transformToolResult: this.transformToolResult,
 			shouldStopAfterTurn: shouldStopAfterTurn
 				? async (context) => await shouldStopAfterTurn(context, this.signal)

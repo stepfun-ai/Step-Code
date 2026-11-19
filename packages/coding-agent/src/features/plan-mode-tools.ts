@@ -194,6 +194,9 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				);
 			}
 			const planHash = hashPlanContents(planContents);
+			// Set once the in-process dialog has been answered; the execution trace
+			// reports the wait apart from the tool's own run time.
+			let waitingForUserMs: number | undefined;
 			const reviewed = (outcome: PlanReviewOutcome, feedback?: string): PlanReviewDetails => ({
 				planFilePath,
 				planContents,
@@ -205,6 +208,7 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 				approvalSource: ctx.planReviewSurface || (ctx.mode !== "rpc" && ctx.hasUI) ? "user" : "external",
 				outcome,
 				...(feedback === undefined ? {} : { feedback }),
+				...(waitingForUserMs === undefined ? {} : { waitingForUserMs }),
 			});
 			// Every handoff leaves a proposal awaiting approval, so no automatic
 			// starter continues past it. A host that can ask the user keeps the fact
@@ -249,7 +253,9 @@ export function registerPlanModeTools(pi: ExtensionAPI, planMode: StepPlanModeCo
 					true,
 				);
 			}
+			const reviewStartedAt = Date.now();
 			const review = await reviewPlanInteractively(ctx, planFilePath, planContents, signal);
+			waitingForUserMs = Math.max(0, Date.now() - reviewStartedAt);
 			if (signal?.aborted) {
 				return controlResult("The plan review was aborted. Planning remains active.", true);
 			}

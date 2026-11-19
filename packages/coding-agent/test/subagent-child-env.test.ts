@@ -7,7 +7,12 @@ import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.
 import { SessionManager } from "../src/core/session-manager.ts";
 import { createStepCronExtension } from "../src/features/step-cron.ts";
 import { createStepGoalExtension } from "../src/features/step-schedule.ts";
-import { CHILD_MARKER, childSessionHeader, type StepSubagentRunInput } from "../src/features/step-subagent.ts";
+import {
+	CHILD_MARKER,
+	childSessionHeader,
+	PARENT_TOOL_CALL_ID_ENV,
+	type StepSubagentRunInput,
+} from "../src/features/step-subagent.ts";
 import type { StepAgentConfig } from "../src/features/step-subagent-agents.ts";
 import { liveSubagentSessions } from "../src/features/subagent/lane-lifecycle.ts";
 import {
@@ -118,6 +123,22 @@ test("a child stamps its session header from the child env; a user session stays
 	expect(user.getHeader()).not.toHaveProperty("origin");
 	expect(isChildAgentSession({ id: "user-id" })).toBe(false);
 	expect(isChildAgentSession({ id: "workflow-run-agent" })).toBe(true);
+});
+
+test("a child's session header names the parent tool call that spawned it", async () => {
+	const env = buildSubagentChildEnv(runInput({ parentSessionId: "parent-1", parentToolCallId: "toolu_spawn" }));
+	expect(env[PARENT_TOOL_CALL_ID_ENV]).toBe("toolu_spawn");
+	expect(childSessionHeader(env)).toEqual({
+		origin: "subagent",
+		parentSessionId: "parent-1",
+		parentToolCallId: "toolu_spawn",
+	});
+	const dir = await workspace();
+	const child = SessionManager.create(dir, dir, { id: "child-id", ...childSessionHeader(env) });
+	expect(child.getHeader()).toMatchObject({ parentSessionId: "parent-1", parentToolCallId: "toolu_spawn" });
+	// A stale value in the parent's own environment never leaks into an unrelated child.
+	vi.stubEnv(PARENT_TOOL_CALL_ID_ENV, "toolu_stale");
+	expect(buildSubagentChildEnv(runInput())[PARENT_TOOL_CALL_ID_ENV]).toBeUndefined();
 });
 
 test("a workflow ACL is forwarded, and a stale inherited one is cleared", () => {

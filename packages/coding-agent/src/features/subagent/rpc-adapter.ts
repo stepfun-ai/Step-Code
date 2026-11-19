@@ -24,6 +24,7 @@ import {
 	isRecordValue,
 	MAX_JSON_LINE_BYTES,
 	normalizeChildTools,
+	PARENT_TOOL_CALL_ID_ENV,
 	parseJsonEvent,
 	readSettledFailure,
 	type StepSubagentRunInput,
@@ -224,6 +225,7 @@ export function buildSubagentChildEnv(input: StepSubagentRunInput): NodeJS.Proce
 		[CHILD_MARKER]: "1",
 		STEPCODE_USAGE_PARENT_CWD: input.parentCwd ?? input.workflowAcl?.baseCwd,
 		STEPCODE_USAGE_PARENT_SESSION_ID: input.parentSessionId,
+		[PARENT_TOOL_CALL_ID_ENV]: input.parentToolCallId,
 		STEP_DISABLE_WORKFLOW: "1",
 		STEP_DISABLE_CRON: "1",
 		STEP_DISABLE_GOAL: "1",
@@ -269,7 +271,9 @@ export async function createSubagentRpcSession(
 		registerProcess({
 			pid: childPid,
 			kind: "subagent",
-			ownerId: input.parentSessionId ?? HOST_OWNER,
+			// A workflow agent names its parent session only for the child's session
+			// header; its process stays host-owned, as before, and is stopped by the run.
+			ownerId: (input.workflowAcl ? undefined : input.parentSessionId) ?? HOST_OWNER,
 			label: `subagent ${sessionId}`,
 			cwd: input.cwd,
 		});

@@ -92,6 +92,12 @@ export {
 	type EventBus,
 	type EventBusController,
 } from "./core/event-bus.ts";
+export {
+	TOOL_EXECUTION_ENTRY_TYPE,
+	type ToolExecutionEndData,
+	type ToolExecutionOutcome,
+	type ToolExecutionStartData,
+} from "./core/execution-trace.ts";
 // Extension system
 export type {
 	AgentEndEvent,
@@ -410,6 +416,17 @@ export {
 } from "./core/skills.ts";
 export { BUILTIN_SLASH_COMMANDS } from "./core/slash-commands.ts";
 export { createSyntheticSourceInfo } from "./core/source-info.ts";
+export {
+	isThinkingTimingEntryType,
+	LEGACY_THINKING_TIMING_ENTRY_TYPE,
+	readThinkingObservation,
+	savedThinkingTimings,
+	THINKING_TIMING_ENTRY_TYPE,
+	ThinkingClock,
+	type ThinkingObservation,
+	type ThinkingTiming,
+	type ThinkingTimings,
+} from "./core/thinking-timing.ts";
 export {
 	type EditDiffResult,
 	generateDiffString,

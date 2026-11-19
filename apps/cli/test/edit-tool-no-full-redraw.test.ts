@@ -225,11 +225,14 @@ describe("edit tool TUI rendering", () => {
 		// of its own, which is not what the call did.
 		await writeFile(filePath, "after\n", "utf8");
 		component.setArgsComplete();
-		tui.requestRender();
-		await waitForRender();
-		await waitForRender();
 		// The args-based preview, computed against the file the call already changed.
-		expect(component.render(200).join("\n")).toContain("Could not find");
+		// It is read from disk asynchronously, so wait for it rather than for a fixed
+		// number of ticks, which a loaded CI machine does not finish in.
+		await waitForRenderedText(
+			() => component.render(200).join("\n"),
+			"Could not find",
+			() => tui.requestRender(),
+		);
 		component.updateResult(
 			{
 				content: [{ type: "text", text: "Successfully replaced 1 occurrence(s) in cancelled-check.txt.\n\nthen_run: $ check\nCommand aborted" }],

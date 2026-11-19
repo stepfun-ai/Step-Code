@@ -90,6 +90,8 @@ const MAX_PARALLEL_TASKS = 1000;
 export const MAX_JSON_LINE_BYTES = 2 * 1024 * 1024;
 const MAX_MESSAGES = 256;
 export const CHILD_MARKER = "STEPCODE_SUBAGENT_CHILD";
+/** Carries the parent's spawning tool call id into a child process; see `childSessionHeader`. */
+export const PARENT_TOOL_CALL_ID_ENV = "STEPCODE_PARENT_TOOL_CALL_ID";
 
 /**
  * Header fields a child agent process stamps on the session it creates, so the
@@ -98,10 +100,15 @@ export const CHILD_MARKER = "STEPCODE_SUBAGENT_CHILD";
  */
 export function childSessionHeader(
 	env: NodeJS.ProcessEnv = process.env,
-): Pick<NewSessionOptions, "origin" | "parentSessionId"> {
+): Pick<NewSessionOptions, "origin" | "parentSessionId" | "parentToolCallId"> {
 	if (env[CHILD_MARKER] !== "1") return {};
 	const parentSessionId = env.STEPCODE_USAGE_PARENT_SESSION_ID?.trim();
-	return { origin: CHILD_SESSION_ORIGIN, ...(parentSessionId ? { parentSessionId } : {}) };
+	const parentToolCallId = env[PARENT_TOOL_CALL_ID_ENV]?.trim();
+	return {
+		origin: CHILD_SESSION_ORIGIN,
+		...(parentSessionId ? { parentSessionId } : {}),
+		...(parentToolCallId ? { parentToolCallId } : {}),
+	};
 }
 
 export interface StepSubagentUsage {
@@ -144,6 +151,8 @@ export interface StepSubagentRunInput {
 	onModelRequest?: (event: import("../core/rate-limit.ts").ModelRequestProgress) => void;
 	parentCwd?: string;
 	parentSessionId?: string;
+	/** The parent's tool call that spawned this child; stamped on the child's session header. */
+	parentToolCallId?: string;
 	agent: StepAgentConfig;
 	task: string;
 	cwd: string;
@@ -214,6 +223,14 @@ export interface StepSubagentResultRecord extends StepSubagentRunResult {
 	step?: number;
 	worktreePath?: string;
 	worktreeBranch?: string;
+	/** Session id of the child process; its transcript is a read-only child session. */
+	sessionId?: string;
+	/**
+	 * When the record reached a final status (completed, failed, aborted, skipped).
+	 * Absent while queued or running; a background lane reports it in its
+	 * completion notice, since its tool result is written while still running.
+	 */
+	endedAt?: number;
 }
 
 export interface StepSubagentDetails {
@@ -848,7 +865,7 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 				const callParams = params as SubagentParams;
 				const foreground = (runParams: SubagentParams) =>
 					withSubagentListWidget(toolCallId, ctx, onUpdate, (update) =>
-						executeSubagent(runParams, signal, update, ctx, resolved),
+						executeSubagent(runParams, signal, update, ctx, resolved, undefined, toolCallId),
 					);
 				if (!callParams.run_in_background) return foreground(callParams);
 
@@ -864,7 +881,7 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 				const lane = lifecycle.launchLane(
 					callParams,
 					ctx,
-					preflight.run,
+					{ ...preflight.run, parentToolCallId: toolCallId },
 					resolveBackgroundTimeoutMs(callParams.timeout_seconds, settings?.timeoutSeconds),
 				);
 				if (typeof lane === "string") {

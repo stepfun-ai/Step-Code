@@ -37,7 +37,11 @@ export function registerWorkflowChildAcl(pi: ExtensionAPI, telemetry?: StepTelem
 				reason_code: "tool_call",
 			});
 		}
-		return { block: true, reason: decision.reason ?? "Workflow ACL blocked this tool call" };
+		return {
+			block: true,
+			reason: decision.reason ?? "Workflow ACL blocked this tool call",
+			blockedBy: "workflow_acl",
+		};
 	});
 	return true;
 }

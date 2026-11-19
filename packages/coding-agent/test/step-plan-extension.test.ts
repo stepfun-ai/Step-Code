@@ -1308,6 +1308,8 @@ test.each([
 			approvalSource: "user",
 			outcome,
 			...(feedback === undefined ? {} : { feedback }),
+			// The dialog was shown, so the wait for the user is reported for the trace.
+			waitingForUserMs: expect.any(Number),
 		});
 		expect(result.details?.planModeExited).toBe(!lastPlanEntry(harness).enabled);
 	},

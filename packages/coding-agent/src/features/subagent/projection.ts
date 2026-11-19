@@ -134,6 +134,7 @@ export function liveRecord(record: StepSubagentResultRecord): StepSubagentResult
 		...(record.lastEvent === undefined ? {} : { lastEvent: clipMiddle(record.lastEvent, LIVE_IDENTIFIER_CHARS) }),
 		...(record.startedAt === undefined ? {} : { startedAt: record.startedAt }),
 		...(record.updatedAt === undefined ? {} : { updatedAt: record.updatedAt }),
+		...(record.endedAt === undefined ? {} : { endedAt: record.endedAt }),
 		...(record.step === undefined ? {} : { step: record.step }),
 		...(record.worktreePath === undefined ? {} : { worktreePath: clipMiddle(record.worktreePath, LIVE_PATH_CHARS) }),
 		...(record.worktreeBranch === undefined
@@ -227,6 +228,7 @@ export function finalRecord(record: StepSubagentResultRecord, budget: Budget): S
 		...(record.lastEvent === undefined ? {} : { lastEvent: clipMiddle(record.lastEvent, FINAL_IDENTIFIER_CHARS) }),
 		...(record.startedAt === undefined ? {} : { startedAt: record.startedAt }),
 		...(record.updatedAt === undefined ? {} : { updatedAt: record.updatedAt }),
+		...(record.endedAt === undefined ? {} : { endedAt: record.endedAt }),
 		...(record.step === undefined ? {} : { step: record.step }),
 		...(record.worktreePath === undefined ? {} : { worktreePath: clipMiddle(record.worktreePath, LIVE_PATH_CHARS) }),
 		...(record.worktreeBranch === undefined

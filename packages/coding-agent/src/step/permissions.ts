@@ -622,7 +622,7 @@ export class StepPermissionController {
 		if (decision.action === "allow") return undefined;
 
 		if (decision.action === "deny") {
-			return { block: true, terminate: true, reason: decision.reason };
+			return { block: true, terminate: true, reason: decision.reason, blockedBy: "permission_rule" };
 		}
 
 		if (!context.hasUI) {
@@ -635,12 +635,13 @@ export class StepPermissionController {
 			// a failed tool result instead of ending the run, so the agent can take
 			// a safer route. Explicit `deny` decisions above keep terminating.
 			if (this.nonInteractiveDenial === "continue" && !isEnvironmentAnalysisFailure(decision)) {
-				return { block: true, reason: formatDenialRecoveryReason(decision, cause) };
+				return { block: true, reason: formatDenialRecoveryReason(decision, cause), blockedBy: "no_approver" };
 			}
 			return {
 				block: true,
 				terminate: true,
 				reason: formatUnattendedBlockReason(decision, cause),
+				blockedBy: "no_approver",
 			};
 		}
 
@@ -650,7 +651,8 @@ export class StepPermissionController {
 			{ signal: context.signal, overlay: true, mirror: true },
 		);
 		if (approved) return undefined;
-		return { block: true, reason: `Tool call denied: ${event.toolName}` };
+		// `user`: someone saw the prompt and refused it, which the trace records as a denial.
+		return { block: true, reason: `Tool call denied: ${event.toolName}`, blockedBy: "user" };
 	}
 }
 

@@ -45,6 +45,10 @@ export function createDefaultWorkflowAgentRunner(options: DefaultWorkflowAgentRu
 			},
 			task: prompt,
 			cwd: path.resolve(input.cwd),
+			// Without these the child's session cannot say which session and call
+			// started it: workflow agents are spawned here, not by the subagent tool.
+			...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
+			...(input.parentToolCallId ? { parentToolCallId: input.parentToolCallId } : {}),
 			model: input.options.model,
 			thinkingLevel: thinkingLevel(input.options.effort),
 			signal: input.signal,

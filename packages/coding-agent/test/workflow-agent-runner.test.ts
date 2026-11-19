@@ -61,3 +61,21 @@ test("default runner forwards each child tool start and vouches for complete too
 	const crashed = await runner({ prompt: "work", options: {}, cwd: process.cwd(), runId: "run", agentId: "agent" });
 	expect(crashed).toMatchObject({ status: "failed", toolActivityObserved: false });
 });
+
+test("default runner tells each child which session and workflow call started it", async () => {
+	runStepSubagentProcess.mockReset();
+	runStepSubagentProcess.mockResolvedValue(childResult());
+	const runner = createDefaultWorkflowAgentRunner();
+	await runner({
+		prompt: "work",
+		options: {},
+		cwd: process.cwd(),
+		runId: "run",
+		agentId: "agent",
+		parentSessionId: "parent-session",
+		parentToolCallId: "toolu_workflow",
+	});
+	expect(runStepSubagentProcess).toHaveBeenCalledWith(
+		expect.objectContaining({ parentSessionId: "parent-session", parentToolCallId: "toolu_workflow" }),
+	);
+});

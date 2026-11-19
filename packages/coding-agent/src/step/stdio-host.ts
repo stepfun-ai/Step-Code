@@ -734,7 +734,12 @@ export class StepStdioHost {
 				if (hook?.systemMessage)
 					this.#emitEvent("user_notification", { message: hook.systemMessage, type: "info" });
 				if (isBlockingHookOutput(hook)) {
-					return { block: true, reason: hook?.reason ?? "blocked by an SDK PreToolUse hook", terminate: true };
+					return {
+						block: true,
+						reason: hook?.reason ?? "blocked by an SDK PreToolUse hook",
+						terminate: true,
+						blockedBy: "sdk_hook",
+					};
 				}
 				return await this.#approvalForTool(query, context);
 			};
@@ -806,7 +811,12 @@ export class StepStdioHost {
 		const toolName = context.toolCall.name;
 		if (!requiresSdkApproval(toolName) || mode === "bypassPermissions") return undefined;
 		if (mode === "plan" || mode === "dontAsk") {
-			return { block: true, reason: `tool ${toolName} is not allowed in permission mode ${mode}`, terminate: true };
+			return {
+				block: true,
+				reason: `tool ${toolName} is not allowed in permission mode ${mode}`,
+				terminate: true,
+				blockedBy: "permission_rule",
+			};
 		}
 		if (mode === "acceptEdits" && isEditTool(toolName) && getThenRunCommand(toolName, context.args) === undefined) {
 			return undefined;
@@ -816,6 +826,7 @@ export class StepStdioHost {
 				block: true,
 				reason: "approval required but no interactive permission callback is available",
 				terminate: true,
+				blockedBy: "no_approver",
 			};
 		}
 		return this.#requestSdkApproval(query, context);
@@ -851,7 +862,8 @@ export class StepStdioHost {
 				message: reason,
 			});
 		}
-		return { block: true, reason, terminate: false };
+		// The SDK host's permission callback answered (or timed out) for its user: a denial.
+		return { block: true, reason, terminate: false, blockedBy: "user" };
 	}
 
 	async #runSdkHook(

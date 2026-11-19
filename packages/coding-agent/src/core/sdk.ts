@@ -19,7 +19,7 @@ import {
 import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
-import { rememberRequestUsage } from "./request-provenance.ts";
+import { RequestLedger, type RequestUsageProvenance, rememberRequestUsage } from "./request-provenance.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
@@ -338,6 +338,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 	const modelRequestObserver = options.modelRequestObserver;
+	const requestLedger = new RequestLedger();
 
 	agent = new Agent({
 		initialState: {
@@ -363,6 +364,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			};
 			const startedAt = Date.now();
 			let statusCode = 0;
+			// Summary requests are tagged by the session while it summarizes; read at
+			// dispatch, since the session may clear it before this request settles.
+			const purpose = requestLedger.purpose;
+			// Responses the provider received, its own retries included.
+			let responses = 0;
 			// ModelRuntime can replace the model's base URL after resolving auth
 			// (for example an OAuth provider or a configured proxy). Keep the value
 			// returned by the provider callback so telemetry classifies the endpoint
@@ -392,6 +398,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				// observer is mounted (public builds mount none).
 				onResponse: async (response, resolvedModel: Model<Api>) => {
 					statusCode = response.status;
+					responses++;
 					responseModel = resolvedModel;
 					await options?.onResponse?.(response, resolvedModel);
 				},
@@ -431,13 +438,26 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					sessionId: options?.sessionId,
 					getStatusCode: () => statusCode,
 				});
+				// The loop turns this throw into its own error message, which carries no
+				// provenance; the ledger keeps the request on record for the session.
+				requestLedger.record(
+					{
+						...usageProvenance,
+						durationMs: Math.max(0, Date.now() - startedAt),
+						ttftMs: null,
+						outcome: "transport_error",
+						...(statusCode > 0 ? { statusCode } : {}),
+						...(responses > 0 ? { transportAttempts: responses } : {}),
+					},
+					purpose,
+				);
 				throw error;
 			}
 			return observeModelRequestStream(model, stream, modelRequestObserver, {
 				// A user stop during a slow or stuck request is a report of its own:
 				// the timings say whether a token ever arrived.
-				onCompleted: (message, completion) =>
-					rememberRequestUsage(message, {
+				onCompleted: (message, completion) => {
+					const settled: RequestUsageProvenance = {
 						...usageProvenance,
 						durationMs: completion.durationMs,
 						ttftMs: completion.ttftMs,
@@ -447,7 +467,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						// Auth or a proxy can redirect the request; record who answered.
 						...(completion.provider !== model.provider ? { responseProvider: completion.provider } : {}),
 						...(completion.model !== model.id ? { responseModel: completion.model } : {}),
-					}),
+						...(responses > 0 ? { transportAttempts: responses } : {}),
+					};
+					rememberRequestUsage(message, settled);
+					requestLedger.record(settled, purpose);
+				},
 				startedAt,
 				sessionId: options?.sessionId,
 				getStatusCode: () => statusCode,
@@ -515,6 +539,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
 		systemPromptProduct: options.systemPromptProduct,
+		requestLedger,
 	});
 	const extensionsResult = resourceLoader.getExtensions();
 

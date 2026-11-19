@@ -966,6 +966,12 @@ export interface ToolExecutionEndEvent {
 	result: any;
 	/** Whether the invocation failed; read `result.details.execution` for a command's outcome. */
 	isError: boolean;
+	/** False when the call never ran (blocked, denied, invalid, skipped); absent from older hosts. */
+	executed?: boolean;
+	/** When the call actually started running (after approval), epoch ms; absent if it never ran. */
+	startedAt?: number;
+	/** The session's `step.tool_execution` start entry for this call, when one was written. */
+	traceEntryId?: string;
 }
 
 // ============================================================================
@@ -1280,6 +1286,14 @@ export interface ToolCallEventResult {
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
 	 */
 	terminate?: boolean;
+	/**
+	 * Why the call was blocked, recorded in the session's execution trace
+	 * (`step.tool_execution`). Built-in policies use `user` (an approval prompt was
+	 * refused), `permission_rule`, `no_approver`, `plan_mode`,
+	 * `then_run_unavailable`, `sdk_hook` and `workflow_acl`. A block without a code
+	 * is recorded as `extension`. Ignored unless `block` is true.
+	 */
+	blockedBy?: string;
 }
 
 /** Result from user_bash event handler */

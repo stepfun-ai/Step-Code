@@ -290,6 +290,7 @@ export function planModeToolCallDecision(options: {
 				targetsPlanFile: true,
 				block: {
 					block: true,
+					blockedBy: "plan_mode",
 					reason: [
 						"Plan mode is active, so this file mutation was blocked: `then_run` runs a shell command, which is not part of writing the plan.",
 						`Target: ${targetPath}`,
@@ -308,6 +309,7 @@ export function planModeToolCallDecision(options: {
 			targetsPlanFile: false,
 			block: {
 				block: true,
+				blockedBy: "plan_mode",
 				reason: [
 					`Plan mode is active, so this file mutation was blocked. Only the plan file may be written: ${planFilePath}`,
 					`Target: ${targetPath || "(no path provided)"}`,
@@ -324,6 +326,7 @@ export function planModeToolCallDecision(options: {
 		targetsPlanFile: false,
 		block: {
 			block: true,
+			blockedBy: "plan_mode",
 			reason: [
 				`Plan mode is active, so this file mutation was blocked. Only the plan file may be written: ${planFilePath}`,
 				`Target: ${targetPath || "(no path provided)"}`,

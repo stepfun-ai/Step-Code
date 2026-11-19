@@ -398,6 +398,32 @@ describe("findCutPoint", () => {
 		expect(result.turnStartIndex).toBe(2);
 	});
 
+	it("does not treat trace records before a user message as a split turn", () => {
+		const meta = (id: string, customType: string): SessionEntry => ({
+			type: "custom",
+			customType,
+			data: {},
+			id,
+			parentId: null,
+			timestamp: new Date().toISOString(),
+		});
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("older request")),
+			createMessageEntry(createAssistantMessage("older answer ".repeat(400))),
+			// Written after a reply; they carry no context.
+			meta("prov", "step.usage_provenance"),
+			meta("turn-end", "step.turn"),
+			createMessageEntry(createUserMessage("new request ".repeat(400))),
+		];
+
+		const result = findCutPoint(entries, 0, entries.length, 100);
+
+		// The kept range starts at the metadata, but the first message kept starts a turn.
+		expect(result.firstKeptEntryIndex).toBe(2);
+		expect(result.isSplitTurn).toBe(false);
+		expect(result.turnStartIndex).toBe(-1);
+	});
+
 	it("should return startIndex if no valid cut points in range", () => {
 		const entries: SessionEntry[] = [createMessageEntry(createAssistantMessage("a"))];
 		const result = findCutPoint(entries, 0, entries.length, 1000);

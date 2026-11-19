@@ -607,6 +607,6 @@ describe("approval viewport", () => {
 		expect(viewport).toContain("FOOTER");
 		terminal.sendInput("\x1b[B");
 		terminal.sendInput("\r");
-		expect(await result).toEqual({ block: true, reason: "Tool call denied: run_command" });
+		expect(await result).toEqual({ block: true, reason: "Tool call denied: run_command", blockedBy: "user" });
 	});
 });

@@ -62,6 +62,10 @@ export interface WorkflowAgentRunInput {
 	agentId: string;
 	/** Reports each tool the agent starts, before the tool runs. */
 	onToolExecutionStart?: (toolName: string) => void;
+	/** The session that runs the workflow; stamped on each agent's child session. */
+	parentSessionId?: string;
+	/** The `workflow` tool call this run belongs to; stamped on each agent's child session. */
+	parentToolCallId?: string;
 }
 
 export interface WorkflowAgentRunResult {

@@ -26,6 +26,7 @@ import type {
 	AgentToolResult,
 	PrepareNextTurnContext,
 	StreamFn,
+	ToolNotExecuted,
 } from "./types.ts";
 
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
@@ -507,6 +508,7 @@ async function failToolCallsFromTruncatedMessage(
 			toolCallId: toolCall.id,
 			toolName: toolCall.name,
 			args: toolCall.arguments,
+			at: Date.now(),
 		});
 		const finalized: FinalizedToolCallOutcome = {
 			toolCall,
@@ -514,6 +516,7 @@ async function failToolCallsFromTruncatedMessage(
 				`Tool call "${toolCall.name}" was not executed: the response hit the output token limit, so its arguments may be truncated. Re-issue the tool call with complete arguments.`,
 			),
 			isError: true,
+			notExecuted: { kind: "not_run", reason: "output_truncated" },
 		};
 		await emitToolExecutionEnd(finalized, config, signal, emit);
 		const toolResultMessage = createToolResultMessage(finalized);
@@ -567,6 +570,7 @@ async function executeToolCallsSequential(
 			toolCallId: toolCall.id,
 			toolName: toolCall.name,
 			args: toolCall.arguments,
+			at: Date.now(),
 		});
 
 		const preparation: PreparedToolCall | ImmediateToolCallOutcome = stopTurn
@@ -579,6 +583,7 @@ async function executeToolCallsSequential(
 						"This tool call was skipped because an earlier control tool ended the turn.",
 					),
 					isError: true,
+					notExecuted: { kind: "not_run", reason: "skipped_after_stop" },
 				}
 			: await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		let finalized: FinalizedToolCallOutcome;
@@ -587,9 +592,10 @@ async function executeToolCallsSequential(
 				toolCall,
 				result: preparation.result,
 				isError: preparation.isError,
+				notExecuted: preparation.notExecuted,
 			};
 		} else {
-			const executed = await executePreparedToolCall(preparation, signal, emit);
+			const executed = await executePreparedToolCall(preparation, assistantMessage, config, signal, emit);
 			finalized = await finalizeExecutedToolCall(
 				currentContext,
 				assistantMessage,
@@ -635,6 +641,7 @@ async function executeToolCallsParallel(
 			toolCallId: toolCall.id,
 			toolName: toolCall.name,
 			args: toolCall.arguments,
+			at: Date.now(),
 		});
 
 		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
@@ -643,6 +650,7 @@ async function executeToolCallsParallel(
 				toolCall,
 				result: preparation.result,
 				isError: preparation.isError,
+				notExecuted: preparation.notExecuted,
 			} satisfies FinalizedToolCallOutcome;
 			await emitToolExecutionEnd(finalized, config, signal, emit);
 			finalizedCalls.push(finalized);
@@ -653,7 +661,7 @@ async function executeToolCallsParallel(
 		}
 
 		finalizedCalls.push(async () => {
-			const executed = await executePreparedToolCall(preparation, signal, emit);
+			const executed = await executePreparedToolCall(preparation, assistantMessage, config, signal, emit);
 			const finalized = await finalizeExecutedToolCall(
 				currentContext,
 				assistantMessage,
@@ -698,6 +706,7 @@ type ImmediateToolCallOutcome = {
 	kind: "immediate";
 	result: AgentToolResult<any>;
 	isError: boolean;
+	notExecuted: ToolNotExecuted;
 };
 
 type ExecutedToolCallOutcome = {
@@ -709,6 +718,8 @@ type FinalizedToolCallOutcome = {
 	toolCall: AgentToolCall;
 	result: AgentToolResult<any>;
 	isError: boolean;
+	/** Set when the call never executed. */
+	notExecuted?: ToolNotExecuted;
 };
 
 type FinalizedToolCallEntry = FinalizedToolCallOutcome | (() => Promise<FinalizedToolCallOutcome>);
@@ -743,18 +754,21 @@ async function prepareToolCall(
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
 	const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
 	if (!tool) {
-		return {
-			kind: "immediate",
-			result: createErrorToolResult(`Tool ${toolCall.name} not found`),
-			isError: true,
-		};
+		return notExecutedOutcome(`Tool ${toolCall.name} not found`, { kind: "not_run", reason: "tool_not_found" });
 	}
 
+	let validatedArgs: unknown;
 	try {
 		const preparedToolCall = prepareToolCallArguments(tool, toolCall);
-		const validatedArgs = validateToolArguments(tool, preparedToolCall);
-		if (config.beforeToolCall) {
-			const beforeResult = await config.beforeToolCall(
+		validatedArgs = validateToolArguments(tool, preparedToolCall);
+	} catch (error) {
+		return notExecutedOutcome(errorText(error), { kind: "not_run", reason: "invalid_arguments" });
+	}
+
+	if (config.beforeToolCall) {
+		let beforeResult: Awaited<ReturnType<NonNullable<AgentLoopConfig["beforeToolCall"]>>>;
+		try {
+			beforeResult = await config.beforeToolCall(
 				{
 					assistantMessage,
 					toolCall,
@@ -763,44 +777,54 @@ async function prepareToolCall(
 				},
 				signal,
 			);
-			if (signal?.aborted) {
-				return {
-					kind: "immediate",
-					result: createErrorToolResult("Operation aborted"),
-					isError: true,
-				};
-			}
-			if (beforeResult?.block) {
-				const result = createErrorToolResult(beforeResult.reason || "Tool execution was blocked");
-				if (beforeResult.terminate === true) {
-					result.terminate = true;
-				}
-				return {
-					kind: "immediate",
-					result,
-					isError: true,
-				};
-			}
+		} catch (error) {
+			// A hook that fails cannot vouch for the call, so the call is blocked.
+			return notExecutedOutcome(errorText(error), { kind: "blocked", by: "hook_error" });
 		}
 		if (signal?.aborted) {
-			return {
-				kind: "immediate",
-				result: createErrorToolResult("Operation aborted"),
-				isError: true,
-			};
+			return notExecutedOutcome("Operation aborted", { kind: "not_run", reason: "aborted_before_start" });
 		}
-		return {
-			kind: "prepared",
-			toolCall,
-			tool,
-			args: validatedArgs,
-		};
-	} catch (error) {
-		return {
-			kind: "immediate",
-			result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
-			isError: true,
-		};
+		if (beforeResult?.block) {
+			const outcome = notExecutedOutcome(beforeResult.reason || "Tool execution was blocked", {
+				kind: "blocked",
+				...(beforeResult.blockedBy ? { by: beforeResult.blockedBy } : {}),
+			});
+			if (beforeResult.terminate === true) {
+				outcome.result.terminate = true;
+			}
+			return outcome;
+		}
+	}
+	if (signal?.aborted) {
+		return notExecutedOutcome("Operation aborted", { kind: "not_run", reason: "aborted_before_start" });
+	}
+	return {
+		kind: "prepared",
+		toolCall,
+		tool,
+		args: validatedArgs,
+	};
+}
+
+function notExecutedOutcome(message: string, notExecuted: ToolNotExecuted): ImmediateToolCallOutcome {
+	return { kind: "immediate", result: createErrorToolResult(message), isError: true, notExecuted };
+}
+
+function errorText(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/** Tell the host a tool is starting. Observability only: a failing callback must not stop the tool. */
+function notifyToolExecutionStarted(
+	config: AgentLoopConfig,
+	assistantMessage: AssistantMessage,
+	toolCall: AgentToolCall,
+): void {
+	if (!config.onToolExecutionStarted) return;
+	try {
+		config.onToolExecutionStarted({ assistantMessage, toolCall, at: Date.now() });
+	} catch {
+		// The callback records timing; ignoring its failure leaves execution unchanged.
 	}
 }
 
@@ -820,6 +844,8 @@ async function prepareToolCall(
  */
 async function executePreparedToolCall(
 	prepared: PreparedToolCall,
+	assistantMessage: AssistantMessage,
+	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallOutcome> {
@@ -873,6 +899,7 @@ async function executePreparedToolCall(
 	};
 
 	try {
+		notifyToolExecutionStarted(config, assistantMessage, prepared.toolCall);
 		const result = await prepared.tool.execute(prepared.toolCall.id, prepared.args as never, signal, forward);
 		completedResult = result;
 		// Stop accepting frames, then let the last one land before returning the
@@ -1011,6 +1038,9 @@ async function emitToolExecutionEnd(
 		toolName: finalized.toolCall.name,
 		result: finalized.result,
 		isError: finalized.isError,
+		at: Date.now(),
+		executed: finalized.notExecuted === undefined,
+		...(finalized.notExecuted ? { notExecuted: finalized.notExecuted } : {}),
 	});
 }
 
