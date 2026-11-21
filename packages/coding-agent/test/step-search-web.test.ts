@@ -287,6 +287,32 @@ describe("Step search_web tool", () => {
 		).rejects.toThrow("transport unavailable");
 	});
 
+	it("keeps the paid endpoint's own numbering and shows entries without a URL", async () => {
+		const tool = createSearchWebTool({ apiKey: "search-key", env: {}, provider: "step" }, async () => ({
+			structuredContent: {
+				results: [
+					// The provider skips 2: the reported numbering must survive.
+					{ position: 1, title: "First", url: "https://example.com/1" },
+					{ position: 3, title: "Third", url: "https://example.com/3" },
+					{ position: 4, title: "No link" },
+					{ title: "Unnumbered" },
+				],
+			},
+		}));
+
+		const result = await tool.execute("call-pos", { query: "q" }, undefined, undefined, undefined as never);
+		const body = text(result);
+
+		expect(body).toContain("1. [First](https://example.com/1)");
+		expect(body).toContain("3. [Third](https://example.com/3)");
+		// An entry without a URL is still reported, not silently dropped.
+		expect(body).toContain("4. No link");
+		// A missing position falls back to the array index, matching the old renderer.
+		expect(body).toContain("4. Unnumbered");
+		expect(result.details.urls).toEqual(["https://example.com/1", "https://example.com/3"]);
+		expect(result.details.resultCount).toBe(4);
+	});
+
 	it("searches with a free provider when no Step credential exists", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-search-free-"));
 		const urls: string[] = [];

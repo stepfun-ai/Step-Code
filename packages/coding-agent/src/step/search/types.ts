@@ -1,8 +1,17 @@
 /** One normalized search result, independent of which provider produced it. */
 export interface SearchHit {
-	url: string;
+	/**
+	 * Result URL. Optional because the paid endpoint can return an entry without
+	 * one; those entries are still shown, under their position and title.
+	 */
+	url?: string;
 	title?: string;
 	snippet?: string;
+	/**
+	 * Provider-assigned position, when it supplies one. Rendering falls back to
+	 * the array index so a provider ordering gap is not renumbered.
+	 */
+	position?: number;
 	/** Publication time in milliseconds since the Unix epoch, when the provider reports one. */
 	publishedAtMs?: number;
 }

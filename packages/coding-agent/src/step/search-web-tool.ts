@@ -82,8 +82,8 @@ export interface SearchWebToolOptions {
 	/** Injected environment, kept public so credential resolution is testable. */
 	env?: Record<string, string | undefined>;
 	/**
-	 * Backend selection. Defaults to `[search] provider` in config.toml, then
-	 * `STEPCODE_SEARCH_PROVIDER`, then `auto`.
+	 * Backend selection. `STEPCODE_SEARCH_PROVIDER` takes precedence over
+	 * `[search] provider` in config.toml; when neither is set, `auto` is used.
 	 */
 	provider?: SearchChainMode;
 	/** Injected randomness for the free-provider order; kept testable. */
@@ -344,22 +344,24 @@ function readStepFunOutcome(result: SearchWebMcpResult): SearchOutcome {
 		return text ? { hits: [], text } : { hits: [] };
 	}
 	const hits: SearchHit[] = [];
-	for (const item of items) {
+	items.forEach((item, index) => {
+		if (hits.length >= SEARCH_WEB_RESULT_COUNT) return;
 		const record = isRecord(item) ? item : {};
 		const url = normalizeOptionalText(record.url);
-		if (!url) continue;
 		const title = normalizeOptionalText(record.title);
 		const snippet = shortenText(
 			normalizeOptionalText(record.snippet) ?? normalizeOptionalText(record.content) ?? "",
 			MAX_SNIPPET_CHARS,
 		);
 		hits.push({
-			url,
+			...(url ? { url } : {}),
 			...(title ? { title } : {}),
 			...(snippet ? { snippet } : {}),
+			// The provider's own numbering wins when present; otherwise the array
+			// order is the position, exactly as the previous renderer did.
+			position: typeof record.position === "number" ? record.position : index + 1,
 		});
-		if (hits.length >= SEARCH_WEB_RESULT_COUNT) break;
-	}
+	});
 	return { hits };
 }
 
@@ -387,7 +389,12 @@ function renderSearchResults(query: string, result: SearchChainResult): AgentToo
 
 	const content = result.outcome.hits
 		.map((hit, index) => {
-			const heading = `${index + 1}. [${hit.title ?? hit.url}](${hit.url})`;
+			// Same shape as before: a linked heading when a URL exists, otherwise
+			// the position and title alone, so an entry without a URL is still shown.
+			const position = hit.position ?? index + 1;
+			const heading = hit.url
+				? `${position}. [${hit.title ?? hit.url}](${hit.url})`
+				: `${position}. ${hit.title ?? "(untitled)"}`;
 			return hit.snippet ? `${heading}\n   ${shortenText(hit.snippet, MAX_SNIPPET_CHARS)}` : heading;
 		})
 		.join("\n\n");
