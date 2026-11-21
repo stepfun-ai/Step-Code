@@ -17,10 +17,11 @@
  *   too narrow for the sprite.
  *
  * Why the bird is terminal cells and not a Kitty/iTerm2 inline image:
- * `scrollback-guard.ts` clips full redraws to the viewport, and an inline image
- * makes pi-tui reserve extra rows with cursor moves so its output no longer maps
- * one row per `\r\n`. Block glyphs are ordinary text cells and cost
- * the differential renderer nothing.
+ * `TuiMainScreen` keeps scrollback when a change above the viewport leaves the
+ * visible rows unchanged, and an inline image makes
+ * pi-tui reserve extra rows with cursor moves so its output no longer maps one
+ * row per `\r\n`. Block glyphs are ordinary text cells and cost the differential
+ * renderer nothing.
  *
  * The CP437 mark's own design constraints (four glyphs, no SGR, why the axes
  * step differently) are documented inline at `renderStepMark` below — they are

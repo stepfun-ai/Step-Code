@@ -13,6 +13,13 @@ import { normalizeTerminalOutput, visibleWidth } from "./utils.ts";
 
 const KITTY_SEQUENCE_PREFIX = "\x1b_G";
 const MAX_RENDER_WRITE_CHARS = 1024 * 1024;
+/**
+ * How many rows of the visible window a frame may rewrite in place when a length
+ * change happened entirely above it. Rows that still line up at the same offsets mean
+ * nothing slid off the screen; a slide misaligns almost every row, so a small budget
+ * separates an in-place edit (a status line turning into "Done") from a moved window.
+ */
+const IN_PLACE_WINDOW_EDIT_LIMIT = 3;
 
 /**
  * Streams terminal output in 1 MiB chunks so a full render never forms one string large enough to exceed V8's limit.
@@ -400,6 +407,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 					i += imageReservedRows - 1;
 					continue;
 				}
+				this.assertLineFitsWidth(line, i, newLines, width);
 				output.append(line);
 			}
 			output.append("\x1b[?2026l"); // End synchronized output
@@ -414,6 +422,37 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			}
 			const bufferLength = Math.max(height, newLines.length);
 			this.previousViewportTop = Math.max(0, bufferLength - height);
+			this.positionHardwareCursor(cursorPos, newLines.length);
+			this.previousLines = newLines;
+			if (kittyScanEnabled) this.previousKittyImageIds = this.collectKittyImageIds(newLines);
+			this.previousWidth = width;
+			this.previousHeight = height;
+		};
+
+		// Repair the rows a frame rewrote inside the visible window. A length change above
+		// the window moved it, but nothing slid off the screen, so each changed row is
+		// rewritten where it stands with an absolute cursor move - no scroll, no clearing
+		// of scrollback - and the reader keeps their place.
+		const repaintVisibleRows = (nextViewportTop: number, rows: number[]): void => {
+			for (const row of rows) {
+				const index = nextViewportTop + row;
+				this.assertLineFitsWidth(newLines[index] ?? "", index, newLines, width);
+			}
+			const output = new BoundedTerminalWriter((data) => this.terminal.write(data));
+			output.append("\x1b[?2026h"); // Begin synchronized output
+			let lastRow = 0;
+			for (const row of rows) {
+				output.append(`\x1b[${row + 1};1H`);
+				output.append(`\x1b[2K${newLines[nextViewportTop + row] ?? ""}`);
+				lastRow = row;
+			}
+			output.append("\x1b[?2026l"); // End synchronized output
+			output.flush();
+			this.cursorRow = Math.max(0, newLines.length - 1);
+			// The cursor stayed on the screen row of the last rewritten line.
+			this.hardwareCursorRow = nextViewportTop + lastRow;
+			this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+			this.previousViewportTop = nextViewportTop;
 			this.positionHardwareCursor(cursorPos, newLines.length);
 			this.previousLines = newLines;
 			if (kittyScanEnabled) this.previousKittyImageIds = this.collectKittyImageIds(newLines);
@@ -542,28 +581,69 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		// destroy and rebuild the user's scrollback several times a second. When the
 		// document kept its length no row moved, so the visible window still maps to the
 		// same terminal rows: keep the stale scrollback and repaint only what is visible.
-		// Any length change can shift rows under the viewport, so that still needs the
-		// full redraw.
+		// A length change moves that window, so the branches below slide it without
+		// clearing scrollback whenever the screen itself does not have to change.
 		if (firstChanged < prevViewportTop) {
-			const documentLengthChanged = newLines.length !== this.previousLines.length;
 			// A kitty image block reaching across the clamp point cannot be repainted from
 			// its middle without corrupting it.
-			const straddlingImage = kittyScanEnabled && this.hasImageLineInRange(firstChanged, prevViewportTop, newLines);
-			if (documentLengthChanged || straddlingImage) {
+			if (kittyScanEnabled && this.hasImageLineInRange(firstChanged, prevViewportTop, newLines)) {
 				fullRender(true);
 				return;
 			}
-			if (lastChanged < prevViewportTop) {
-				// Nothing on screen differs; only bookkeeping has to catch up.
-				this.positionHardwareCursor(cursorPos, newLines.length);
-				this.previousLines = newLines;
-				if (kittyScanEnabled) this.previousKittyImageIds = this.collectKittyImageIds(newLines);
-				this.previousWidth = width;
-				this.previousHeight = height;
-				this.previousViewportTop = prevViewportTop;
+			if (newLines.length === this.previousLines.length) {
+				if (lastChanged < prevViewportTop) {
+					// Nothing on screen differs; only bookkeeping has to catch up.
+					this.positionHardwareCursor(cursorPos, newLines.length);
+					this.previousLines = newLines;
+					if (kittyScanEnabled) this.previousKittyImageIds = this.collectKittyImageIds(newLines);
+					this.previousWidth = width;
+					this.previousHeight = height;
+					this.previousViewportTop = prevViewportTop;
+					return;
+				}
+				firstChanged = prevViewportTop;
+			} else {
+				// The document changed length, so the visible window maps to different rows.
+				// A change above the window slides it over the document without moving what is
+				// on screen: the reader keeps their place and scrollback survives. When the slide
+				// also rewrote a few visible rows, only those rows have to be repaired.
+				const bufferLength = Math.max(height, newLines.length);
+				const nextViewportTop = Math.max(0, bufferLength - height);
+				const shift = nextViewportTop - prevViewportTop;
+				if (shift !== 0) {
+					if (this.sameVisibleWindow(prevViewportTop, nextViewportTop, newLines, height)) {
+						// The visible rows kept their content, so the hardware cursor keeps its row
+						// on screen while its document line moves by `shift`.
+						this.cursorRow = Math.max(0, newLines.length - 1);
+						this.hardwareCursorRow = Math.max(0, hardwareCursorRow + shift);
+						this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+						this.previousViewportTop = nextViewportTop;
+						this.positionHardwareCursor(cursorPos, newLines.length);
+						this.previousLines = newLines;
+						if (kittyScanEnabled) this.previousKittyImageIds = this.collectKittyImageIds(newLines);
+						this.previousWidth = width;
+						this.previousHeight = height;
+						return;
+					}
+					const editedRows = this.inPlaceWindowEdits(prevViewportTop, nextViewportTop, newLines, height);
+					const editedImage =
+						kittyScanEnabled &&
+						editedRows !== null &&
+						editedRows.some(
+							(row) =>
+								isImageLine(newLines[nextViewportTop + row] ?? "") ||
+								isImageLine(this.previousLines[prevViewportTop + row] ?? ""),
+						);
+					if (editedRows !== null && !editedImage) {
+						repaintVisibleRows(nextViewportTop, editedRows);
+						return;
+					}
+				}
+				// Rows left the screen or the window moved as a whole: only a replay can put
+				// them into scrollback in the right order.
+				fullRender(true);
 				return;
 			}
-			firstChanged = prevViewportTop;
 		}
 
 		// Render from first changed line to end
@@ -623,34 +703,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			}
 
 			output.append("\x1b[2K"); // Clear current line
-			if (!isImage && visibleWidth(line) > width) {
-				// Log all lines to crash file for debugging
-				const crashLogPath = path.join(this.logDirectory, "tui-crash.log");
-				const crashData = [
-					`Crash at ${new Date().toISOString()}`,
-					`Terminal width: ${width}`,
-					`Line ${i} visible width: ${visibleWidth(line)}`,
-					"",
-					"=== All rendered lines ===",
-					...newLines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${l}`),
-					"",
-				].join("\n");
-				fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
-				fs.writeFileSync(crashLogPath, crashData);
-
-				// Clean up terminal state before throwing
-				this.stop();
-
-				const errorMsg = [
-					`Rendered line ${i} exceeds terminal width (${visibleWidth(line)} > ${width}).`,
-					"",
-					"This is likely caused by a custom TUI component not truncating its output.",
-					"Use visibleWidth() to measure and truncateToWidth() to truncate lines.",
-					"",
-					`Debug log written to: ${crashLogPath}`,
-				].join("\n");
-				throw new Error(errorMsg);
-			}
+			this.assertLineFitsWidth(line, i, newLines, width);
 			output.append(line);
 		}
 
@@ -693,6 +746,98 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		if (kittyScanEnabled) this.previousKittyImageIds = this.collectKittyImageIds(newLines);
 		this.previousWidth = width;
 		this.previousHeight = height;
+	}
+
+	/**
+	 * Rows of the visible window that a frame changed in place. A length change above the
+	 * window shifts the window over the document but leaves the rows below it aligned:
+	 * only the rows the frame edited differ. A slide misaligns nearly every row, so it
+	 * exceeds the budget and is refused, which sends the caller back to a full replay.
+	 * @param previousTop Window offset the previous frame was written at
+	 * @param nextTop Window offset the new document is viewed at
+	 * @param newLines Lines rendered for this frame
+	 * @param height Terminal rows
+	 * @returns Relative rows that differ, or null when more than
+	 *   {@link IN_PLACE_WINDOW_EDIT_LIMIT} rows differ
+	 */
+	private inPlaceWindowEdits(
+		previousTop: number,
+		nextTop: number,
+		newLines: string[],
+		height: number,
+	): number[] | null {
+		const edited: number[] = [];
+		for (let row = 0; row < height; row++) {
+			const before = previousTop + row < this.previousLines.length ? this.previousLines[previousTop + row] : "";
+			const after = nextTop + row < newLines.length ? newLines[nextTop + row] : "";
+			if (before === after) continue;
+			// A different first row is how a window that slid by a row or two looks, and the row
+			// that left the screen is already gone: rewriting in place would erase it from the
+			// terminal as well. Only edits below the top row are safe to repair without a replay.
+			if (row === 0) return null;
+			edited.push(row);
+			if (edited.length > IN_PLACE_WINDOW_EDIT_LIMIT) return null;
+		}
+		return edited;
+	}
+
+	/**
+	 * Whether the window at `nextTop` shows the same rows as the window at
+	 * `previousTop`. A length change above the viewport slides the window over the
+	 * document without altering what is on screen, which is what lets the frame skip
+	 * rewriting it entirely.
+	 * @param previousTop Window offset the previous frame was written at
+	 * @param nextTop Window offset the new document is viewed at
+	 * @param newLines Lines rendered for this frame
+	 * @param height Terminal rows
+	 */
+	private sameVisibleWindow(previousTop: number, nextTop: number, newLines: string[], height: number): boolean {
+		for (let row = 0; row < height; row++) {
+			const before = previousTop + row < this.previousLines.length ? this.previousLines[previousTop + row] : "";
+			const after = nextTop + row < newLines.length ? newLines[nextTop + row] : "";
+			if (before !== after) return false;
+		}
+		return true;
+	}
+
+	/**
+	 * Refuse a line the terminal would wrap. A wrap changes the row count under the
+	 * renderer's feet, so it fails loudly with a crash log instead of corrupting the
+	 * frame; the writers call this before emitting the line.
+	 * @param line Rendered line, possibly carrying escape sequences
+	 * @param index Document index of the line, for diagnostics
+	 * @param lines Every rendered line of the frame, dumped to the crash log
+	 * @param width Terminal columns
+	 */
+	private assertLineFitsWidth(line: string, index: number, lines: string[], width: number): void {
+		if (isImageLine(line) || visibleWidth(line) <= width) return;
+
+		// Log all lines to crash file for debugging
+		const crashLogPath = path.join(this.logDirectory, "tui-crash.log");
+		const crashData = [
+			`Crash at ${new Date().toISOString()}`,
+			`Terminal width: ${width}`,
+			`Line ${index} visible width: ${visibleWidth(line)}`,
+			"",
+			"=== All rendered lines ===",
+			...lines.map((rendered, renderedIndex) => `[${renderedIndex}] (w=${visibleWidth(rendered)}) ${rendered}`),
+			"",
+		].join("\n");
+		fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
+		fs.writeFileSync(crashLogPath, crashData);
+
+		// Clean up terminal state before throwing
+		this.stop();
+
+		const errorMsg = [
+			`Rendered line ${index} exceeds terminal width (${visibleWidth(line)} > ${width}).`,
+			"",
+			"This is likely caused by a custom TUI component not truncating its output.",
+			"Use visibleWidth() to measure and truncateToWidth() to truncate lines.",
+			"",
+			`Debug log written to: ${crashLogPath}`,
+		].join("\n");
+		throw new Error(errorMsg);
 	}
 
 	/**
