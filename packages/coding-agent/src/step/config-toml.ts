@@ -20,6 +20,10 @@ export interface StepMcpServerConfig {
 	tool_timeout_sec?: number;
 	enabled_tools?: string[];
 	disabled_tools?: string[];
+	/** How this server's tools reach the model. Defaults to `deferred`: loaded by `find_tools`. */
+	exposure?: "direct" | "deferred" | "hidden";
+	/** One-line summary shown in the system prompt when the tools are deferred. */
+	description?: string;
 	oauth?: { client_id?: string; client_secret?: string; scopes?: string[]; callback_port?: number };
 }
 

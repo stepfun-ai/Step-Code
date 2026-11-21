@@ -21,6 +21,7 @@ import {
 	discoverStepMcpServers,
 	expandHeaderTemplate,
 	getStepMcpStatuses,
+	renderMcpServersSection,
 	resolveStepMcpServer,
 } from "./mcp.ts";
 
@@ -694,4 +695,70 @@ test("shutdown suppresses late warnings from manifest preinstallation", async ()
 	release({ installed: [], warnings: ["late manifest warning"] });
 	await shutdown;
 	expect(harness.notify).not.toHaveBeenCalled();
+});
+
+test("publishes server tools as deferred and names the server in the prompt", async () => {
+	const server = await slowServer(2);
+	config.value = { mcp_servers: { slow: { url: server.url, description: "Searches tickets" } } };
+	const harness = await setup("tui");
+	await harness.start();
+	server.release();
+	await vi.waitFor(() => expect(harness.extension.tools.size).toBe(2));
+	const published = [...harness.extension.tools.values()].map((tool) => tool.definition.exposure);
+	expect(published).toEqual(["deferred", "deferred"]);
+
+	const prompt = harness.extension.handlers.get("before_agent_start")![0]!(
+		{ type: "before_agent_start", prompt: "hi", systemPrompt: "BASE", systemPromptOptions: {} },
+		{ cwd: process.cwd(), mode: "tui", isProjectTrusted: () => true, ui: { notify: harness.notify } },
+	) as { systemPrompt?: string } | undefined;
+
+	expect(prompt?.systemPrompt).toContain("BASE\n\n# MCP servers");
+	expect(prompt?.systemPrompt).toContain("- slow: Searches tickets (2 tools)");
+});
+
+test("honors a direct or hidden server exposure", async () => {
+	const direct = await slowServer(1);
+	const hidden = await slowServer(1);
+	config.value = {
+		mcp_servers: {
+			direct: { url: direct.url, exposure: "direct" },
+			hidden: { url: hidden.url, exposure: "hidden" },
+		},
+	};
+	const harness = await setup("tui");
+	await harness.start();
+	direct.release();
+	hidden.release();
+	await vi.waitFor(() => expect(harness.extension.tools.size).toBe(2));
+	expect(harness.extension.tools.get("direct__tool_0")?.definition.exposure).toBe("direct");
+	expect(harness.extension.tools.get("hidden__tool_0")?.definition.exposure).toBe("hidden");
+
+	// Neither server belongs in the deferred section.
+	const prompt = harness.extension.handlers.get("before_agent_start")![0]!(
+		{ type: "before_agent_start", prompt: "hi", systemPrompt: "BASE", systemPromptOptions: {} },
+		{ cwd: process.cwd(), mode: "tui", isProjectTrusted: () => true, ui: { notify: harness.notify } },
+	) as { systemPrompt?: string } | undefined;
+	expect(prompt?.systemPrompt).toBeUndefined();
+});
+
+test("renderMcpServersSection lists only deferred servers with tools", () => {
+	expect(renderMcpServersSection([])).toBeUndefined();
+	expect(
+		renderMcpServersSection([
+			{ name: "empty", exposure: "deferred", tools: [] },
+			{ name: "direct", exposure: "direct", tools: [{ name: "a" } as never] },
+		]),
+	).toBeUndefined();
+	const section = renderMcpServersSection([
+		{ name: "b", exposure: "deferred", description: "Second\nignored line", tools: [{ name: "a" } as never] },
+		{ name: "a", exposure: "deferred", tools: [{ name: "x" } as never, { name: "y" } as never] },
+	]);
+	expect(section).toBe(
+		[
+			"# MCP servers",
+			"These servers are connected, but their tools are not declared. Search for one with `find_tools` before telling the user it is unavailable.",
+			"- a: (2 tools)",
+			"- b: Second (1 tool)",
+		].join("\n"),
+	);
 });
