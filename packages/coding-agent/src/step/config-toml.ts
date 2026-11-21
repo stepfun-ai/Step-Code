@@ -23,8 +23,15 @@ export interface StepMcpServerConfig {
 	oauth?: { client_id?: string; client_secret?: string; scopes?: string[]; callback_port?: number };
 }
 
+/** Search backend selection; see `search-web-tool.ts` for the resolution order. */
+export interface StepSearchConfig {
+	/** `auto` walks the ordered candidate chain; a provider id pins one backend. */
+	provider?: string;
+}
+
 export interface StepConfigDocument {
 	mcp_servers?: Record<string, StepMcpServerConfig>;
+	search?: StepSearchConfig;
 	[key: string]: unknown;
 }
 

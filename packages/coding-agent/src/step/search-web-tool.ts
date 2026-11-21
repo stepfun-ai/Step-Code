@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentToolResult } from "@step-harness/agent-core";
 import type { Credential } from "@step-harness/providers";
@@ -5,10 +6,24 @@ import { type Static, Type } from "typebox";
 import { readStoredCredential } from "../core/auth-storage.ts";
 import type { ExtensionContext, ToolDefinition } from "../core/extensions/types.ts";
 import { STEP_PROVIDER_ID } from "../features/step-provider/index.ts";
+import { readStepConfig, resolveStepConfigPath } from "./config-toml.ts";
 import { resolveStepAgentDir } from "./environment.ts";
 import { readStepLoginProfile } from "./login-flow.ts";
 import { invokeRemoteMcpTool, type RemoteMcpToolInvocation, type RemoteMcpToolResult } from "./mcp-client.ts";
 import type { StepLoginProfileId } from "./onboarding.ts";
+import { findAdapter } from "./search/adapters.ts";
+import { classifyFailure } from "./search/errors.ts";
+import { buildSearchChain } from "./search/routing.ts";
+import { runSearchChain, type SearchChainResult } from "./search/scheduler.ts";
+import { callSearchProvider } from "./search/transport.ts";
+import {
+	SEARCH_CHAIN_MODES,
+	type SearchAttempt,
+	type SearchChainMode,
+	type SearchFailure,
+	type SearchHit,
+	type SearchOutcome,
+} from "./search/types.ts";
 
 export { invokeRemoteMcpTool } from "./mcp-client.ts";
 
@@ -48,6 +63,9 @@ const SEARCH_WEB_PROFILE_URLS: Record<StepLoginProfileId, string> = {
 const SEARCH_WEB_RESULT_COUNT = 10;
 const MAX_SNIPPET_CHARS = 400;
 
+/** Environment override for the search backend selection. */
+export const SEARCH_PROVIDER_ENV = "STEPCODE_SEARCH_PROVIDER";
+
 const searchWebSchema = Type.Object({
 	query: Type.String({ description: "Search query text" }),
 });
@@ -63,6 +81,13 @@ export interface SearchWebToolOptions {
 	authPath?: string;
 	/** Injected environment, kept public so credential resolution is testable. */
 	env?: Record<string, string | undefined>;
+	/**
+	 * Backend selection. Defaults to `[search] provider` in config.toml, then
+	 * `STEPCODE_SEARCH_PROVIDER`, then `auto`.
+	 */
+	provider?: SearchChainMode;
+	/** Injected randomness for the free-provider order; kept testable. */
+	random?: () => number;
 }
 
 export type SearchWebInvocation = RemoteMcpToolInvocation & {
@@ -75,6 +100,10 @@ export interface SearchWebDetails {
 	query: string;
 	resultCount: number;
 	urls: string[];
+	/** Backend that produced this answer. */
+	provider?: string;
+	/** True when the answer came from a free provider instead of the paid tier. */
+	degraded?: boolean;
 }
 
 export type SearchWebInvoker = (input: SearchWebInvocation) => Promise<SearchWebMcpResult>;
@@ -140,15 +169,44 @@ export function buildSearchWebDescription(): string {
 	].join("\n\n");
 }
 
-/** Create the Step-facing tool backed by the remote web-search MCP server. */
+/**
+ * Resolve the configured backend.
+ *
+ * Selection is re-read on every call, so a configuration edit applies to the
+ * next search instead of requiring a new session.
+ *
+ * Supported values are `auto`, `off`, `step` and the five free provider ids. Any
+ * other value is treated as `auto`: the setting only ever names a preferred
+ * backend, so an unrecognized name (an older config, a provider that was
+ * removed) degrades to the default chain rather than disabling search.
+ */
+export function resolveSearchChainMode(
+	options: SearchWebToolOptions = {},
+	env: Record<string, string | undefined> = options.env ?? process.env,
+): SearchChainMode {
+	const explicit = normalizeOptionalText(options.provider);
+	const fromEnv = normalizeOptionalText(env[SEARCH_PROVIDER_ENV]);
+	const fromConfig = readConfiguredProvider(env);
+	const requested = explicit ?? fromEnv ?? fromConfig;
+	if (!requested) return "auto";
+	return (SEARCH_CHAIN_MODES as readonly string[]).includes(requested) ? (requested as SearchChainMode) : "auto";
+}
+
+function readConfiguredProvider(env: Record<string, string | undefined>): string | undefined {
+	const path = resolveStepConfigPath(env);
+	if (!existsSync(path)) return undefined;
+	// A missing file contributes no setting; an unreadable or malformed one is a
+	// real configuration error and must not be reported as "no preference".
+	const document = readStepConfig(path);
+	return normalizeOptionalText(document.search?.provider);
+}
+
+/** Create the Step-facing tool backed by the ordered search candidate chain. */
 export function createSearchWebTool(
 	options: SearchWebToolOptions = {},
 	invokeTool: SearchWebInvoker = invokeRemoteMcpTool,
 ): ToolDefinition<typeof searchWebSchema, SearchWebDetails> {
 	const env = options.env ?? process.env;
-	const authPath = resolveSearchWebAuthPath(options, env);
-	const serverUrl = resolveSearchWebServerUrl(options.url, env, readStepLoginProfile(authPath));
-	const apiKey = resolveSearchWebApiKey(options);
 
 	return {
 		name: "search_web",
@@ -161,35 +219,148 @@ export function createSearchWebTool(
 		execute: async (_toolCallId, args: SearchWebInput, signal, _onUpdate, _ctx: ExtensionContext) => {
 			const query = args.query.trim();
 			if (!query) throw new Error("search_web query must not be empty");
-			if (!apiKey) {
+
+			// Backend, credential and endpoint are resolved per call. A login or a
+			// configuration edit that happens during the session must be usable
+			// without restarting it, and a bad value must fail this call rather
+			// than the session that never used search.
+			const mode = resolveSearchChainMode(options, env);
+			const authPath = resolveSearchWebAuthPath(options, env);
+			const apiKey = resolveSearchWebApiKey(options);
+			const stepEndpoint = resolveSearchWebServerUrl(options.url, env, readStepLoginProfile(authPath));
+
+			const chain = buildSearchChain({
+				mode,
+				hasStepCredential: Boolean(apiKey),
+				stepEndpoint,
+				...(options.random ? { random: options.random } : {}),
+			});
+
+			if (chain.requiresCredential) {
+				// Pinned to the paid backend without a credential: a real
+				// configuration error, not a reason to silently use a free provider.
 				throw new Error(
 					"search_web requires a credential; run `/login` or `step login`, pass --api-key, or set STEPCODE_SEARCH_API_KEY",
 				);
 			}
 
-			// The endpoint decides which account the search is billed to, so every
-			// failure names it: a profile/endpoint mismatch is otherwise invisible
-			// until it shows up on a bill. The URL carries no credential.
-			let result: SearchWebMcpResult;
-			try {
-				result = await invokeTool({
-					serverName: SEARCH_WEB_SERVER_NAME,
-					serverUrl,
-					toolName: SEARCH_WEB_TOOL_NAME,
-					arguments: { query, n: SEARCH_WEB_RESULT_COUNT },
-					headers: { Authorization: `Bearer ${apiKey}` },
-					signal,
-				});
-			} catch (error) {
-				throw new Error(`${error instanceof Error ? error.message : String(error)} (endpoint ${serverUrl})`);
-			}
-			if (result.isError) {
-				const detail = result.content || `MCP tool ${SEARCH_WEB_SERVER_NAME}.${SEARCH_WEB_TOOL_NAME} failed`;
-				throw new Error(`${detail} (endpoint ${serverUrl})`);
-			}
+			const result = await runSearchChain({
+				chain,
+				query,
+				...(signal ? { signal } : {}),
+				invoke: (candidate, searchQuery, attemptOptions) => {
+					if (candidate.tier === "stepfun") {
+						return invokeStepFun({
+							invokeTool,
+							apiKey: apiKey ?? "",
+							candidate,
+							query: searchQuery,
+							timeoutMs: attemptOptions.timeoutMs,
+							signal: attemptOptions.signal,
+						});
+					}
+					const adapter = findAdapter(candidate.id);
+					if (!adapter) {
+						return Promise.resolve({
+							ok: false as const,
+							failure: { kind: "unknown" as const, detail: `unknown provider ${candidate.id}` },
+						});
+					}
+					return callSearchProvider({
+						request: adapter.buildRequest(searchQuery),
+						parse: adapter.parse,
+						timeoutMs: attemptOptions.timeoutMs,
+						allowHandshake: candidate.allowHandshake,
+						serverName: candidate.id,
+						...(attemptOptions.signal ? { signal: attemptOptions.signal } : {}),
+					});
+				},
+			});
+
 			return renderSearchResults(query, result);
 		},
 	};
+}
+
+async function invokeStepFun(input: {
+	invokeTool: SearchWebInvoker;
+	apiKey: string;
+	candidate: { endpoint: string; toolName: string };
+	query: string;
+	/** One attempt's slice of the shared budget; without it a hanging endpoint blocks the whole chain. */
+	timeoutMs: number;
+	signal?: AbortSignal;
+}): Promise<SearchAttempt> {
+	const { invokeTool, apiKey, candidate, query, timeoutMs, signal } = input;
+	try {
+		const result = await invokeTool({
+			serverName: SEARCH_WEB_SERVER_NAME,
+			serverUrl: candidate.endpoint,
+			toolName: SEARCH_WEB_TOOL_NAME,
+			arguments: { query, n: SEARCH_WEB_RESULT_COUNT },
+			headers: { Authorization: `Bearer ${apiKey}` },
+			timeoutMs,
+			...(signal ? { signal } : {}),
+		});
+		if (result.isError) {
+			const detail = result.content || `MCP tool ${SEARCH_WEB_SERVER_NAME}.${SEARCH_WEB_TOOL_NAME} failed`;
+			return {
+				ok: false,
+				failure: nameEndpoint(classifyFailure({ text: detail, isError: true }), candidate.endpoint),
+			};
+		}
+		return { ok: true, outcome: readStepFunOutcome(result) };
+	} catch (error) {
+		// The message carries no credential; it is surfaced verbatim so a
+		// profile/endpoint mismatch stays diagnosable, and cancellation is read
+		// from the signal rather than from the message.
+		return {
+			ok: false,
+			failure: nameEndpoint(
+				classifyFailure({
+					text: error instanceof Error ? error.message : String(error),
+					cancelled: signal?.aborted === true,
+				}),
+				candidate.endpoint,
+			),
+		};
+	}
+}
+
+/**
+ * A search failure names the endpoint that produced it: for the paid tier the
+ * endpoint decides which account is billed, so a profile/endpoint mismatch is
+ * otherwise invisible until it shows up on a bill.
+ */
+function nameEndpoint(failure: SearchFailure, endpoint: string): SearchFailure {
+	return { ...failure, detail: `${failure.detail} (endpoint ${endpoint})` };
+}
+
+/** Read the StepFun payload without changing its existing rendering semantics. */
+function readStepFunOutcome(result: SearchWebMcpResult): SearchOutcome {
+	const items = result.structuredContent?.results;
+	if (!Array.isArray(items)) {
+		const text = result.content?.trim();
+		return text ? { hits: [], text } : { hits: [] };
+	}
+	const hits: SearchHit[] = [];
+	for (const item of items) {
+		const record = isRecord(item) ? item : {};
+		const url = normalizeOptionalText(record.url);
+		if (!url) continue;
+		const title = normalizeOptionalText(record.title);
+		const snippet = shortenText(
+			normalizeOptionalText(record.snippet) ?? normalizeOptionalText(record.content) ?? "",
+			MAX_SNIPPET_CHARS,
+		);
+		hits.push({
+			url,
+			...(title ? { title } : {}),
+			...(snippet ? { snippet } : {}),
+		});
+		if (hits.length >= SEARCH_WEB_RESULT_COUNT) break;
+	}
+	return { hits };
 }
 
 function resolveSearchWebAuthPath(options: SearchWebToolOptions, env: Record<string, string | undefined>): string {
@@ -200,48 +371,28 @@ function resolveSearchWebAuthPath(options: SearchWebToolOptions, env: Record<str
 	);
 }
 
-function renderSearchResults(query: string, raw: SearchWebMcpResult): AgentToolResult<SearchWebDetails> {
-	const items = raw.structuredContent?.results;
-	if (!Array.isArray(items)) {
-		const content = raw.content?.trim() || `No search results for "${query}".`;
-		return {
-			content: [{ type: "text", text: content }],
-			details: { query, resultCount: 0, urls: [] },
-		};
+function renderSearchResults(query: string, result: SearchChainResult): AgentToolResult<SearchWebDetails> {
+	const details: SearchWebDetails = {
+		query,
+		resultCount: result.outcome.hits.length,
+		urls: result.outcome.hits.flatMap((hit) => (hit.url ? [hit.url] : [])),
+		provider: result.provider,
+		degraded: result.degraded,
+	};
+
+	if (result.outcome.hits.length === 0) {
+		const text = result.outcome.text?.trim() || `No search results for "${query}".`;
+		return { content: [{ type: "text", text }], details };
 	}
 
-	const results = items.map((item, index) => {
-		const record = isRecord(item) ? item : {};
-		const url = normalizeOptionalText(record.url);
-		const title = normalizeOptionalText(record.title);
-		const snippet = shortenText(
-			normalizeOptionalText(record.snippet) ?? normalizeOptionalText(record.content) ?? "",
-			MAX_SNIPPET_CHARS,
-		);
-		return {
-			position: typeof record.position === "number" ? record.position : index + 1,
-			title,
-			url,
-			snippet,
-		};
-	});
+	const content = result.outcome.hits
+		.map((hit, index) => {
+			const heading = `${index + 1}. [${hit.title ?? hit.url}](${hit.url})`;
+			return hit.snippet ? `${heading}\n   ${shortenText(hit.snippet, MAX_SNIPPET_CHARS)}` : heading;
+		})
+		.join("\n\n");
 
-	const urls = results.flatMap((result) => (result.url ? [result.url] : []));
-	const content = results.length
-		? results
-				.map((result) => {
-					const heading = result.url
-						? `${result.position}. [${result.title ?? result.url}](${result.url})`
-						: `${result.position}. ${result.title ?? "(untitled)"}`;
-					return result.snippet ? `${heading}\n   ${result.snippet}` : heading;
-				})
-				.join("\n\n")
-		: `No search results for "${query}".`;
-
-	return {
-		content: [{ type: "text", text: content }],
-		details: { query, resultCount: results.length, urls },
-	};
+	return { content: [{ type: "text", text: content }], details };
 }
 
 function readCredentialToken(credential: Credential | undefined): string | undefined {

@@ -209,6 +209,30 @@ the prompt; deleting that line asks again. `/theme` changes the theme later, and
 launches that already carry work (an initial prompt, a resumed session) skip the
 prompt entirely.
 
+## Web search backend selection
+
+`search_web` picks its backend from `[search] provider` in `config.toml`, or the
+`STEPCODE_SEARCH_PROVIDER` environment variable, which takes precedence:
+
+```toml
+[search]
+provider = "auto"   # auto | step | exa | firecrawl | parallel | tavily | tinyfish | off
+```
+
+`auto` walks an ordered chain. The Step search endpoint comes first when the
+current login resolves a search credential; otherwise the credential-free
+providers are used directly, without attempting the paid endpoint. A paid-tier
+failure falls through to the free providers. A provider id pins that backend and
+never falls back, and `off` keeps the tool registered but refuses the call.
+Any other value is treated as `auto`, so an older configuration or a removed
+provider never disables search. Selection is read on every call, so an edit
+applies to the next search rather than requiring a new session.
+
+The free providers are called without a credential. They have no configured key
+and do not accept a Step credential, so their free allowance is the ceiling.
+Their order is shuffled per call, which spreads traffic across the per-provider
+allowances rather than always spending the first provider's.
+
 ## MCP startup in the terminal
 
 Interactive Step sessions start MCP discovery and connections in the background.

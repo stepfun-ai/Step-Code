@@ -1,0 +1,45 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "text": "{\"search_id\": \"search_9bbd1740a684d0ea2cefa7a63dc5355c\", \"results\": [{\"url\": \"https://rust-lang.github.io/async-book/08_ecosystem/00_chapter.html\", \"title\": \"The Async Ecosystem - Asynchronous Programming in Rust\", \"publish_date\": null, \"excerpts\": [\"* Auto\\n* Light\\n* Rust\\n* Coal\\n* Navy\\n* Ayu\\n\\nAsynchronous Programming in Rust\\n\\n \\n\\nThe Async Ecosystem\\n\\nRust currently provides only the bare essentials for writing async code. Import…\"]}, {\"url\": \"https://corrode.dev/blog/async\", \"title\": \"The State of Async Rust: Runtimes | corrode Rust Consulting\", \"publish_date\": \"2024-02-21\", \"excerpts\": [\"Through this series, I hope to address two different audiences:\\n* Newcomers to async Rust, seeking to get an overview of the current state of the ecosystem.\\n* Library maintainers a…\"]}, {\"url\": \"https://tokio.rs/\", \"title\": \"Tokio - An asynchronous Rust runtime\", \"publish_date\": null, \"excerpts\": [\"[tokio-logo](tokio.rs/)\\n\\n[Learn](tokio.rs/tokio/tutorial) [API Docs](docs.rs/tokio) [Blog](tokio.rs/blog/2026-10-06-tokioconf-2027-cfp)\\n\\n* * *\\n\\n[](twitter.com/tokio_rs) [](github.c…\"]}], \"warnings\": null, \"metadata\": null, \"session_id\": \"session_9bbd1740a684d0ea2cefa7a63dc5355c\"}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "search_id": "search_9bbd1740a684d0ea2cefa7a63dc5355c",
+      "results": [
+        {
+          "url": "https://rust-lang.github.io/async-book/08_ecosystem/00_chapter.html",
+          "title": "The Async Ecosystem - Asynchronous Programming in Rust",
+          "publish_date": null,
+          "excerpts": [
+            "* Auto\n* Light\n* Rust\n* Coal\n* Navy\n* Ayu\n\nAsynchronous Programming in Rust\n\n \n\nThe Async Ecosystem\n\nRust currently provides only the bare essentials for writing async code. Import…"
+          ]
+        },
+        {
+          "url": "https://corrode.dev/blog/async",
+          "title": "The State of Async Rust: Runtimes | corrode Rust Consulting",
+          "publish_date": "2024-02-21",
+          "excerpts": [
+            "Through this series, I hope to address two different audiences:\n* Newcomers to async Rust, seeking to get an overview of the current state of the ecosystem.\n* Library maintainers a…"
+          ]
+        },
+        {
+          "url": "https://tokio.rs/",
+          "title": "Tokio - An asynchronous Rust runtime",
+          "publish_date": null,
+          "excerpts": [
+            "[tokio-logo](tokio.rs/)\n\n[Learn](tokio.rs/tokio/tutorial) [API Docs](docs.rs/tokio) [Blog](tokio.rs/blog/2026-10-06-tokioconf-2027-cfp)\n\n* * *\n\n[](twitter.com/tokio_rs) [](github.c…"
+          ]
+        }
+      ],
+      "warnings": null,
+      "metadata": null,
+      "session_id": "session_9bbd1740a684d0ea2cefa7a63dc5355c"
+    }
+  }
+}

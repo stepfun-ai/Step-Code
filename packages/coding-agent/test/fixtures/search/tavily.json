@@ -1,0 +1,30 @@
+{
+  "query": "rust async runtime",
+  "follow_up_questions": null,
+  "answer": null,
+  "images": [],
+  "results": [
+    {
+      "url": "https://doc.rust-lang.org/book/ch17-00-async-await.html",
+      "title": "Async and Await - The Rust Programming Language",
+      "content": "Rust's async/await syntax lets you write asynchronous code that looks synchronous.",
+      "score": 0.94,
+      "raw_content": null
+    },
+    {
+      "url": "https://tokio.rs/tokio/tutorial",
+      "title": "Tutorial - Tokio",
+      "content": "Tokio is an asynchronous runtime for Rust: it provides the building blocks needed for writing network applications.",
+      "score": 0.91,
+      "raw_content": null
+    },
+    {
+      "url": "https://rust-lang.github.io/async-book/",
+      "title": "Asynchronous Programming in Rust",
+      "content": "This book serves as high-level documentation for the async ecosystem.",
+      "score": 0.88,
+      "raw_content": null
+    }
+  ],
+  "response_time": 1.42
+}

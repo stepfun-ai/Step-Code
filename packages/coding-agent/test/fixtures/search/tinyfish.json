@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"query\": \"rust async runtime\", \"results\": [{\"position\": 1, \"site_name\": \"rustasync.github.io\", \"snippet\": \"software.\\n- **runtime agnostic:** Runtime comes with minimal OS bindings out of the box, but switching to a different runtime is a matter of changing a single line.\\n- **await anywh…\", \"title\": \"runtime - Rust\", \"url\": \"https://rustasync.github.io/runtime/runtime\"}, {\"position\": 2, \"site_name\": \"docs.rs\", \"snippet\": \"and a reactor.\\n`Runtime<RK>` wraps any [`RuntimeKit`](traits/trait.RuntimeKit.html) and adds higher-level helpers such as domain-name resolution\", \"title\": \"Runtime in async_rs - Rust\", \"url\": \"https://docs.rs/async-rs/latest/async_rs/struct.Runtime.html\"}, {\"position\": 3, \"site_name\": \"docs.rs\", \"snippet\": \"ecosystem.\\n[`Runtime`](struct.Runtime.html) uses an `async-task` based scheduler with per-worker queues, global priority injectors, work stealing, and parking workers.\", \"title\": \"async_runtime - Rust\", \"url\": \"https://docs.rs/async-runtime/latest/async_runtime\"}], \"total_results\": 10, \"page\": 0}"
+      }
+    ]
+  },
+  "id": 1
+}

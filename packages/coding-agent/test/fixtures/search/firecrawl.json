@@ -1,0 +1,44 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"success\": true, \"data\": {\"web\": [{\"url\": \"https://corrode.dev/blog/async/\", \"title\": \"The State of Async Rust: Runtimes\", \"description\": \"## [Why Bother?](https://corrode.dev/blog/async/#why-bother)\\nIn the first article, we will focus on the current state of async Rust runtimes,\\n\\n## [Other Runtimes](https://corrode.d…\", \"position\": 1, \"source\": \"web\"}, {\"url\": \"https://rust-lang.github.io/async-book/08_ecosystem/00_chapter.html\", \"title\": \"The Async Ecosystem - Asynchronous Programming in Rust\", \"description\": \"# Asynchronous Programming in Rust\\nAsync runtimes are libraries used for executing async applications. Runtimes usually bundle together a _reactor_ with one or more _executors_. In…\", \"position\": 2, \"source\": \"web\"}, {\"url\": \"https://users.rust-lang.org/t/can-someone-explain-how-runtimes-for-async-and-await-work-on-an-assembly-level/130413\", \"title\": \"Can someone explain how runtimes for async and await work on an ...\", \"description\": \"Rust's async is a stackless coroutine. when one async function calls another Rust combines them into a bigger coroutine, thus creating an ...\", \"position\": 3, \"source\": \"web\"}]}, \"creditsUsed\": 2, \"agent_hints\": [\"All 3 web results are excerpts only (#1 \\\"https://corrode.dev/blog/async/\\\", #2 \\\"https://rust-lang.github.io/async-book/08_ecosystem/00_chapter.html\\\", #3 \\\"https://users.rust-lang.org…\"]}"
+      }
+    ],
+    "structuredContent": {
+      "success": true,
+      "data": {
+        "web": [
+          {
+            "url": "https://corrode.dev/blog/async/",
+            "title": "The State of Async Rust: Runtimes",
+            "description": "## [Why Bother?](https://corrode.dev/blog/async/#why-bother)\nIn the first article, we will focus on the current state of async Rust runtimes,\n\n## [Other Runtimes](https://corrode.d…",
+            "position": 1,
+            "source": "web"
+          },
+          {
+            "url": "https://rust-lang.github.io/async-book/08_ecosystem/00_chapter.html",
+            "title": "The Async Ecosystem - Asynchronous Programming in Rust",
+            "description": "# Asynchronous Programming in Rust\nAsync runtimes are libraries used for executing async applications. Runtimes usually bundle together a _reactor_ with one or more _executors_. In…",
+            "position": 2,
+            "source": "web"
+          },
+          {
+            "url": "https://users.rust-lang.org/t/can-someone-explain-how-runtimes-for-async-and-await-work-on-an-assembly-level/130413",
+            "title": "Can someone explain how runtimes for async and await work on an ...",
+            "description": "Rust's async is a stackless coroutine. when one async function calls another Rust combines them into a bigger coroutine, thus creating an ...",
+            "position": 3,
+            "source": "web"
+          }
+        ]
+      },
+      "creditsUsed": 2,
+      "agent_hints": [
+        "All 3 web results are excerpts only (#1 \"https://corrode.dev/blog/async/\", #2 \"https://rust-lang.github.io/async-book/08_ecosystem/00_chapter.html\", #3 \"https://users.rust-lang.org…"
+      ]
+    }
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+}
