@@ -78,11 +78,11 @@ Then just talk to StepCode. By default, it gives the model four tools: `read`, `
 
 The shipped build authenticates against the **Step provider** by default. Log in with `/login` (or set `STEP_API_KEY`), then select a Step model via `/model` (or Ctrl+L). Press Enter in the model picker to select the highlighted model and save it as the startup default.
 
-No other provider catalog is bundled. Add OpenAI- or Anthropic-compatible providers yourself via `~/.stepcode/agent/models.json`; configured catalogs refresh automatically, and `step update --models` forces an immediate refresh. For custom APIs or OAuth, use extensions.
+No other provider catalog is bundled. Add OpenAI- or Anthropic-compatible providers yourself via `~/.stepcode/models.json`; configured catalogs refresh automatically, and `step update --models` forces an immediate refresh. For custom APIs or OAuth, use extensions.
 
 StepCode also supports the llama.cpp router server. Configure it with `/login llama.cpp`, manage downloads and loaded models with `/llama`, then select a loaded model with `/model`. See [docs/llama-cpp.md](docs/llama-cpp.md) for setup and usage.
 
-**Custom providers & models:** Add providers via `~/.stepcode/agent/models.json` if they speak a supported API (OpenAI or Anthropic). See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md), or [@step-harness/providers](../providers/README.md) for the underlying protocols.
+**Custom providers & models:** Add providers via `~/.stepcode/models.json` if they speak a supported API (OpenAI or Anthropic). See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md), or [@step-harness/providers](../providers/README.md) for the underlying protocols.
 
 ---
 

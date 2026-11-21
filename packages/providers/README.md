@@ -69,7 +69,7 @@ DeepSeek, ZAI, Qwen, Kimi, OpenRouter, Ant Ling, and OpenCode.
 Configure providers and models at runtime against any OpenAI- or
 Anthropic-compatible endpoint on those protocols:
 
-- Declare custom providers in `~/.stepcode/agent/models.json`.
+- Declare custom providers in `~/.stepcode/models.json`.
 - Fetch a live catalog from a provider's `/v1/models` endpoint (for example the
   Step provider registered by the product).
 - Build a provider from parts with `createProvider()` (see [Custom Providers](#custom-providers)).
@@ -1415,7 +1415,7 @@ Compat is a strict superset of the root entrypoint, so a file can switch its imp
 
 ### Adding a New Provider
 
-> The Step-only build ships no built-in providers; the supported way to add one is [`createProvider()`](#createprovider) / a `~/.stepcode/agent/models.json` entry, no package changes required.
+> The Step-only build ships no built-in providers; the supported way to add one is [`createProvider()`](#createprovider) / a `~/.stepcode/models.json` entry, no package changes required.
 
 Adding a new LLM provider requires changes across multiple files. The layered layout: API implementations live in `src/api/`, provider factories in `src/providers/`, stable generated catalog wrappers live in `src/providers/<id>.models.ts`, and `src/models.generated.ts` registers them. This checklist covers all necessary steps:
 
