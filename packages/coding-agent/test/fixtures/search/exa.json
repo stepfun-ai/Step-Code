@@ -1,0 +1,15 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Title: The Async Ecosystem - Asynchronous Programming in Rust\nURL: https://rust-lang.github.io/async-book/08_ecosystem/00_chapter.html\nPublished: N/A\nAuthor: N/A\nHighlights:\nRust currently provides only the bare essentials for writing async code. Importantly, executors, tasks, reactors, combinators, and low-level I/O futures and traits are not yet provided in the standard library. In the meantime,…",
+        "_meta": {
+          "searchTime": 132.3
+        }
+      }
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+}

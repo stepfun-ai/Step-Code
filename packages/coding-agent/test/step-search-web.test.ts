@@ -1,7 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { resetSearchCooldowns } from "../src/step/search/scheduler.ts";
 import {
 	createSearchWebTool,
 	resolveSearchWebApiKey,
@@ -17,6 +18,12 @@ function text(result: { content: Array<{ type: string; text?: string }> }): stri
 }
 
 describe("Step search_web tool", () => {
+	beforeEach(() => {
+		// Cooldowns are process-wide so a new session does not repeat a call that
+		// already failed; tests need a clean slate per case.
+		resetSearchCooldowns();
+	});
+
 	it("resolves endpoint origins and preserves explicit paths", () => {
 		expect(resolveSearchWebServerUrl("https://search.example.com")).toBe(
 			"https://search.example.com/v1/mcp/web_search/mcp",
@@ -117,28 +124,31 @@ describe("Step search_web tool", () => {
 
 	it("calls the remote tool with a bearer header and compacts results", async () => {
 		const calls: SearchWebInvocation[] = [];
-		const tool = createSearchWebTool({ url: "https://search.example.com", apiKey: "search-key" }, async (input) => {
-			calls.push(input);
-			return {
-				structuredContent: {
-					results: [
-						{
-							position: 1,
-							title: "Example result",
-							url: "https://example.com",
-							snippet: "short snippet",
-							content: "full page content must not reach the model",
-						},
-						{
-							position: 2,
-							title: "Long result",
-							url: "https://example.org",
-							snippet: "x".repeat(450),
-						},
-					],
-				},
-			};
-		});
+		const tool = createSearchWebTool(
+			{ url: "https://search.example.com", apiKey: "search-key", env: {}, provider: "step" },
+			async (input) => {
+				calls.push(input);
+				return {
+					structuredContent: {
+						results: [
+							{
+								position: 1,
+								title: "Example result",
+								url: "https://example.com",
+								snippet: "short snippet",
+								content: "full page content must not reach the model",
+							},
+							{
+								position: 2,
+								title: "Long result",
+								url: "https://example.org",
+								snippet: "x".repeat(450),
+							},
+						],
+					},
+				};
+			},
+		);
 
 		const result = await tool.execute(
 			"call-1",
@@ -164,6 +174,8 @@ describe("Step search_web tool", () => {
 			query: "current information",
 			resultCount: 2,
 			urls: ["https://example.com", "https://example.org"],
+			provider: "stepfun",
+			degraded: false,
 		});
 	});
 
@@ -187,7 +199,7 @@ describe("Step search_web tool", () => {
 					"utf8",
 				);
 				let serverUrl = "";
-				const tool = createSearchWebTool({ env: {}, authPath }, async (input) => {
+				const tool = createSearchWebTool({ env: {}, authPath, provider: "step" }, async (input) => {
 					serverUrl = input.serverUrl;
 					return { structuredContent: { results: [] } };
 				});
@@ -200,27 +212,50 @@ describe("Step search_web tool", () => {
 		}
 	});
 
-	it("passes cancellation to the remote invoker", async () => {
+	it("forwards the caller signal to the remote invoker", async () => {
+		const controller = new AbortController();
+		let receivedSignal: AbortSignal | undefined;
+		const tool = createSearchWebTool({ apiKey: "search-key", env: {}, provider: "step" }, async (input) => {
+			receivedSignal = input.signal;
+			// Abort while the call is in flight; the invoker still sees the caller's
+			// own signal, not a copy.
+			controller.abort();
+			throw new Error("aborted");
+		});
+
+		await expect(
+			tool.execute("call-2", { query: "query" }, controller.signal, undefined, undefined as never),
+		).rejects.toThrow(/cancelled/u);
+		expect(receivedSignal).toBe(controller.signal);
+	});
+
+	it("does not contact a provider when the caller already cancelled", async () => {
 		const controller = new AbortController();
 		controller.abort();
-		let receivedSignal: AbortSignal | undefined;
-		const tool = createSearchWebTool({ apiKey: "search-key" }, async (input) => {
-			receivedSignal = input.signal;
+		let called = false;
+		const tool = createSearchWebTool({ apiKey: "search-key", env: {}, provider: "step" }, async () => {
+			called = true;
 			return { structuredContent: { results: [] } };
 		});
 
-		await tool.execute("call-2", { query: "query" }, controller.signal, undefined, undefined as never);
-		expect(receivedSignal).toBe(controller.signal);
+		await expect(
+			tool.execute("call-2b", { query: "query" }, controller.signal, undefined, undefined as never),
+		).rejects.toThrow(/cancelled/u);
+		// A cancelled call must not spend money or hit a free provider.
+		expect(called).toBe(false);
 	});
 
 	it("fails before making a request when no credential is available", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-search-web-"));
 		try {
 			let called = false;
-			const tool = createSearchWebTool({ env: {}, authPath: join(root, "missing-auth.json") }, async () => {
-				called = true;
-				return { structuredContent: { results: [] } };
-			});
+			const tool = createSearchWebTool(
+				{ env: {}, authPath: join(root, "missing-auth.json"), provider: "step" },
+				async () => {
+					called = true;
+					return { structuredContent: { results: [] } };
+				},
+			);
 
 			await expect(
 				tool.execute("call-3", { query: "query" }, undefined, undefined, undefined as never),
@@ -232,7 +267,7 @@ describe("Step search_web tool", () => {
 	});
 
 	it("turns remote MCP errors into tool failures that name the billed endpoint", async () => {
-		const tool = createSearchWebTool({ apiKey: "search-key" }, async () => ({
+		const tool = createSearchWebTool({ apiKey: "search-key", env: {}, provider: "step" }, async () => ({
 			isError: true,
 			content: "502 Bad Gateway",
 		}));
@@ -243,12 +278,120 @@ describe("Step search_web tool", () => {
 	});
 
 	it("preserves transport failures as diagnostic tool errors", async () => {
-		const tool = createSearchWebTool({ apiKey: "search-key" }, async () => {
+		const tool = createSearchWebTool({ apiKey: "search-key", env: {}, provider: "step" }, async () => {
 			throw new Error("transport unavailable");
 		});
 
 		await expect(
 			tool.execute("call-5", { query: "query" }, undefined, undefined, undefined as never),
 		).rejects.toThrow("transport unavailable");
+	});
+
+	it("keeps the paid endpoint's own numbering and shows entries without a URL", async () => {
+		const tool = createSearchWebTool({ apiKey: "search-key", env: {}, provider: "step" }, async () => ({
+			structuredContent: {
+				results: [
+					// The provider skips 2: the reported numbering must survive.
+					{ position: 1, title: "First", url: "https://example.com/1" },
+					{ position: 3, title: "Third", url: "https://example.com/3" },
+					{ position: 4, title: "No link" },
+					{ title: "Unnumbered" },
+				],
+			},
+		}));
+
+		const result = await tool.execute("call-pos", { query: "q" }, undefined, undefined, undefined as never);
+		const body = text(result);
+
+		expect(body).toContain("1. [First](https://example.com/1)");
+		expect(body).toContain("3. [Third](https://example.com/3)");
+		// An entry without a URL is still reported, not silently dropped.
+		expect(body).toContain("4. No link");
+		// A missing position falls back to the array index, matching the old renderer.
+		expect(body).toContain("4. Unnumbered");
+		expect(result.details.urls).toEqual(["https://example.com/1", "https://example.com/3"]);
+		expect(result.details.resultCount).toBe(4);
+	});
+
+	it("searches with a free provider when no Step credential exists", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-search-free-"));
+		const urls: string[] = [];
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			urls.push(url);
+			return new Response(
+				`event: message\ndata: ${JSON.stringify({
+					jsonrpc: "2.0",
+					id: 1,
+					result: {
+						content: [{ type: "text", text: "Title: Free\nURL: https://free.example/doc\nHighlights:\nsnippet" }],
+					},
+				})}\n\n`,
+				{ status: 200, headers: { "content-type": "text/event-stream" } },
+			);
+		}) as typeof fetch;
+
+		try {
+			let stepCalls = 0;
+			// A random source near 1 leaves the declared order untouched, so the
+			// first free candidate is the Exa-shaped fixture below.
+			const tool = createSearchWebTool(
+				{ env: {}, authPath: join(root, "missing-auth.json"), random: () => 0.99 },
+				async () => {
+					stepCalls += 1;
+					return { structuredContent: { results: [] } };
+				},
+			);
+
+			const result = await tool.execute("call-free", { query: "query" }, undefined, undefined, undefined as never);
+
+			// The paid endpoint is never contacted: no credential means it cannot succeed.
+			expect(stepCalls).toBe(0);
+			expect(urls.length).toBe(1);
+			expect(text(result)).toContain("[Free](https://free.example/doc)");
+			expect(result.details).toMatchObject({ provider: "exa", degraded: true, resultCount: 1 });
+		} finally {
+			globalThis.fetch = originalFetch;
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("falls back to a free provider when the paid tier reports exhausted quota", async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () =>
+			new Response(
+				`event: message\ndata: ${JSON.stringify({
+					jsonrpc: "2.0",
+					id: 1,
+					result: {
+						content: [
+							{ type: "text", text: "Title: Fallback\nURL: https://free.example/fallback\nHighlights:\nx" },
+						],
+					},
+				})}\n\n`,
+				{ status: 200, headers: { "content-type": "text/event-stream" } },
+			)) as typeof fetch;
+
+		try {
+			const tool = createSearchWebTool(
+				{ env: {}, apiKey: "search-key", provider: "auto", random: () => 0.99 },
+				async () => ({ isError: true, content: "You reached your daily Plan search limit" }),
+			);
+
+			const result = await tool.execute(
+				"call-fallback",
+				{ query: "query" },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+
+			expect(text(result)).toContain("https://free.example/fallback");
+			// The answer must say it came from a free provider, not the paid tier.
+			expect(result.details).toMatchObject({ provider: "exa", degraded: true });
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
 	});
 });

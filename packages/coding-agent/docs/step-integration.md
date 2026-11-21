@@ -94,12 +94,15 @@ from it, and `step login status` validates the credential against that profile's
 binary updates and the steppage plugin still use mainland endpoints regardless of
 profile.
 
-The Step tool profile also registers `search_web`, backed by the remote
-`stepsearch.web_search` Streamable HTTP MCP tool. The search credential is
-resolved from an explicit `step --api-key`, then `STEPCODE_SEARCH_API_KEY`,
-then the Step login entry in `auth.json`; it is sent only as a Bearer header.
-Each login profile has its own endpoint, because the endpoint decides which
-account the search is billed to: `step_plan` uses
+The Step tool profile also registers `search_web`, which resolves an ordered
+candidate chain on every call instead of binding one endpoint when the session
+starts.
+
+The paid tier is the remote `stepsearch.web_search` Streamable HTTP MCP tool.
+Its credential is resolved from an explicit `step --api-key`, then
+`STEPCODE_SEARCH_API_KEY`, then the Step login entry in `auth.json`; it is sent
+only as a Bearer header. Each login profile has its own endpoint, because the
+endpoint decides which account the search is billed to: `step_plan` uses
 `https://api.stepfun.com/step_plan/v1/mcp/web_search/mcp` and
 `step_plan_oversea` uses `https://api.stepfun.ai/step_plan/v1/mcp/web_search/mcp`,
 both billed to the Step Plan quota; `platform_cn` uses
@@ -112,13 +115,37 @@ a Step Plan credential is never one of those, since it only comes from `/login`,
 which always records a profile. `STEPCODE_SEARCH_WEB_MCP_URL` overrides this
 profile-based selection; an override that supplies only an origin keeps the path
 of the profile's own endpoint, so redirecting the host cannot move a plan user's
-searches onto the billed platform path. This adapter does not add a separate
-search credential store or `integrations.search` settings surface. The
-`STEP_API_KEY` environment variable is deliberately excluded from that
-chain: StepCode injects it together with `STEP_BASE_URL` to reach its own
-model gateway, and because the search endpoint never follows that base URL,
-reusing the value would authenticate a gateway key against
-`api.stepfun.com` and fail.
+searches onto the billed platform path.
+
+When the credential resolves, the paid endpoint is the first candidate. When it
+does not, the paid endpoint is not attempted at all: the free candidates are
+used directly, so a call that could only fail is never made. A paid-tier failure
+(quota exhausted, rejected credential, unreachable endpoint) advances to the
+free candidates instead of failing the tool, and the answer records which
+backend served it.
+
+The free candidates are Exa, Firecrawl, Tavily, Parallel, and TinyFish, all
+called without a credential: these endpoints do not accept a Step credential and
+none of them is configured with one. They answer a single stateless
+`tools/call`, skipping the handshake and catalog listing the paid endpoint
+performs; a provider that refuses the stateless form is retried once through the
+MCP client. Their order is shuffled per call with a deterministic fallback, so
+traffic is spread across per-provider free allowances instead of always spending
+the first one's. A failed candidate is skipped for a cooldown instead of being
+retried on the next call, the whole walk shares one 25-second budget, and a
+caller cancellation stops it immediately.
+
+Selection comes from `STEPCODE_SEARCH_PROVIDER`, then `[search] provider` in
+`config.toml`, then `auto`. `auto` walks the chain; a provider id pins that one
+backend and never falls back; `off` keeps the tool registered but refuses the
+call. Any other value is treated as `auto`, so an older configuration or a
+removed provider never disables search; selection is read on every call. This
+adapter does not add a separate search credential store or
+`integrations.search` settings surface. The `STEP_API_KEY` environment variable
+is deliberately excluded from that chain: StepCode injects it together with
+`STEP_BASE_URL` to reach its own model gateway, and because the search endpoint
+never follows that base URL, reusing the value would authenticate a gateway key
+against `api.stepfun.com` and fail.
 
 Session storage is also selected through the Step wrapper. The wrapper keeps
 the native `SessionManager` class, JSONL format, and tree operations unchanged,
@@ -457,7 +484,7 @@ service and are not silently faked by this fork.
 | StepCode OAuth login/logout and legacy credential normalization | `features/step-provider`, `step/auth.ts`, `step/models-endpoint-repair.ts` | aligned; endpoint repair is tested |
 | Global/project settings and session paths | Native managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.stepcode` |
 | Step permissions, `/permissions`, `/init` | Step extension/facades over native selectors and hooks | aligned; `/effort` replaces the native `/thinking`, while `/permission` and `/mode` remain absent |
-| Built-in `search_web` | Step tool profile backed by `stepsearch.web_search` over Streamable HTTP MCP | aligned; uses search-specific environment overrides and the Step login credential fallback |
+| Built-in `search_web` | Step tool profile backed by an ordered candidate chain: `stepsearch.web_search` over Streamable HTTP MCP, then credential-free providers | aligned; uses search-specific environment overrides, the Step login credential, and a shared failure budget |
 | Top-level `step feedback` and TUI `/feedback` | `step/feedback/`, `stepcode.ts`, and the Step extension over the current session/UI | aligned; the body and optional session bundle use separate Step collector requests |
 | `/status`, self-memory/skills governance, `/refresh`, `/rewind`, `/copy` full-transcript semantics | Previous gateway/TUI product layer | not yet ported; no misleading alias is registered |
 | `/multi-agent`, `/connect`, `/trace`, gateway/cron | Previous gateway and external channel services | separate product; requires an explicit Step service implementation |
