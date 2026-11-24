@@ -7,6 +7,8 @@
 - Added `retry.provider.streamIdleTimeoutMs` (default 300000): a provider stream that produces no parsed event for that long is cancelled and ends with a transient error, so the existing retry policy resends it. The HTTP idle timeout only sees bytes, and a gateway sending keep-alives could hold a stalled request open for tens of minutes.
 
 ### Changed
+- Changed the default `compaction.triggerRatio` back from 0.85 to 0.9: the default applies to windows of 131K and above (smaller windows keep their response-headroom thresholds), so those models now compact at 90% of the window. Explicit ratios, per-model overrides and `tokenLimit` are unchanged.
+
 
 - Changed the default compression mode to native summary compaction: `compaction.contextProjection` now defaults to `off`, and CLM is opt-in through `contextProjection = "clm-v1"`, `--context-projection clm-v1`, or `/clm on`. Near a full window CLM's maintenance request carried almost the whole context (about 975K tokens at a 1M window) to save about 12%, so prompts stayed large and slow; on a 930K-token session CLM took 47–72s per prompt against 16–19s for native compaction. Existing explicit `clm-v1` and `lightweight-v1` settings are unchanged.
 - Changed automatic CLM to skip a maintenance request that cannot reuse the cached actor prefix once it exceeds `compaction.autoClm.coldMaxPrefillTokens` (default 262144) and to use native compaction instead: near a 1M window such a request recomputed about 975K tokens (around 30s) to save roughly 12%, so CLM was slower than native compaction at the point where speed mattered most. Cached-prefix maintenance is unchanged; `0` removes the bound.
