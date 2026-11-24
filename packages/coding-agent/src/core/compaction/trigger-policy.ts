@@ -15,7 +15,7 @@ import { CONTEXT_SAFETY_TOKENS } from "@step-harness/providers";
 
 export type CompactionTriggerPolicy = "v2" | "legacy";
 
-export const DEFAULT_COMPACTION_TRIGGER_RATIO = 0.85;
+export const DEFAULT_COMPACTION_TRIGGER_RATIO = 0.9;
 export const MIN_COMPACTION_TRIGGER_RATIO = 0.5;
 export const MAX_COMPACTION_TRIGGER_RATIO = 0.95;
 
@@ -159,8 +159,8 @@ function responseHeadroomCeiling(model: CompactionTriggerModel): number {
  * | 16,384 | 8,192 | 50% (floor) |
  * | 32,768 | 20,480 | 62.5% |
  * | 65,536 | 53,248 | 81.25% |
- * | 131,072 | 111,411 | 85% |
- * | 1,000,000 | 850,000 | 85% |
+ * | 131,072 | 117,964 | 90% |
+ * | 1,000,000 | 900,000 | 90% |
  *
  * `tokenLimit` and an explicit legacy reserve can only move it earlier.
  */
