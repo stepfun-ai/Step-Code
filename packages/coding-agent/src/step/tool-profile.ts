@@ -59,6 +59,7 @@ import {
 import type { LsToolOptions } from "../core/tools/ls.ts";
 import { pathExists, resolveReadPathAsync, resolveToCwd } from "../core/tools/path-utils.ts";
 import type { ReadToolOptions } from "../core/tools/read.ts";
+import { Bm25Ranker, searchAndLoad } from "../core/tools/tool-search.ts";
 import type { WriteToolOptions } from "../core/tools/write.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.ts";
 import { armParentDeathGuard, type ParentDeathGuard } from "../utils/parent-death-guard.ts";
@@ -1494,39 +1495,74 @@ function createFindToolsDefinition(
 	return {
 		name: "find_tools",
 		label: "find_tools",
-		description: "Search registered tools by natural-language intent, tool name, description, and parameter names.",
+		description:
+			"Search registered tools by natural-language intent, tool name, description, and parameter names. Tools that are not loaded yet, such as the tools of MCP servers, are loaded by this call and become callable on your next turn.",
 		promptSnippet: "Find a tool by describing the operation you need",
 		parameters: findToolsSchema,
 		execute: async (_toolCallId, args: FindToolsInput, _signal, _onUpdate, ctx) => {
-			const definitions = ctx?.getToolCatalog?.() ?? fallbackDefinitions;
-			const queryTokens = args.query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
 			const limit = Math.max(1, Math.min(20, args.limit ?? 8));
-			const matches = definitions
-				.map((definition) => {
-					const haystack =
-						`${definition.name} ${definition.description} ${JSON.stringify(definition.parameters)}`.toLowerCase();
-					const score = queryTokens.reduce((total, token) => total + (haystack.includes(token) ? 1 : 0), 0);
-					return { definition, score };
-				})
-				.filter((entry) => entry.score > 0)
-				.sort(
-					(left, right) => right.score - left.score || left.definition.name.localeCompare(right.definition.name),
-				)
-				.slice(0, limit);
-			const content = matches.length
-				? matches
-						.map(
-							({ definition, score }, index) =>
-								`${index + 1}. ${definition.name} [score=${score}]\ndescription: ${definition.description}\nparameters: ${JSON.stringify(definition.parameters)}`,
-						)
-						.join("\n\n")
-				: "(no matching tools)";
-			return {
-				content: [{ type: "text", text: content }],
-				details: undefined,
-			};
+			const catalog =
+				ctx?.getActiveTools && ctx.getAllTools && ctx.setActiveTools
+					? {
+							getActiveTools: () => ctx.getActiveTools!(),
+							getAllTools: () => ctx.getAllTools!(),
+							setActiveTools: (names: string[]) => ctx.setActiveTools!(names),
+						}
+					: undefined;
+			if (!catalog)
+				return describeFallbackMatches(args.query, limit, ctx?.getToolCatalog?.() ?? fallbackDefinitions);
+
+			// Load the deferred matches first, then describe everything the query matches, so the
+			// answer covers both the tools this call made available and the ones already loaded.
+			const loaded = searchAndLoad(catalog, args.query, limit);
+			const active = new Set(catalog.getActiveTools());
+			const visible = catalog.getAllTools().filter((tool) => active.has(tool.name));
+			return describeFoundTools(
+				visible.map((tool) => ({
+					name: tool.name,
+					description: tool.description,
+					parameters: tool.parameters,
+				})),
+				args.query,
+				limit,
+				loaded.map((tool) => tool.name),
+			);
 		},
 	};
+}
+
+/** The same ranking and answer text, without a host tool set to activate against. */
+function describeFallbackMatches(
+	query: string,
+	limit: number,
+	definitions: readonly { name: string; description: string; parameters: unknown }[],
+): { content: [{ type: "text"; text: string }]; details: undefined } {
+	return describeFoundTools(definitions, query, limit, []);
+}
+
+/** Answer text: ranked matches with their schema, plus the names this call activated. */
+function describeFoundTools(
+	definitions: readonly { name: string; description: string; parameters: unknown }[],
+	query: string,
+	limit: number,
+	loaded: readonly string[],
+): { content: [{ type: "text"; text: string }]; details: undefined } {
+	const documents = definitions.map((definition) => ({
+		name: definition.name,
+		text: `${definition.description} ${JSON.stringify(definition.parameters)}`,
+	}));
+	const matches = new Bm25Ranker().rank(query, documents, limit);
+	const byName = new Map(definitions.map((definition) => [definition.name, definition]));
+	const lines = matches.length
+		? matches
+				.map((match, index) => {
+					const definition = byName.get(match.name)!;
+					return `${index + 1}. ${definition.name}\ndescription: ${definition.description}\nparameters: ${JSON.stringify(definition.parameters)}`;
+				})
+				.join("\n\n")
+		: "(no matching tools)";
+	const loadedLines = loaded.length ? `\n\nNewly available from your next call: ${loaded.join(", ")}` : "";
+	return { content: [{ type: "text", text: `${lines}${loadedLines}` }], details: undefined };
 }
 
 /**

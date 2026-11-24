@@ -7,7 +7,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { type Tool as McpTool, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolResult } from "@step-harness/agent-core";
-import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
+import type { ExtensionAPI, ExtensionFactory, ToolExposure } from "../core/extensions/types.ts";
 import { theme } from "../theme/theme.ts";
 import { readGlobalStepConfig } from "./config-toml.ts";
 import { createMcpToolCaller, listAllMcpTools } from "./mcp-client.ts";
@@ -42,6 +42,10 @@ interface ConnectedServer {
 	readonly client: Client;
 	readonly transport: StdioClientTransport | StreamableHTTPClientTransport;
 	tools: McpTool[];
+	/** How this server's tools reach the model. */
+	exposure: ToolExposure;
+	/** One-line summary for the system prompt, from the declaration. */
+	description?: string;
 	/** Ends when this connection closes or its session shuts down. */
 	readonly signal: AbortSignal;
 	readonly catalogTimeoutMs: number;
@@ -63,6 +67,14 @@ interface ServerDeclaration {
 	tool_timeout_sec?: number;
 	enabled_tools?: string[];
 	disabled_tools?: string[];
+	/**
+	 * How this server's tools reach the model. Defaults to `deferred`: they stay undeclared until
+	 * `find_tools` loads them. Use `direct` for a small, frequently called server and `hidden` for
+	 * one that must stay unreachable.
+	 */
+	exposure?: ToolExposure;
+	/** One-line summary shown in the system prompt when the tools are deferred. */
+	description?: string;
 	oauth?: {
 		client_id?: string;
 		client_secret?: string;
@@ -268,6 +280,14 @@ export function createStepMcpExtension(): ExtensionFactory {
 			// Print/RPC callers expect the initial tool catalog before submitting
 			// work. Only the interactive TUI detaches startup from session binding.
 			if (ctx.mode !== "tui") await startup;
+		});
+
+		// The deferred tool list is invisible to the model until the prompt names the servers that
+		// hold it. Recomputed per turn so a server that connects later becomes searchable.
+		pi.on("before_agent_start", (event) => {
+			const section = renderMcpServersSection(servers);
+			if (!section) return;
+			return { systemPrompt: `${event.systemPrompt}\n\n${section}` };
 		});
 
 		pi.on("session_shutdown", async () => {
@@ -563,6 +583,10 @@ function normalizeDeclaration(value: Record<string, unknown>): ServerDeclaration
 	for (const key of ["enabled_tools", "disabled_tools"] as const) {
 		if (Array.isArray(value[key])) declaration[key] = value[key].filter(isString);
 	}
+	if (value.exposure === "direct" || value.exposure === "deferred" || value.exposure === "hidden")
+		declaration.exposure = value.exposure;
+	if (typeof value.description === "string" && value.description.trim())
+		declaration.description = value.description.trim();
 	if (isRecord(value.oauth)) {
 		declaration.oauth = {
 			...(typeof value.oauth.client_id === "string" ? { client_id: value.oauth.client_id } : {}),
@@ -634,6 +658,8 @@ export async function connectStepMcpServer(
 			client,
 			transport,
 			tools: selectDeclaredTools(tools, input.declaration),
+			exposure: serverExposure(input.declaration),
+			description: input.declaration.description,
 			signal: lifetime,
 			catalogTimeoutMs: timeout,
 			callTimeoutMs,
@@ -768,6 +794,35 @@ function remoteToolName(server: Pick<ConnectedServer, "name">, remote: McpTool):
 	return `${server.name}${PLUGIN_SERVER_SEPARATOR}${sanitizeName(remote.name)}`;
 }
 
+/** A server's tool exposure: deferred unless its declaration says otherwise. */
+function serverExposure(declaration: ServerDeclaration): ToolExposure {
+	return declaration.exposure ?? "deferred";
+}
+
+/**
+ * The `mcp_servers` system-prompt section: servers whose tools are deferred, with the one-line
+ * summary their declaration carries. Without it the model cannot know they exist, because neither
+ * `find_tools` nor the tool list names them.
+ */
+export function renderMcpServersSection(
+	servers: readonly Pick<ConnectedServer, "name" | "exposure" | "description" | "tools">[],
+): string | undefined {
+	const listed = servers
+		.filter((server) => server.exposure === "deferred" && server.tools.length > 0)
+		.sort((a, b) => a.name.localeCompare(b.name));
+	if (listed.length === 0) return undefined;
+	const lines = listed.map((server) => {
+		const summary = server.description?.split("\n", 1)[0]?.trim();
+		const count = `${server.tools.length} tool${server.tools.length === 1 ? "" : "s"}`;
+		return `- ${server.name}: ${summary ? `${summary} ` : ""}(${count})`;
+	});
+	return [
+		"# MCP servers",
+		`These servers are connected, but their tools are not declared. Search for one with \`find_tools\` before telling the user it is unavailable.`,
+		...lines,
+	].join("\n");
+}
+
 function createRemoteTool(server: ConnectedServer, remote: McpTool) {
 	const name = remoteToolName(server, remote);
 	const call = createMcpToolCaller(server.client, remote);
@@ -778,6 +833,7 @@ function createRemoteTool(server: ConnectedServer, remote: McpTool) {
 		// The provider boundary accepts JSON Schema directly. Reconstructing it
 		// as TypeBox types loses constraints, local references and combinators.
 		parameters: remote.inputSchema,
+		exposure: server.exposure,
 		execute: async (
 			_toolCallId: string,
 			params: unknown,
