@@ -357,9 +357,39 @@ export interface DeferredHandle {
 	data?: JsonValue;
 }
 
+/**
+ * How one skill's instructions entered a user message.
+ *
+ * The message text stays the only thing the model reads: it carries the
+ * rendered instructions exactly as they were injected. `UserMessage.skills`
+ * never repeats that text; each entry points into it. Readers use these spans
+ * instead of re-parsing the `<skill>` wrapper or reading the skill file again,
+ * and because the text is frozen when the message is recorded, earlier turns
+ * keep producing the same bytes on every request.
+ *
+ * Providers never serialize this metadata.
+ */
+export interface SkillInvocation {
+	name: string;
+	/** Absolute path of the skill file the instructions came from. */
+	location: string;
+	/** Inclusive offset of the instruction body in the message's text block. */
+	start: number;
+	/** Exclusive offset of the instruction body in the message's text block. */
+	end: number;
+	/** SHA-256 of the body, so a later change to the skill file stays detectable. */
+	digest: string;
+}
+
 export interface UserMessage {
 	role: "user";
 	content: string | (TextContent | ImageContent)[];
+	/**
+	 * Skills whose instructions this message carries, in injection order.
+	 * Absent for messages recorded before skill instructions were tracked and for
+	 * messages that invoked none.
+	 */
+	skills?: SkillInvocation[];
 	timestamp: number; // Unix timestamp in milliseconds
 }
 

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Skill } from "../core/skills.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
+import { renderLeadingSkillBlocks } from "../utils/skill-block.ts";
 import type { CronJob } from "./step-cron.ts";
 
 /** Schedule-write authorization for one host-admitted execution; never changes the model's tool catalog. */
@@ -40,13 +41,17 @@ export function renderCronExecution(
 	runId: string,
 	skills: readonly Skill[] = [],
 ): string {
-	const blocks = (job.inputs?.skills ?? []).flatMap((name) => {
+	const entries = (job.inputs?.skills ?? []).flatMap((name) => {
 		const skill = skills.find((candidate) => candidate.name === name);
 		if (!skill) return [];
 		try {
-			const body = stripFrontmatter(readFileSync(skill.filePath, "utf8")).trim();
 			return [
-				`<skill name="${xml(skill.name)}" location="${xml(skill.filePath)}" encoding="xml">\nReferences are relative to ${xml(skill.baseDir)}.\n\n${xml(body)}\n</skill>`,
+				{
+					name: skill.name,
+					location: skill.filePath,
+					baseDir: skill.baseDir,
+					body: stripFrontmatter(readFileSync(skill.filePath, "utf8")).trim(),
+				},
 			];
 		} catch {
 			// A skill removed after discovery must not prevent the saved task from being delivered.
@@ -70,7 +75,8 @@ export function renderCronExecution(
 		"</scheduled-task-execution>",
 	].join("\n");
 	// Leading skill blocks use the shared instruction-retention path, including multiple skills.
-	return [...blocks, assignment].join("\n\n");
+	const blocks = entries.length > 0 ? renderLeadingSkillBlocks(entries) : "";
+	return blocks ? `${blocks}\n\n${assignment}` : assignment;
 }
 
 /** Text and double-quoted XML attributes share the same escaping. */

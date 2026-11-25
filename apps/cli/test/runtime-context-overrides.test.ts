@@ -57,9 +57,18 @@ async function firstRequest(config: string, flags: string[]) {
 	}
 }
 
+// The case spawns the built CLI; a cold start on a loaded runner is far slower
+// than on a laptop. This budget sits above the 90s SIGKILL guard inside
+// `firstRequest` so that guard is what stops a hang, as its comment promises.
+const CASE_TIMEOUT_MS = 120_000;
+
 describe.skipIf(process.platform === "win32")("CLI overrides after resource loading", () => {
-	it("keeps explicit native compression after the resource loader reloads settings", async () => {
-		const request = await firstRequest('[compaction]\ncontextProjection = "clm-v1"\n', ["--context-projection", "off"]);
-		expect(JSON.stringify(request.messages)).not.toContain("## Working context");
-	});
+	it(
+		"keeps explicit native compression after the resource loader reloads settings",
+		async () => {
+			const request = await firstRequest('[compaction]\ncontextProjection = "clm-v1"\n', ["--context-projection", "off"]);
+			expect(JSON.stringify(request.messages)).not.toContain("## Working context");
+		},
+		CASE_TIMEOUT_MS,
+	);
 });

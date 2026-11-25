@@ -85,7 +85,9 @@ function runJson(extraFlags: string[] = []): RunResult {
 			...extraFlags,
 			"probe",
 		],
-		{ cwd: root, env, encoding: "utf8", timeout: 60_000, maxBuffer: 16 * 1024 * 1024 },
+		// Below TIMEOUT_MS so the declared per-test budget is the real bound: a
+		// killed spawn (status 143) reports a start-up overrun, not a behaviour change.
+		{ cwd: root, env, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
 	);
 
 	const events: Array<Record<string, unknown>> = [];
@@ -111,6 +113,8 @@ function typesOf(events: Array<Record<string, unknown>>): string[] {
 // Each case spawns the real CLI through tsx; that startup alone can exceed the
 // default 30s budget on a loaded CI runner.
 const TIMEOUT_MS = 180_000;
+/** Leave the outer budget room to report what the spawn said. */
+const SPAWN_TIMEOUT_MS = TIMEOUT_MS - 30_000;
 
 test(
 	"a json run writes facts, not live progress",

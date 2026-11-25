@@ -78,6 +78,7 @@ import {
 	listStepSessions,
 	loadAllHighlightLanguages,
 	MissingSessionCwdError,
+	messageSkillInvocations,
 	normalizeChangelogLinks,
 	onThemeChange,
 	openBrowser,
@@ -85,7 +86,6 @@ import {
 	ProjectTrustStore,
 	parseChangelog,
 	parseGitUrl,
-	parseSkillBlock,
 	type ReadonlyFooterDataProvider,
 	rawKeyHint,
 	readCommandExecutionOutcome,
@@ -3607,20 +3607,18 @@ export class InteractiveMode {
 					if (this.chatContainer.children.length > 0) {
 						this.chatContainer.addChild(new Spacer(1));
 					}
-					const skillBlock = parseSkillBlock(textContent);
-					if (skillBlock) {
-						// Render skill block (collapsible)
-						const component = new SkillInvocationMessageComponent(
-							skillBlock,
-							this.getMarkdownThemeWithSettings(),
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
-						// Render user message separately if present
-						if (skillBlock.userMessage) {
+					const invocations = messageSkillInvocations(textContent, message.skills);
+					if (invocations) {
+						// One collapsible row per skill the message loaded, then the request.
+						for (const skill of invocations.skills) {
+							const component = new SkillInvocationMessageComponent(skill, this.getMarkdownThemeWithSettings());
+							component.setExpanded(this.toolOutputExpanded);
+							this.chatContainer.addChild(component);
+						}
+						if (invocations.request) {
 							this.chatContainer.addChild(new Spacer(1));
 							const userComponent = this.createUserMessageComponent(
-								skillBlock.userMessage,
+								invocations.request,
 								this.getMarkdownThemeWithSettings(),
 								this.outputPad,
 								this.getMarkdownTransformers(),

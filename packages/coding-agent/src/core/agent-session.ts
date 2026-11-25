@@ -42,6 +42,7 @@ import type {
 	Message,
 	Model,
 	ProviderHeaders,
+	SkillInvocation,
 	TextContent,
 	ToolResultMessage,
 	Usage,
@@ -64,6 +65,12 @@ import { AUTO_RESUME_PROMPT } from "../step/permissions.ts";
 import { redactSecretString } from "../step/secret-redaction.ts";
 import { getThemeByName, theme } from "../theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
+import {
+	renderLeadingSkillBlocks,
+	renderSkillInstructions,
+	type SkillInstructionsInput,
+	takeLeadingSkillCommands,
+} from "../utils/skill-block.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
@@ -152,7 +159,13 @@ import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapp
 import { boundToolResultContent } from "./tools/tool-output.ts";
 import { addUsageToTotals, createUsageTotals, entryUsage } from "./usage-totals.ts";
 
-export { type ParsedSkillBlock, parseSkillBlock } from "../utils/skill-block.ts";
+export {
+	type MessageSkillInvocations,
+	messageSkillInvocations,
+	type ParsedSkillBlock,
+	parseSkillBlock,
+	type SkillInstructionView,
+} from "../utils/skill-block.ts";
 export type { AgentRunFailure } from "./run-failure.ts";
 
 /** Session-specific events that extend the core AgentEvent */
@@ -2509,8 +2522,13 @@ export class AgentSession {
 
 			// Expand skill commands (/skill:name args) and prompt templates (/template args)
 			let expandedText = currentText;
+			let skills: SkillInvocation[] | undefined;
 			if (expandPromptTemplates) {
-				expandedText = this._expandSkillCommand(expandedText);
+				const expanded = this._expandSkillCommands(expandedText);
+				expandedText = expanded.text;
+				skills = expanded.skills;
+				// A template only matches text that leads with its command; expanded
+				// instructions lead instead, so the recorded spans stay valid.
 				expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 			}
 
@@ -2522,9 +2540,9 @@ export class AgentSession {
 					);
 				}
 				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages, options?.source);
+					await this._queueFollowUp(expandedText, currentImages, options?.source, skills);
 				} else {
-					await this._queueSteer(expandedText, currentImages, options?.source);
+					await this._queueSteer(expandedText, currentImages, options?.source, skills);
 				}
 				preflightResult?.(true);
 				return;
@@ -2534,7 +2552,7 @@ export class AgentSession {
 			// answered; the message waits for the turn that answers it. A user's own
 			// message always runs, because that is how the decision gets answered.
 			if (options?.source === "extension" && this.hasPendingUserDecision) {
-				await this._queueFollowUp(expandedText, currentImages, options.source);
+				await this._queueFollowUp(expandedText, currentImages, options.source, skills);
 				preflightResult?.(true);
 				return;
 			}
@@ -2588,6 +2606,7 @@ export class AgentSession {
 			const userMessage: AgentMessage = {
 				role: "user",
 				content: userContent,
+				...(skills?.length ? { skills } : {}),
 				timestamp: Date.now(),
 			};
 			// A prompt a person typed is theirs, whatever delivered it. Recorded by
@@ -2708,34 +2727,91 @@ export class AgentSession {
 	}
 
 	/**
-	 * Expand skill commands (/skill:name args) to their full content.
-	 * Returns the expanded text, or the original text if not a skill command or skill not found.
-	 * Emits errors via extension runner if file read fails.
+	 * Read the instruction bodies of `names` from the skills this session loaded.
+	 *
+	 * A name that no longer resolves is skipped rather than raised: the catalog in
+	 * the system prompt still lists what exists, and a run must not fail because a
+	 * skill file was removed between discovery and use. A read failure is reported
+	 * through the extension error channel, as the single-command expander always did.
 	 */
-	private _expandSkillCommand(text: string): string {
-		if (!text.startsWith("/skill:")) return text;
-
-		const spaceIndex = text.search(/\s/u);
-		const skillName = spaceIndex === -1 ? text.slice(7) : text.slice(7, spaceIndex);
-		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
-
-		const skill = this.resourceLoader.getSkills().skills.find((s) => s.name === skillName);
-		if (!skill) return text; // Unknown skill, pass through
-
-		try {
-			const content = readFileSync(skill.filePath, "utf-8");
-			const body = stripFrontmatter(content).trim();
-			const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
-			return args ? `${skillBlock}\n\n${args}` : skillBlock;
-		} catch (err) {
-			// Emit error like extension commands do
-			this._extensionRunner.emitError({
-				extensionPath: skill.filePath,
-				event: "skill_expansion",
-				error: err instanceof Error ? err.message : String(err),
-			});
-			return text; // Return original on error
+	private _readSkillEntries(names: readonly string[]): SkillInstructionsInput[] {
+		const available = this.resourceLoader.getSkills().skills;
+		const entries: SkillInstructionsInput[] = [];
+		for (const name of names) {
+			const skill = available.find((candidate) => candidate.name === name);
+			if (!skill) continue;
+			try {
+				const content = readFileSync(skill.filePath, "utf-8");
+				entries.push({
+					name: skill.name,
+					location: skill.filePath,
+					baseDir: skill.baseDir,
+					body: stripFrontmatter(content).trim(),
+				});
+			} catch (err) {
+				// Emit error like extension commands do
+				this._extensionRunner.emitError({
+					extensionPath: skill.filePath,
+					event: "skill_expansion",
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
 		}
+		return entries;
+	}
+
+	/**
+	 * Put the instructions of `names` in front of a message the host assembled.
+	 *
+	 * A goal continuation and a scheduled execution are not text a person typed:
+	 * their prompt and objective are already in the message. The instructions ride
+	 * in front of it as encoded blocks, which is what keeps them readable after
+	 * compaction and what a later turn reads instead of loading the skill again.
+	 */
+	private _withLeadingSkills(
+		content: string | (TextContent | ImageContent)[],
+		names: readonly string[],
+	): string | (TextContent | ImageContent)[] {
+		const entries = this._readSkillEntries(names);
+		if (entries.length === 0) return content;
+		const blocks = renderLeadingSkillBlocks(entries);
+		if (typeof content === "string") return `${blocks}\n\n${content}`;
+		// One text block carries both, so a reader that joins text parts still sees
+		// the blank line the block separator needs.
+		const text = content
+			.filter((part): part is TextContent => part.type === "text")
+			.map((part) => part.text)
+			.join("\n");
+		const images = content.filter((part): part is ImageContent => part.type === "image");
+		const merged = text ? `${blocks}\n\n${text}` : blocks;
+		return images.length > 0 ? [{ type: "text", text: merged }, ...images] : merged;
+	}
+
+	/**
+	 * Expand the skill commands that lead a prompt.
+	 *
+	 * Every `/skill:<name>` before the first other word loads its instructions,
+	 * in the order the user named them, up to {@link MAX_SKILL_COMMANDS}. Repeats
+	 * load once and anything past the cap stays in the request as text, so no
+	 * word the user typed disappears and the model can still read a skill the
+	 * prompt names but this message did not expand.
+	 *
+	 * The expansion is the recorded message: the returned text is what the model
+	 * reads from now on, and `skills` records where each body sits inside it.
+	 * Nothing re-runs this for a recorded message, so earlier turns keep the
+	 * bytes they were sent with.
+	 */
+	private _expandSkillCommands(text: string): { text: string; skills?: SkillInvocation[] } {
+		const commands = takeLeadingSkillCommands(text);
+		if (commands.names.length === 0) return { text };
+
+		const entries = this._readSkillEntries(commands.names);
+		if (entries.length === 0) return { text };
+
+		const unread = commands.names.filter((name) => !entries.some((entry) => entry.name === name));
+		const request = [unread.map((name) => `/skill:${name}`).join(" "), commands.rest].filter(Boolean).join(" ");
+		const rendered = renderSkillInstructions(entries, request);
+		return { text: rendered.text, skills: rendered.skills };
 	}
 
 	/**
@@ -2751,10 +2827,10 @@ export class AgentSession {
 		this._throwIfCommand(text);
 
 		// Expand skill commands and prompt templates
-		let expandedText = this._expandSkillCommand(text);
-		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+		const expanded = this._expandSkillCommands(text);
+		const expandedText = expandPromptTemplate(expanded.text, [...this.promptTemplates]);
 
-		await this._queueSteer(expandedText, images);
+		await this._queueSteer(expandedText, images, undefined, expanded.skills);
 	}
 
 	/**
@@ -2769,10 +2845,10 @@ export class AgentSession {
 		this._throwIfCommand(text);
 
 		// Expand skill commands and prompt templates
-		let expandedText = this._expandSkillCommand(text);
-		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+		const expanded = this._expandSkillCommands(text);
+		const expandedText = expandPromptTemplate(expanded.text, [...this.promptTemplates]);
 
-		await this._queueFollowUp(expandedText, images);
+		await this._queueFollowUp(expandedText, images, undefined, expanded.skills);
 	}
 
 	/**
@@ -2791,14 +2867,24 @@ export class AgentSession {
 	private _queueDeliveryAllowed = (message: AgentMessage): boolean =>
 		!this.hasPendingUserDecision || this._queuedFromUser.has(message);
 
-	private async _queueSteer(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
+	private async _queueSteer(
+		text: string,
+		images?: ImageContent[],
+		source?: InputSource,
+		skills?: SkillInvocation[],
+	): Promise<void> {
 		this._steeringMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		const message: AgentMessage = {
+			role: "user",
+			content,
+			...(skills?.length ? { skills } : {}),
+			timestamp: Date.now(),
+		};
 		if (source !== "extension") this._queuedFromUser.add(message);
 		this.agent.steer(message);
 	}
@@ -2806,14 +2892,24 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
-	private async _queueFollowUp(text: string, images?: ImageContent[], source?: InputSource): Promise<void> {
+	private async _queueFollowUp(
+		text: string,
+		images?: ImageContent[],
+		source?: InputSource,
+		skills?: SkillInvocation[],
+	): Promise<void> {
 		this._followUpMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		const message: AgentMessage = {
+			role: "user",
+			content,
+			...(skills?.length ? { skills } : {}),
+			timestamp: Date.now(),
+		};
 		if (source !== "extension") this._queuedFromUser.add(message);
 		this.agent.followUp(message);
 	}
@@ -2848,13 +2944,20 @@ export class AgentSession {
 	 */
 	async sendCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
-		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+		options?: {
+			triggerTurn?: boolean;
+			deliverAs?: "steer" | "followUp" | "nextTurn";
+			/** Skills whose instructions lead this message. See {@link _withLeadingSkills}. */
+			expandSkills?: readonly string[];
+		},
 	): Promise<void> {
 		const appMessage = {
 			role: "custom" as const,
 			customType: message.customType,
 			// Untyped extensions can pass null/missing content; normalize at ingestion.
-			content: message.content ?? [],
+			content: options?.expandSkills?.length
+				? this._withLeadingSkills(message.content ?? [], options.expandSkills)
+				: (message.content ?? []),
 			display: message.display,
 			details: message.details,
 			timestamp: Date.now(),

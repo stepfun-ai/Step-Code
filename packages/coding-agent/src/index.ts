@@ -39,11 +39,14 @@ export {
 	type AgentSessionConfig,
 	type AgentSessionEvent,
 	type AgentSessionEventListener,
+	type MessageSkillInvocations,
 	type ModelCycleResult,
+	messageSkillInvocations,
 	type ParsedSkillBlock,
 	type PromptOptions,
 	parseSkillBlock,
 	type SessionStats,
+	type SkillInstructionView,
 	type SubmitOptions,
 } from "./core/agent-session.ts";
 export { SessionImportFileNotFoundError } from "./core/agent-session-runtime.ts";

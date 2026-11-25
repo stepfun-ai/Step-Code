@@ -517,6 +517,31 @@ describe("Step goal extension", () => {
 		});
 	});
 
+	test("a /goal objective's leading skills load on the kickoff only", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		// The command starts the goal and immediately requests its kickoff
+		// continuation, before any run has been accounted.
+		await harness.commands.get("goal")?.("/skill:alpha /skill:beta 做一个页面", harness.ctx);
+		expect(harness.sent[0]?.options?.expandSkills).toEqual(["alpha", "beta"]);
+		// The objective keeps the text the user wrote.
+		expect(harness.sent[0]?.message.content).toContain("/skill:alpha /skill:beta 做一个页面");
+		await emit(harness, "agent_start");
+		await emit(harness, "agent_end", { messages: [assistant()] });
+		await emit(harness, "agent_settled");
+		// The next round reads the instructions from the transcript, so it must not
+		// inject a second copy.
+		expect(harness.sent).toHaveLength(2);
+		expect(harness.sent[1]?.options?.expandSkills).toBeUndefined();
+	});
+
+	test("an objective with no leading skill command asks for no expansion", async () => {
+		const harness = extensionHarness();
+		await emit(harness, "session_start");
+		await harness.commands.get("goal")?.("Run the tests", harness.ctx);
+		expect(harness.sent[0]?.options?.expandSkills).toBeUndefined();
+	});
+
 	test("a continuation blocked by a pending decision is not a stale attempt later", () => {
 		// The goal cannot continue while a decision awaits the user. When the user
 		// pauses the goal and answers, their own turn must not be mistaken for the

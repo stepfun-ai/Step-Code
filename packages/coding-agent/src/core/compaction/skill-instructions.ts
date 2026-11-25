@@ -100,10 +100,21 @@ export function collectSkillInstructions(
 
 	for (const message of messages) {
 		if (message.role === "user") {
+			const text = contentText(message.content, "");
+			// A message that recorded its skill spans names exactly what it loaded,
+			// including several skills in one turn. Slicing the recorded text keeps
+			// the instructions byte-identical without reading any file again.
+			if (message.skills?.length) {
+				for (const skill of message.skills) {
+					const content = text.slice(skill.start, skill.end);
+					if (content) remember({ location: resolvePath(skill.location, context.cwd), content });
+				}
+				continue;
+			}
 			// Only encoded blocks chain: a host writes each selected skill as its own
 			// leading block. Text after an unmarked block is the user's own, even when it
 			// looks like another skill.
-			let block = parseSkillBlock(contentText(message.content, ""));
+			let block = parseSkillBlock(text);
 			while (block) {
 				remember({ location: resolvePath(block.location, context.cwd), content: block.content });
 				const next: ParsedSkillBlock | null =

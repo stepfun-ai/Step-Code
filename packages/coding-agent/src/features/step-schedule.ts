@@ -10,6 +10,7 @@ import type {
 	ExtensionFactory,
 } from "../core/extensions/types.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
+import { takeLeadingSkillCommands } from "../utils/skill-block.ts";
 import { formatElapsedTime } from "../utils/time.ts";
 
 const MAX_OBJECTIVE_LENGTH = 16_000;
@@ -1073,6 +1074,12 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 			if (ownsRuntime) {
 				host.persist = (snapshot) => pi.appendEntry("step-goal", snapshot);
 				host.requestContinuation = ({ goal, delivery }) => {
+					// The objective's leading `/skill:` commands load their instructions on the
+					// goal's first turn only. Later turns read them from the transcript, so
+					// another continuation never injects a second copy of the same
+					// instructions. `iteration` counts completed rounds, so a goal that ran
+					// before this feature existed resumes without loading anything new.
+					const skills = goal.iteration === 0 ? takeLeadingSkillCommands(goal.objective).names : [];
 					pi.sendMessage(
 						{
 							customType: "step-goal",
@@ -1080,7 +1087,12 @@ export function createStepGoalExtension(options: StepGoalExtensionOptions = {}):
 							display: false,
 							details: { goalId: goal.id, iteration: goal.iteration },
 						},
-						delivery === "immediate" ? { triggerTurn: true } : { deliverAs: "followUp", triggerTurn: true },
+						{
+							...(delivery === "immediate"
+								? { triggerTurn: true }
+								: { deliverAs: "followUp" as const, triggerTurn: true }),
+							...(skills.length > 0 ? { expandSkills: skills } : {}),
+						},
 					);
 				};
 			}

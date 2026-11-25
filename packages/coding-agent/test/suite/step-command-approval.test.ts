@@ -14,7 +14,14 @@ const modes: Array<{ name: string; permission: StepPermissionControllerOptions }
 	{ name: "auto", permission: { approvalMode: "auto" } },
 ];
 
-describe("Step command approval through the agent loop", () => {
+/**
+ * Every case runs the real shell tool through the agent loop, and the first one
+ * also pays the extension bootstrap. That is work, not a hang: the global 30s
+ * budget reported a genuine overrun on a loaded runner.
+ */
+const CASE_TIMEOUT_MS = 60_000;
+
+describe("Step command approval through the agent loop", { timeout: CASE_TIMEOUT_MS }, () => {
 	let sandbox: string;
 	let harness: Harness | undefined;
 

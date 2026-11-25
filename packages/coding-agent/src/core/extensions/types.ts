@@ -510,7 +510,16 @@ export interface ExtensionCommandContext extends ExtensionContext {
 export interface ReplacedSessionContext extends ExtensionCommandContext {
 	sendMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
-		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+		options?: {
+			triggerTurn?: boolean;
+			deliverAs?: "steer" | "followUp" | "nextTurn";
+			/**
+			 * Skills whose instructions lead this message, for a host-assembled message
+			 * such as a goal continuation. Loaded once when the message is recorded;
+			 * later turns read them from the transcript.
+			 */
+			expandSkills?: readonly string[];
+		},
 	): Promise<void>;
 
 	sendUserMessage(
@@ -1543,7 +1552,16 @@ export interface ExtensionAPI {
 	 */
 	sendMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
-		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+		options?: {
+			triggerTurn?: boolean;
+			deliverAs?: "steer" | "followUp" | "nextTurn";
+			/**
+			 * Skills whose instructions lead this message, for a host-assembled message
+			 * such as a goal continuation. Loaded once when the message is recorded;
+			 * later turns read them from the transcript.
+			 */
+			expandSkills?: readonly string[];
+		},
 	): void;
 
 	/**
@@ -1820,7 +1838,12 @@ type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 
 export type SendMessageHandler = <T = unknown>(
 	message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
-	options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+	options?: {
+		triggerTurn?: boolean;
+		deliverAs?: "steer" | "followUp" | "nextTurn";
+		/** Skills whose instructions lead this message, for a host-assembled message such as a goal continuation. */
+		expandSkills?: readonly string[];
+	},
 ) => void;
 
 export type SendUserMessageHandler = (
