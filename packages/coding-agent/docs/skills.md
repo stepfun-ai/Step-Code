@@ -87,7 +87,24 @@ Skills register as `/skill:name` commands:
 /skill:pdf-tools extract      # Load skill with arguments
 ```
 
-Any whitespace, including a newline or tab, can separate the skill name from its arguments. Arguments are appended after the skill content.
+The separator between a skill name and its arguments can be any whitespace, including a newline or a tab. When a prompt names several skills, everything after the last command is the request, and it is appended after all of their instructions.
+
+A prompt may load several skills at once by naming their commands in a row:
+
+```bash
+/skill:pdf-tools /skill:data-analysis extract the tables
+```
+
+Each leading `/skill:` command loads that skill's instructions, in the order
+written, before the rest of the prompt. One message loads at most five skills; a
+repeated command and any command past that limit stay in the prompt as text, and
+the skill catalog in the system prompt still lets the model read them. A
+`/skill:` that follows other words is prose, not a command.
+
+The recorded message keeps the rendered instructions, and its `skills` field
+points at each instruction body (see [session format](session-format.md)). Later
+turns read those recorded bytes, so editing a `SKILL.md` changes the next message
+that loads it but never rewrites history.
 
 Toggle skill commands via `/settings` in interactive mode or in `settings.json`:
 

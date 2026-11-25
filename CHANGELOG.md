@@ -7,6 +7,8 @@
 - Added `retry.provider.streamIdleTimeoutMs` (default 300000): a provider stream that produces no parsed event for that long is cancelled and ends with a transient error, so the existing retry policy resends it. The HTTP idle timeout only sees bytes, and a gateway sending keep-alives could hold a stalled request open for tens of minutes.
 
 ### Changed
+- A prompt now loads every `/skill:<name>` command it leads with, in order, up to five: `/skill:a /skill:b request` used to expand `a` and pass `/skill:b request` to it as arguments. A repeated command and any command past the limit stay in the request as text, and the skill catalog in the system prompt still lists them. The recorded message carries `skills` spans that point at each instruction body inside the text it already stores, so transcript readers no longer re-parse the `<skill>` wrapper; because the text is fixed when the message is recorded, resumed sessions reproduce the earlier request byte-for-byte and keep their provider cache prefix. Sessions recorded before this change keep loading through the wrapper. See [skills](packages/coding-agent/docs/skills.md#skill-commands) and the [session format](packages/coding-agent/docs/session-format.md#message-types).
+
 - Changed the default `compaction.triggerRatio` back from 0.85 to 0.9: the default applies to windows of 131K and above (smaller windows keep their response-headroom thresholds), so those models now compact at 90% of the window. Explicit ratios, per-model overrides and `tokenLimit` are unchanged.
 
 

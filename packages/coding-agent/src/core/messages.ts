@@ -153,6 +153,10 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 				case "user":
 				case "assistant":
 				case "toolResult":
+					// Returned as the same object: the request is projected, never rewritten.
+					// A user message keeps its skill spans, which compaction reads to preserve
+					// instructions the text already carries. Provider adapters build request
+					// parameters from `role` and `content` only, so spans are never sent.
 					return m;
 				default:
 					// biome-ignore lint/correctness/noSwitchDeclarations: fine

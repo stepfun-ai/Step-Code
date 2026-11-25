@@ -26,6 +26,12 @@ Sessions have a version field in the header:
 
 Existing sessions are automatically migrated to the current version (v3) when loaded.
 
+Version 3 accepts added optional fields, so a reader never has to rewrite an
+existing file to record new metadata. A future change that alters the meaning of
+an existing field must bump the version instead: an older build reads a session
+whose version is at or above its own without migrating it, so adding fields is
+the only change that stays compatible in both directions.
+
 ## Source Files
 
 Source on GitHub ([step-harness](https://github.com/stepfun-ai/step-harness)):
@@ -77,6 +83,18 @@ interface ToolCall {
 interface UserMessage {
   role: "user";
   content: string | (TextContent | ImageContent)[];
+  // Skills whose instructions this message carries, in injection order. Each
+  // entry points into the text block above, whose bytes were fixed when the
+  // message was recorded; readers use the spans instead of re-parsing the
+  // `<skill>` wrapper. Absent for messages recorded before spans were tracked
+  // and for messages that loaded no skill.
+  skills?: Array<{
+    name: string;
+    location: string;   // absolute path of the skill file
+    start: number;      // inclusive offset in the text block
+    end: number;        // exclusive offset in the text block
+    digest: string;     // SHA-256 of the recorded body
+  }>;
   timestamp: number;  // Unix ms
 }
 
