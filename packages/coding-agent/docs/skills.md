@@ -106,6 +106,14 @@ points at each instruction body (see [session format](session-format.md)). Later
 turns read those recorded bytes, so editing a `SKILL.md` changes the next message
 that loads it but never rewrites history.
 
+A goal objective may name skills the same way. `/goal /skill:pdf-tools extract the tables` loads the
+skill's instructions on the goal's first turn, ahead of the objective, and the
+objective keeps the text as written. Later goal turns read the instructions from
+the transcript rather than loading them again, so a long-running goal does not
+repeat them every round. A goal created by the model through `create_goal` carries
+no such kickoff: it rides the turn that created it, and the model reads any skill
+it needs from the catalog.
+
 Toggle skill commands via `/settings` in interactive mode or in `settings.json`:
 
 ```json

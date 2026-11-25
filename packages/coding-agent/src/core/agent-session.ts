@@ -66,6 +66,7 @@ import { redactSecretString } from "../step/secret-redaction.ts";
 import { getThemeByName, theme } from "../theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import {
+	renderLeadingSkillBlocks,
 	renderSkillInstructions,
 	type SkillInstructionsInput,
 	takeLeadingSkillCommands,
@@ -2726,29 +2727,18 @@ export class AgentSession {
 	}
 
 	/**
-	 * Expand the skill commands that lead a prompt.
+	 * Read the instruction bodies of `names` from the skills this session loaded.
 	 *
-	 * Every `/skill:<name>` before the first other word loads its instructions,
-	 * in the order the user named them, up to {@link MAX_SKILL_COMMANDS}. Repeats
-	 * load once and anything past the cap stays in the request as text, so no
-	 * word the user typed disappears and the model can still read a skill the
-	 * prompt names but this message did not expand.
-	 *
-	 * The expansion is the recorded message: the returned text is what the model
-	 * reads from now on, and `skills` records where each body sits inside it.
-	 * Nothing re-runs this for a recorded message, so earlier turns keep the
-	 * bytes they were sent with.
+	 * A name that no longer resolves is skipped rather than raised: the catalog in
+	 * the system prompt still lists what exists, and a run must not fail because a
+	 * skill file was removed between discovery and use. A read failure is reported
+	 * through the extension error channel, as the single-command expander always did.
 	 */
-	private _expandSkillCommands(text: string): { text: string; skills?: SkillInvocation[] } {
-		const commands = takeLeadingSkillCommands(text);
-		if (commands.names.length === 0) return { text };
-
+	private _readSkillEntries(names: readonly string[]): SkillInstructionsInput[] {
 		const available = this.resourceLoader.getSkills().skills;
 		const entries: SkillInstructionsInput[] = [];
-		for (const name of commands.names) {
+		for (const name of names) {
 			const skill = available.find((candidate) => candidate.name === name);
-			// An unknown skill stays in the request as the user typed it. The
-			// catalog in the system prompt still lists it, so the model can read it.
 			if (!skill) continue;
 			try {
 				const content = readFileSync(skill.filePath, "utf-8");
@@ -2767,6 +2757,55 @@ export class AgentSession {
 				});
 			}
 		}
+		return entries;
+	}
+
+	/**
+	 * Put the instructions of `names` in front of a message the host assembled.
+	 *
+	 * A goal continuation and a scheduled execution are not text a person typed:
+	 * their prompt and objective are already in the message. The instructions ride
+	 * in front of it as encoded blocks, which is what keeps them readable after
+	 * compaction and what a later turn reads instead of loading the skill again.
+	 */
+	private _withLeadingSkills(
+		content: string | (TextContent | ImageContent)[],
+		names: readonly string[],
+	): string | (TextContent | ImageContent)[] {
+		const entries = this._readSkillEntries(names);
+		if (entries.length === 0) return content;
+		const blocks = renderLeadingSkillBlocks(entries);
+		if (typeof content === "string") return `${blocks}\n\n${content}`;
+		// One text block carries both, so a reader that joins text parts still sees
+		// the blank line the block separator needs.
+		const text = content
+			.filter((part): part is TextContent => part.type === "text")
+			.map((part) => part.text)
+			.join("\n");
+		const images = content.filter((part): part is ImageContent => part.type === "image");
+		const merged = text ? `${blocks}\n\n${text}` : blocks;
+		return images.length > 0 ? [{ type: "text", text: merged }, ...images] : merged;
+	}
+
+	/**
+	 * Expand the skill commands that lead a prompt.
+	 *
+	 * Every `/skill:<name>` before the first other word loads its instructions,
+	 * in the order the user named them, up to {@link MAX_SKILL_COMMANDS}. Repeats
+	 * load once and anything past the cap stays in the request as text, so no
+	 * word the user typed disappears and the model can still read a skill the
+	 * prompt names but this message did not expand.
+	 *
+	 * The expansion is the recorded message: the returned text is what the model
+	 * reads from now on, and `skills` records where each body sits inside it.
+	 * Nothing re-runs this for a recorded message, so earlier turns keep the
+	 * bytes they were sent with.
+	 */
+	private _expandSkillCommands(text: string): { text: string; skills?: SkillInvocation[] } {
+		const commands = takeLeadingSkillCommands(text);
+		if (commands.names.length === 0) return { text };
+
+		const entries = this._readSkillEntries(commands.names);
 		if (entries.length === 0) return { text };
 
 		const unread = commands.names.filter((name) => !entries.some((entry) => entry.name === name));
@@ -2905,13 +2944,20 @@ export class AgentSession {
 	 */
 	async sendCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
-		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+		options?: {
+			triggerTurn?: boolean;
+			deliverAs?: "steer" | "followUp" | "nextTurn";
+			/** Skills whose instructions lead this message. See {@link _withLeadingSkills}. */
+			expandSkills?: readonly string[];
+		},
 	): Promise<void> {
 		const appMessage = {
 			role: "custom" as const,
 			customType: message.customType,
 			// Untyped extensions can pass null/missing content; normalize at ingestion.
-			content: message.content ?? [],
+			content: options?.expandSkills?.length
+				? this._withLeadingSkills(message.content ?? [], options.expandSkills)
+				: (message.content ?? []),
 			display: message.display,
 			details: message.details,
 			timestamp: Date.now(),

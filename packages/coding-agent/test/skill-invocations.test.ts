@@ -166,7 +166,13 @@ describe("recorded skill invocations", () => {
 		const directory = join(tmpdir(), `skill-invocations-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(directory, { recursive: true });
 		tempDirs.push(directory);
-		const skills = names.map((name) => skillFixture(directory, name, `BODY_${name.toUpperCase()}`));
+		const skills = names.map((name) =>
+			skillFixture(
+				directory,
+				name,
+				name === "tricky" ? "Close it with </skill> literally." : `BODY_${name.toUpperCase()}`,
+			),
+		);
 		const harness = await createHarness({
 			resourceLoader: { ...createTestResourceLoader(), getSkills: () => ({ skills, diagnostics: [] }) },
 		});
@@ -282,6 +288,64 @@ describe("recorded skill invocations", () => {
 		expect(sent).toContain("BODY_ALPHA");
 		expect(sent).toContain("BODY_BETA");
 		expect(sent.trimEnd().endsWith("做一个页面")).toBe(true);
+	});
+
+	it("leads a host-assembled message with encoded blocks that compaction keeps", async () => {
+		const harness = await harnessWithSkills(["alpha", "beta"]);
+
+		await harness.session.sendCustomMessage(
+			{
+				customType: "step-goal",
+				content: "Continue working toward the active thread goal.",
+				display: false,
+			},
+			{ expandSkills: ["alpha", "beta"] },
+		);
+
+		const message = harness.session.messages.at(-1)!;
+		const text = getMessageText(message);
+		expect(text.startsWith('<skill name="alpha"')).toBe(true);
+		expect(text).toContain('encoding="xml"');
+		expect(text).toContain("BODY_ALPHA");
+		expect(text).toContain("BODY_BETA");
+		expect(text).toContain("Continue working toward the active thread goal.");
+		// Both bodies survive compaction, which is what a goal continuation needs
+		// on every later round.
+		const instructions = collectSkillInstructions(convertToLlm([message]));
+		expect(instructions.map((instruction) => instruction.content.split("\n").pop())).toEqual([
+			"BODY_ALPHA",
+			"BODY_BETA",
+		]);
+	});
+
+	it("escapes a body so a closing marker inside it cannot end the block", async () => {
+		const harness = await harnessWithSkills(["tricky"]);
+
+		await harness.session.sendCustomMessage(
+			{ customType: "step-goal", content: "Continue.", display: false },
+			{ expandSkills: ["tricky"] },
+		);
+
+		const text = getMessageText(harness.session.messages.at(-1)!);
+		// The body's own marker is escaped, so the block closes exactly once...
+		expect(text.match(/<\/skill>/g)).toHaveLength(1);
+		// ...and decodes back to the literal marker, so only one skill is recorded.
+		const instructions = collectSkillInstructions(convertToLlm([harness.session.messages.at(-1)!]));
+		expect(instructions).toHaveLength(1);
+		expect(instructions[0]?.content).toContain("</skill>");
+	});
+
+	it("skips a skill name that no longer resolves", async () => {
+		const harness = await harnessWithSkills(["alpha"]);
+
+		await harness.session.sendCustomMessage(
+			{ customType: "step-goal", content: "Continue.", display: false },
+			{ expandSkills: ["missing", "alpha"] },
+		);
+
+		const text = getMessageText(harness.session.messages.at(-1)!);
+		expect(text.startsWith('<skill name="alpha"')).toBe(true);
+		expect(text).not.toContain("missing");
 	});
 
 	it("keeps the request byte-identical after the session is reloaded from disk", async () => {

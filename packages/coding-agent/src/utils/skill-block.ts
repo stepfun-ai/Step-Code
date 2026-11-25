@@ -172,6 +172,30 @@ export function skillInstructionBody(text: string, skill: SkillInvocation): stri
 	return text.slice(skill.start, skill.end);
 }
 
+/** Text and double-quoted XML attributes share the same escaping. */
+function escapeXml(value: string): string {
+	return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+/**
+ * Leading instruction blocks for a message the host assembles itself, such as a
+ * goal continuation or a scheduled execution.
+ *
+ * These blocks declare `encoding="xml"` and escape their text, so a body that
+ * contains `<skill>` or `</skill>` can never be mistaken for another block. The
+ * marker is also what lets instruction retention read several blocks from one
+ * message: only an encoded block chains into the text after it, because text
+ * after an unencoded block is the user's own.
+ */
+export function renderLeadingSkillBlocks(entries: readonly SkillInstructionsInput[]): string {
+	return entries
+		.map(
+			(entry) =>
+				`<skill name="${escapeXml(entry.name)}" location="${escapeXml(entry.location)}" encoding="xml">\nReferences are relative to ${escapeXml(entry.baseDir)}.\n\n${escapeXml(entry.body)}\n</skill>`,
+		)
+		.join("\n\n");
+}
+
 export interface MessageSkillInvocations {
 	/** Instruction bodies the message carried, in the order it loaded them. */
 	skills: SkillInstructionView[];
