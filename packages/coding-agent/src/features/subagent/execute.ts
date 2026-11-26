@@ -9,10 +9,10 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@step-harness/agent-core";
-import type { Static } from "typebox";
 import { SUBAGENT_SESSION_ID_PREFIX } from "../../core/child-session.ts";
 import type { ExtensionContext } from "../../core/extensions/types.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../../step/telemetry.ts";
+import { availableModels } from "../step-models-catalog.ts";
 import {
 	cloneUsage,
 	emptyUsage,
@@ -21,13 +21,12 @@ import {
 	makeToolResult,
 	resolveSubagentConcurrency,
 	resultText,
-	type StepChainItem,
+	type StepDelegatedTaskItem,
 	type StepSubagentDetails,
 	type StepSubagentExtensionOptions,
 	type StepSubagentResultRecord,
 	type StepSubagentRunner,
 	type StepSubagentRunResult,
-	type StepTaskItem,
 	type StepWorktreeLease,
 	type StepWorktreeManager,
 	type SubagentParams,
@@ -45,6 +44,7 @@ import { acquireWorkflowAdmission } from "../workflow/admission.ts";
 import type { WorkflowSemaphore } from "../workflow/budget.ts";
 import { truncateText } from "./lane-events.ts";
 import type { StepSubagentLaneRuntime } from "./lane-lifecycle.ts";
+import { matchCatalogRoute, parseSubagentModelRoute, type SubagentModelRoute } from "./model-route.ts";
 import { finalRoster, liveRoster } from "./projection.ts";
 
 /**
@@ -61,7 +61,15 @@ export interface StepSubagentTaskInput {
 	agent: string;
 	task: string;
 	cwd?: string;
+	/** Canonical `provider/model` the child must run on, or undefined to inherit. */
 	model?: string;
+	/**
+	 * The route preflight resolved and authorized for this task, carried to the
+	 * runner so it can confirm the child's real route before sending a prompt.
+	 * Undefined when the task named no route, because pure inheritance is never
+	 * gated.
+	 */
+	authorizedRoute?: SubagentModelRoute;
 	contextMode?: "inherit" | "fresh";
 	isolateWorkspace?: boolean;
 	worktreeName?: string;
@@ -215,25 +223,26 @@ function taskFromParams(params: SubagentParams): StepSubagentTaskInput | undefin
 		agent,
 		task,
 		cwd: params.cwd,
+		// A route named on the call rides with its task, so single and batch modes
+		// carry it the same way and one code path reads it back.
+		model: params.model,
 		isolateWorkspace: params.isolateWorkspace,
 		worktreeName: params.worktreeName,
 		retainWorktree: params.retainWorktree,
 	};
 }
 
-function normalizeTaskInput(task: Static<typeof StepTaskItem> | Static<typeof StepChainItem>): StepSubagentTaskInput {
-	const runtimeTask = task as Static<typeof StepTaskItem> & {
-		isolateWorkspace?: boolean;
-		worktreeName?: string;
-		retainWorktree?: boolean;
-	};
+function normalizeTaskInput(task: StepDelegatedTaskItem): StepSubagentTaskInput {
 	return {
 		agent: task.agent,
 		task: task.task,
 		cwd: task.cwd,
-		isolateWorkspace: runtimeTask.isolateWorkspace,
-		worktreeName: runtimeTask.worktreeName,
-		retainWorktree: runtimeTask.retainWorktree,
+		// Without this a route named inside `tasks`/`chain` never reaches the child,
+		// and the delegation silently falls back to the parent model.
+		model: task.model,
+		isolateWorkspace: task.isolateWorkspace,
+		worktreeName: task.worktreeName,
+		retainWorktree: task.retainWorktree,
 	};
 }
 
@@ -353,6 +362,66 @@ export async function prepareSubagentRun(
 			};
 		}
 	}
+	// Resolve the route each task will actually run on, before any child starts.
+	//
+	// An explicit `model` is new surface, so it is checked against this session's
+	// catalog and fails here rather than inside a spawned child: a typo in a model
+	// id otherwise costs a process, a failed request, and a confusing provider
+	// error. The check accepts whatever the session can run — there is no separate
+	// allowlist to configure — and a miss names the models that provider offers.
+	//
+	// An agent definition's own `model` is host configuration that already worked
+	// before this parameter existed, so it is never rejected: a value that resolves
+	// exactly to a catalog entry is forwarded canonically (and then verified after
+	// the child starts), and anything else is passed through to the CLI exactly as
+	// it was, fuzzy matching included.
+	const parentRoute: SubagentModelRoute | undefined =
+		ctx.model !== undefined ? { provider: ctx.model.provider, model: ctx.model.id } : undefined;
+	const catalog = availableModels(ctx);
+	for (const [index, task] of tasks.entries()) {
+		const declared = resolveStepAgent(discovery.agents, task.agent)?.model;
+		// An explicit call parameter wins over the definition's default, matching how
+		// the CLI's own `--model` behaves: the definition supplies a default, and a
+		// caller that names a route gets it.
+		const named = task.model ?? declared;
+		if (named === undefined) continue;
+		const label = tasks.length === 1 ? "subagent call" : `subagent task ${index + 1}`;
+		const explicit = task.model !== undefined;
+		const route = parseSubagentModelRoute(named, parentRoute);
+		if (route === undefined) {
+			if (!explicit) continue;
+			return {
+				ok: false,
+				result: makeToolResult(
+					buildDetails(mode, discovery, scope, []),
+					`${label}: invalid model "${named}"; use provider/modelId, or a bare model id with a parent provider. Run the models tool to see the exact ids.`,
+					true,
+				),
+			};
+		}
+		const match = matchCatalogRoute(route, catalog);
+		if (explicit) {
+			if (match !== undefined && !match.ok) {
+				return {
+					ok: false,
+					result: makeToolResult(
+						buildDetails(mode, discovery, scope, []),
+						`${label}: ${match.reason}. Run the models tool with provider "${route.provider}" to see the exact ids.`,
+						true,
+					),
+				};
+			}
+			// Canonical spelling from the catalog when we matched one; otherwise the
+			// parsed route, because this host has no catalog to consult.
+			const canonical = match?.ok === true ? match.route : route;
+			task.model = `${canonical.provider}/${canonical.model}`;
+			task.authorizedRoute = canonical;
+			continue;
+		}
+		// Definition-supplied: only pin the route when it resolves exactly.
+		if (match?.ok === true) task.authorizedRoute = match.route;
+	}
+
 	if (!(await confirmProjectAgents(ctx, params, discovery, tasks))) {
 		const details = buildDetails(mode, discovery, scope, []);
 		return { ok: false, result: makeToolResult(details, "Canceled: project-local agents not approved.", true) };
@@ -401,13 +470,14 @@ export async function runPreparedSubagent(
 	const execution = laneRuntime ? "background" : "blocking";
 	const createdAt = tasks.map(() => Date.now());
 	const createdTasks = new Set<number>();
-	const reportCreated = (agent: StepAgentConfig, index: number): void => {
+	const reportCreated = (agent: StepAgentConfig, index: number, selectedModel?: string): void => {
 		if (!options.telemetry) return;
 		createdTasks.add(index);
 		trackStepTelemetry(options.telemetry, "subagent_task_created", {
 			execution,
 			agent_type: agent.name,
-			model_profile: agent.model ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "inherited"),
+			model_profile:
+				selectedModel ?? agent.model ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "inherited"),
 		});
 		createdAt[index] = Date.now();
 	};
@@ -481,7 +551,12 @@ export async function runPreparedSubagent(
 			reportFinished(failed, index);
 			return failed;
 		}
-		reportCreated(agent, index);
+		reportCreated(agent, index, task.model);
+		// The route preflight authorized, if any, is the child's model. Setting it
+		// on the child's own definition makes an explicit call parameter outrank
+		// the definition's default, and keeps a canonical route from being
+		// re-resolved (or fuzzily matched) inside the CLI.
+		const childAgent = task.model === undefined ? agent : { ...agent, model: task.model };
 		// A parallel batch shares the process-wide window with workflow nodes. The
 		// window's capacity is the smallest ceiling among the runs attached, so a batch
 		// and a workflow running together are bound by the more conservative of the two.
@@ -577,10 +652,11 @@ export async function runPreparedSubagent(
 				parentCwd,
 				parentSessionId,
 				...(prepared.parentToolCallId ? { parentToolCallId: prepared.parentToolCallId } : {}),
-				agent,
+				agent: childAgent,
 				task: task.task,
 				cwd: childCwd,
 				model: task.model ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined),
+				expectedModelRoute: task.authorizedRoute,
 				thinkingLevel: ctx.thinkingLevel,
 				signal,
 				onUpdate: update,

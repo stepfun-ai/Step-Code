@@ -796,6 +796,8 @@ test("S3 leaves subagent and agent_send as the only registered lane tools", () =
 	})(api);
 	// A tool absent from the registry cannot be dispatched: calling the deleted
 	// names surfaces as tool-not-found in the host, which this pins down.
+	// Model discovery is the separate, always-registered `models` tool, so it does
+	// not appear among these lane tools.
 	expect([...tools.keys()].sort()).toEqual(["agent_send", "subagent"]);
 	for (const removed of ["agent_reply", "agent_interrupt", "agent_wait", "agent_list"]) {
 		expect(tools.get(removed)).toBeUndefined();

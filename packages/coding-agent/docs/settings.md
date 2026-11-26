@@ -190,6 +190,16 @@ A callback that catches an agent-node failure and rethrows a **new** error is co
 }
 ```
 
+### Subagent models
+
+A `subagent` call may name the model its child runs on through an optional `model` parameter, written as `provider/modelId` or as a bare model id on the calling session's provider. `tasks` and `chain` entries take the same field.
+
+There is no allowlist: any model the session can run is selectable. The `models` tool lists that catalog, and a refusal names the models the requested provider offers. An explicit `model` outranks an agent definition's own `model` frontmatter, which acts as a default; omitting `model` inherits the calling session's model. An agent definition's `model` is passed through as written, because it predates this parameter and the CLI already resolves it.
+
+The catalog is not copied into the tool definition. It is large and changes with credentials, so it lives in the `models` tool's result, read at call time; the parameter description only tells the caller to look an id up there. A tool definition is part of the cached prompt prefix, so keeping the catalog out of it keeps the prefix stable.
+
+An explicit `model` is checked against the catalog before any child starts. A host with no catalog to consult skips that check and leaves the CLI as the authority.
+
 ### Message Delivery
 
 | Setting | Type | Default | Description |

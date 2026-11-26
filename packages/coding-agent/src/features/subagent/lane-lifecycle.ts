@@ -573,11 +573,17 @@ export function createLaneLifecycle(host: LaneLifecycleHost): LaneLifecycle {
 		return `Stopped lane ${lane.id}; you will get one notification once it has wound down`;
 	};
 
-	/** Single-mode params for a follow-up turn. Approval was given when the lane started. */
+	/**
+	 * Single-mode params for a follow-up turn. Approval was given when the lane
+	 * started. The route travels too: a lane whose child has already exited is
+	 * respawned from these params, and dropping `model` would silently resume the
+	 * same transcript on the parent's model.
+	 */
 	const followUpParams = (lane: BackgroundAgentLane, prompt: string): SubagentParams => ({
 		agent: lane.details.results[0]?.agent ?? lane.params.agent,
 		task: prompt,
 		cwd: lane.params.cwd,
+		...(lane.params.model !== undefined ? { model: lane.params.model } : {}),
 		agentScope: lane.params.agentScope,
 		confirmProjectAgents: false,
 	});
