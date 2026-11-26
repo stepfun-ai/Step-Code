@@ -43,6 +43,7 @@ import {
 	getLiveSubagentSession,
 	MAX_RETAINED_FINISHED_LANES,
 } from "./subagent/lane-lifecycle.ts";
+import type { SubagentModelRoute } from "./subagent/model-route.ts";
 import {
 	renderAgentNotification,
 	renderSubagentResult,
@@ -157,6 +158,8 @@ export interface StepSubagentRunInput {
 	task: string;
 	cwd: string;
 	model?: string;
+	/** Exact authorized route; the RPC runner verifies it before sending a prompt. */
+	expectedModelRoute?: SubagentModelRoute;
 	thinkingLevel?: ThinkingLevel;
 	signal?: AbortSignal;
 	onUpdate?: (result: StepSubagentRunResult) => void;
@@ -313,13 +316,49 @@ export function resolveSubagentConcurrency(configured?: number, option?: number)
 	return SUBAGENT_MAX_CONCURRENCY_DEFAULT;
 }
 
-// Keep the model-facing contract identical to Pi's subagent example. Step
-// adapts discovery, process invocation, storage, telemetry, and theme only.
+/**
+ * The `model` parameter's description.
+ *
+ * Static by design. The catalog this points at is large and changes with
+ * credentials, so it lives behind the `models` tool and is read at call time; a
+ * pasted list would put the largest, most volatile text in the tool definition,
+ * which is the most expensive part of the cached prompt prefix to change.
+ *
+ * Kept to what a caller needs *before* choosing: the accepted forms, the
+ * instruction to read the catalog instead of guessing, and what omitting means.
+ * The consequences of naming a route the session cannot run are left out: that
+ * answer already arrives as a tool error when it matters, naming the provider's
+ * models, and a tool error is not part of the cached prefix. The provider hint
+ * is likewise left to the `models` tool's own parameter description, which is
+ * where a caller reads it.
+ *
+ * The instruction to look the id up rather than guess it is the load-bearing
+ * sentence: a guessed id either fails validation or, worse, resolves fuzzily to
+ * a different model than the caller meant.
+ */
+const SUBAGENT_MODEL_DESCRIPTION = [
+	"Model for this task's child, as `provider/modelId` or a bare id on this session's provider.",
+	"Do not guess the ID: look it up with the `models` tool.",
+	"Omit to inherit this session's model.",
+].join(" ");
+
+/** A `tasks`/`chain` entry. Same shape as before plus the route. */
+export interface StepDelegatedTaskItem {
+	agent: string;
+	task: string;
+	cwd?: string;
+	model?: string;
+	isolateWorkspace?: boolean;
+	worktreeName?: string;
+	retainWorktree?: boolean;
+}
+
 export const StepTaskItem = Type.Object(
 	{
 		agent: Type.String({ description: "Name of the agent to invoke" }),
 		task: Type.String({ description: "Task to delegate to the agent" }),
 		cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+		model: Type.Optional(Type.String({ description: SUBAGENT_MODEL_DESCRIPTION })),
 	},
 	{ additionalProperties: false },
 );
@@ -329,6 +368,7 @@ export const StepChainItem = Type.Object(
 		agent: Type.String({ description: "Name of the agent to invoke" }),
 		task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 		cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+		model: Type.Optional(Type.String({ description: SUBAGENT_MODEL_DESCRIPTION })),
 	},
 	{ additionalProperties: false },
 );
@@ -352,6 +392,7 @@ const StepSubagentParamsSchema = Type.Object(
 		chain: Type.Optional(
 			Type.Array(StepChainItem, { description: "Array of {agent, task} for sequential execution" }),
 		),
+		model: Type.Optional(Type.String({ description: SUBAGENT_MODEL_DESCRIPTION })),
 		agentScope: Type.Optional(StepAgentScopeSchema),
 		confirmProjectAgents: Type.Optional(
 			Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),

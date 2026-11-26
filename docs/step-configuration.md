@@ -156,6 +156,33 @@ file. Print and JSON runs never start lanes. See the [orchestration
 lifecycle](orchestration-lifecycle.md#background-subagent-lanes) for lane
 behavior.
 
+#### Naming a child model
+
+A `subagent` call may name the model its child runs on through an optional
+`model` parameter, written as `provider/modelId` or as a bare model id on the
+calling session's provider. The same field exists on `tasks` and `chain` entries,
+so a batch can route each task separately.
+
+Any model the session can run is selectable — there is no separate allowlist to
+configure. The `models` tool lists the catalog, and the parameter description
+tells the model to look an id up there rather than guess one. That catalog is
+deliberately not pasted into the tool definition: it is large and changes with
+credentials, and a tool definition is the most expensive part of the cached
+prompt prefix to change.
+
+An explicit `model` outranks an agent definition's own `model` frontmatter, which
+therefore acts as a default. Omit `model` to inherit the calling session's model,
+which is the default; a call that names no route is never checked. An agent
+definition's `model` is host configuration that predates this parameter, so it is
+passed through to the CLI as written and is never rejected.
+
+An explicit `model` is resolved against the catalog before any child starts, so a
+typo fails as an ordinary tool error naming the models that provider offers,
+rather than as a spawned process with a provider failure. The RPC runner then
+confirms the child's actual route after it starts, rejecting CLI fuzzy matches or
+falls back to a different model. A background lane keeps the route it was launched with
+when a reply respawns its child.
+
 ### Plan file storage
 
 Native Markdown plans default to

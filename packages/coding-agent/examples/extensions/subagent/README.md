@@ -137,7 +137,7 @@ model: step-5-preview
 System prompt for the agent goes here.
 ```
 
-When `model` is omitted, the subagent inherits the dispatching session's active model and thinking level.
+When `model` is omitted, the subagent inherits the dispatching session's active model and thinking level. A `model` written here is a default: a `subagent` call that names its own `model` takes precedence. Any model the session can run is selectable — run the `models` tool to see the exact ids.
 
 **Locations:**
 - `~/.stepcode/agent/agents/*.md` - User-level (always loaded)

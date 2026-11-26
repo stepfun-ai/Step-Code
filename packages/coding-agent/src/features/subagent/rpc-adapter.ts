@@ -33,8 +33,11 @@ import {
 } from "../step-subagent.ts";
 import { WORKFLOW_ACL_ENV } from "../workflow/acl-extension.ts";
 import { liveSubagentSessions } from "./lane-lifecycle.ts";
+import { type SubagentModelRoute, sameSubagentRoute } from "./model-route.ts";
 
 const MAX_STDERR_CHARS = 32_000;
+/** Bound on the local `get_state` route handshake, which should answer at once. */
+const ROUTE_CHECK_TIMEOUT_MS = 15_000;
 
 /**
  * Handlers for one child stdout line in rpc mode. Lines are routed by JSON
@@ -134,6 +137,10 @@ type SubagentRpcCommand = Record<string, unknown> & { type: string; id?: string 
 
 interface SubagentRpcTurn {
 	promptId: string;
+	/** Set while a `get_state` handshake is outstanding for this turn. */
+	modelCheckId?: string;
+	/** The route this turn must confirm before its prompt is sent. */
+	expectedRoute?: SubagentModelRoute;
 	input: StepSubagentRunInput;
 	current: StepSubagentRunResult;
 	aborted: boolean;
@@ -246,6 +253,9 @@ export async function createSubagentRpcSession(
 	// list. Serialized transports default to durable events, so ask for them.
 	const args = ["--mode", "rpc", "--session-id", sessionId, "--include-live-events"];
 	const model = input.agent.model ?? input.model;
+	// CLI matching is fuzzy and can fall back to another provider. A subagent
+	// must confirm the exact authorized route before it sends any prompt.
+	const expectedRoute = input.expectedModelRoute;
 	if (model) args.push("--model", model);
 	if (input.thinkingLevel && !input.agent.model) args.push("--thinking", input.thinkingLevel);
 	const tools = normalizeChildTools(input.agent.tools);
@@ -299,6 +309,7 @@ export async function createSubagentRpcSession(
 	const turnIdleTimeoutMs = input.turnIdleTimeoutMs ?? resolveSubagentTurnIdleTimeoutMs();
 	let idleTimer: ReturnType<typeof setTimeout> | undefined;
 	let wallTimer: ReturnType<typeof setTimeout> | undefined;
+	let routeTimer: ReturnType<typeof setTimeout> | undefined;
 	let tempDirRemoval: Promise<void> | undefined;
 
 	/**
@@ -369,6 +380,35 @@ export async function createSubagentRpcSession(
 		if (turn) armIdleWatchdog();
 	};
 
+	/**
+	 * Bound the `get_state` route handshake.
+	 *
+	 * The turn's other timers are deliberately generous (a turn may legitimately
+	 * run for an hour), but a child that never answers the handshake would sit
+	 * there until the idle budget expires. This handshake is one local round trip,
+	 * so a short limit is enough and a clear error beats a silent wait.
+	 */
+	const armRouteCheck = (): void => {
+		clearRouteCheck();
+		if (!turn?.modelCheckId) return;
+		const active = turn;
+		routeTimer = setTimeout(() => {
+			if (turn !== active || active.modelCheckId === undefined) return;
+			settleTurn((current) => {
+				current.exitCode = 1;
+				current.stopReason = "error";
+				current.errorMessage = `Subagent did not answer the route check within ${Math.round(ROUTE_CHECK_TIMEOUT_MS / 1000)}s`;
+				closeStdin();
+			});
+		}, ROUTE_CHECK_TIMEOUT_MS);
+		routeTimer.unref?.();
+	};
+
+	const clearRouteCheck = (): void => {
+		if (routeTimer) clearTimeout(routeTimer);
+		routeTimer = undefined;
+	};
+
 	const appendStderr = (text: string): void => {
 		if (turn) {
 			const current = turn.current;
@@ -425,6 +465,7 @@ export async function createSubagentRpcSession(
 		turn = undefined;
 		clearIdleWatchdog();
 		clearWallClock();
+		clearRouteCheck();
 		active.cleanup?.();
 		finalize(active.current, active.aborted);
 		active.current.updatedAt = Date.now();
@@ -444,6 +485,64 @@ export async function createSubagentRpcSession(
 			onResponse: (response) => {
 				const commandType = response.id ? pendingCommandAcks.get(response.id) : undefined;
 				if (response.id) pendingCommandAcks.delete(response.id);
+				const active = turn;
+				const expectedRoute = active?.expectedRoute;
+				if (active?.modelCheckId && response.id === active.modelCheckId && expectedRoute) {
+					active.modelCheckId = undefined;
+					clearRouteCheck();
+					// The handshake response carries the child's session file too, so take
+					// it before any branch settles; otherwise an abort here would lose it.
+					const file = response.data?.sessionFile;
+					if (typeof file === "string" && file) sessionFile = file;
+					if (active.aborted) {
+						settleTurn((current) => {
+							current.exitCode = 0;
+							current.stopReason = "aborted";
+							current.errorMessage = "Subagent was aborted";
+						});
+						return;
+					}
+					const actual = response.data?.model;
+					const actualRoute: SubagentModelRoute | undefined =
+						isRecordValue(actual) &&
+						typeof actual.provider === "string" &&
+						typeof actual.id === "string" &&
+						actual.provider !== "" &&
+						actual.id !== ""
+							? { provider: actual.provider, model: actual.id }
+							: undefined;
+					if (
+						response.success !== true ||
+						actualRoute === undefined ||
+						!sameSubagentRoute(actualRoute, expectedRoute)
+					) {
+						// Name what actually answered, and why it was rejected: "get_state
+						// failed" and "the child resolved elsewhere" need different fixes.
+						const reason =
+							response.success !== true
+								? `the route check failed: ${response.error ?? "unknown error"}`
+								: `it resolved to ${actualRoute === undefined ? "an unknown route" : `${actualRoute.provider}/${actualRoute.model}`}`;
+						settleTurn((current) => {
+							current.exitCode = 1;
+							current.stopReason = "error";
+							current.errorMessage = `Subagent did not resolve to the authorized LLM route "${expectedRoute.provider}/${expectedRoute.model}": ${reason}`;
+							closeStdin();
+						});
+						return;
+					}
+					if (!send({ type: "prompt", id: active.promptId, message: active.input.task })) {
+						settleTurn((current) => {
+							current.exitCode = 1;
+							current.stopReason = "error";
+							current.errorMessage = "Failed to write the task to the subagent's stdin";
+						});
+					} else if (!sessionFile) {
+						// The handshake response may omit the path (for example a session
+						// with no file); ask once more so live frames can still name it.
+						send({ type: "get_state", id: stateRequestId });
+					}
+					return;
+				}
 				if (response.id === stateRequestId) {
 					// The session-file probe is best effort; a failure only omits the path.
 					const file = response.data?.sessionFile;
@@ -542,6 +641,7 @@ export async function createSubagentRpcSession(
 		for (const timer of exitTimers) clearTimeout(timer);
 		if (stdoutBuffer.trim()) handleLine(stdoutBuffer.trim());
 		stdoutBuffer = "";
+		const modelCheckPending = turn?.modelCheckId !== undefined;
 		settleTurn((current, aborted) => {
 			current.exitCode = code ?? 1;
 			if (aborted) {
@@ -550,6 +650,10 @@ export async function createSubagentRpcSession(
 			} else if (processError) {
 				current.stopReason = "error";
 				current.errorMessage = processError;
+			} else if (modelCheckPending) {
+				current.exitCode = 1;
+				current.stopReason = "error";
+				current.errorMessage = "Subagent exited before confirming its authorized LLM route";
 			} else if ((code ?? 1) !== 0 && current.stopReason === undefined) {
 				current.stopReason = "error";
 				current.errorMessage = current.errorMessage ?? `Subagent exited with code ${code ?? 1}`;
@@ -585,8 +689,12 @@ export async function createSubagentRpcSession(
 				updatedAt: Date.now(),
 			};
 			idleStderr = "";
+			// The route is per turn: a lane can start on the parent's model and be
+			// handed a route later, or keep the one it was launched with.
+			const turnRoute = turnInput.expectedModelRoute ?? expectedRoute;
 			const active: SubagentRpcTurn = {
 				promptId,
+				...(turnRoute ? { modelCheckId: randomUUID(), expectedRoute: turnRoute } : {}),
 				input: turnInput,
 				current,
 				aborted: turnInput.signal?.aborted === true,
@@ -624,7 +732,10 @@ export async function createSubagentRpcSession(
 				turnInput.signal.addEventListener("abort", onAbort, { once: true });
 				active.cleanup = () => turnInput.signal?.removeEventListener("abort", onAbort);
 			}
-			if (!send({ type: "prompt", id: promptId, message: turnInput.task })) {
+			const command: SubagentRpcCommand = active.modelCheckId
+				? { type: "get_state", id: active.modelCheckId }
+				: { type: "prompt", id: promptId, message: turnInput.task };
+			if (!send(command)) {
 				settleTurn((result) => {
 					result.exitCode = 1;
 					result.stopReason = "error";
@@ -632,7 +743,8 @@ export async function createSubagentRpcSession(
 				});
 				return;
 			}
-			if (!sessionFile) send({ type: "get_state", id: stateRequestId });
+			if (!sessionFile && !active.modelCheckId) send({ type: "get_state", id: stateRequestId });
+			armRouteCheck();
 			armIdleWatchdog();
 			armWallClock(turnInput.turnTimeoutMs);
 		});
