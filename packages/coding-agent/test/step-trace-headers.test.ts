@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	applyStepTraceHeaders,
 	encodeStepTraceHeaderValue,
+	isStepFirstPartyTraceUrl,
 	isStepTraceRequestAllowed,
 	matchesStepTraceBaseUrl,
 	resolveStepTraceAllowlist,
@@ -87,6 +88,54 @@ describe("Step trace headers", () => {
 			allowedBaseUrls: [],
 		});
 		expect(headers).toEqual({ "x-step-client": "cli" });
+	});
+
+	it("sends the session id as x-session-id on Step's first-party hosts", () => {
+		for (const requestUrl of [
+			"https://api.stepfun.com/step_plan/v1/chat/completions",
+			"https://api.stepfun.com/v1/messages",
+			"https://api.stepfun.ai/v1/responses",
+		]) {
+			const headers: Record<string, string | null> = {};
+			// No allowlist and no field policy: the first-party host still gets the
+			// session id, and nothing else, under the vendor-neutral name.
+			applyStepTraceHeaders(headers, trace, { requestUrl, allowedBaseUrls: [] });
+			expect(headers).toEqual({ "x-step-client": "cli", "x-session-id": "session-1" });
+		}
+	});
+
+	it("keeps the session id off every other host", () => {
+		const headers: Record<string, string | null> = {};
+		applyStepTraceHeaders(headers, trace, {
+			requestUrl: "https://api.stepfun.com.example/v1",
+			allowedBaseUrls: [],
+		});
+		expect(headers).toEqual({ "x-step-client": "cli" });
+	});
+
+	it("omits x-session-id on a first-party host when the session id is absent", () => {
+		const headers: Record<string, string | null> = {};
+		applyStepTraceHeaders(headers, {}, { requestUrl: "https://api.stepfun.com/step_plan/v1", allowedBaseUrls: [] });
+		expect(headers).toEqual({ "x-step-client": "cli" });
+	});
+
+	it("recognizes only https first-party hosts", () => {
+		expect(isStepFirstPartyTraceUrl("https://api.stepfun.com/step_plan/v1")).toBe(true);
+		expect(isStepFirstPartyTraceUrl("https://API.Stepfun.Com/v1")).toBe(true);
+		expect(isStepFirstPartyTraceUrl("https://api.stepfun.ai/v1")).toBe(true);
+		expect(isStepFirstPartyTraceUrl("http://api.stepfun.com/v1")).toBe(false);
+		expect(isStepFirstPartyTraceUrl("https://api.stepfun.com.evil/v1")).toBe(false);
+		expect(isStepFirstPartyTraceUrl(undefined)).toBe(false);
+	});
+
+	it("does not duplicate the session id when the first-party host is also allowlisted", () => {
+		const headers: Record<string, string | null> = {};
+		applyStepTraceHeaders(headers, trace, {
+			requestUrl: "https://api.stepfun.com/step_plan/v1",
+			allowedBaseUrls: ["https://api.stepfun.com/step_plan/v1"],
+			highSensitivityFields: ["session-id"],
+		});
+		expect(headers).toEqual({ "x-step-client": "cli", "x-session-id": "session-1" });
 	});
 
 	it("matches only a complete URL prefix", () => {
