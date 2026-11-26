@@ -169,6 +169,23 @@ const LegacyRetryTableSchema = Type.Object(
 	{ additionalProperties: false, description: "Retry and backoff behavior." },
 );
 
+/**
+ * The older `[skills]` table, which `migrateSettings` turns into the array of
+ * the same name plus `enableSkillCommands`.
+ *
+ * Listed as an alternative shape so the editor and the loader agree about a file
+ * that still uses it.
+ */
+const LegacySkillsTableSchema = Type.Object(
+	{
+		enableSkillCommands: Type.Optional(Type.Boolean({ description: "Promoted to the top-level key on load." })),
+		customDirectories: Type.Optional(
+			Type.Array(Type.String(), { description: "Becomes the `skills` array on load." }),
+		),
+	},
+	{ additionalProperties: false, description: "Older object form of `skills`; migrated on load." },
+);
+
 const TelemetryTableSchema = Type.Object(
 	{
 		enabled: Type.Optional(
@@ -266,6 +283,12 @@ const StepProductProperties = {
 		),
 	),
 	subagent: Type.Optional(SubagentTableSchema),
+	skills: Type.Optional(
+		Type.Union(
+			[Type.Array(Type.String(), { description: "Local skill files or directories." }), LegacySkillsTableSchema],
+			{ description: "Local skill files or directories. The older `[skills]` table is migrated on load." },
+		),
+	),
 	// Rewritten by `SettingsManager.migrateSettings` before any read. Listed here
 	// so a file that still uses them is not flagged as invalid.
 	queueMode: Type.Optional(

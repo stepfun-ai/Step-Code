@@ -313,6 +313,7 @@ Step writes it. It is a record, not a setting.
 | `queueMode` | string | - | Older spelling of `steeringMode`; migrated on load |
 | `websockets` | boolean | - | Older spelling of `transport`; migrated on load (`true` means `websocket`) |
 | `retry.maxDelayMs` | number | - | Older spelling of `retry.provider.maxRetryDelayMs`; migrated on load |
+| `skills` as a table | table | - | Older shape with `customDirectories` and `enableSkillCommands`; migrated to the array plus the boolean on load |
 
 Step rewrites these when it reads the file, so they keep working. Prefer the
 current spelling.

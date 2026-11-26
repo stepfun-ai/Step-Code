@@ -291,6 +291,16 @@ describe("legacy keys are part of the schema", () => {
 	test("retry.maxDelayMs is in the schema", () => {
 		expect(schemaNode(["retry", "maxDelayMs"])).toBeDefined();
 	});
+
+	// `migrateSettings` rewrites this shape into an array plus a boolean, so a
+	// file that still uses it loads. Without it here the editor would call that
+	// file invalid.
+	test("the older [skills] table is accepted alongside the array", () => {
+		const skills = schemaNode(["skills"]) as unknown as { anyOf?: unknown[] } | undefined;
+		expect(skills?.anyOf?.length).toBe(2);
+		expect(compileConfig.Check({ skills: { customDirectories: ["/tmp/x"] } })).toBe(true);
+		expect(compileConfig.Check({ skills: ["/tmp/x"] })).toBe(true);
+	});
 });
 
 describe("the models.json editor schema only adds strictness", () => {

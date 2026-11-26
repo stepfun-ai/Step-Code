@@ -503,11 +503,34 @@
 			"description": "Local extension files or directories."
 		},
 		"skills": {
-			"type": "array",
-			"items": {
-				"type": "string"
-			},
-			"description": "Local skill files or directories."
+			"anyOf": [
+				{
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Local skill files or directories."
+				},
+				{
+					"type": "object",
+					"properties": {
+						"enableSkillCommands": {
+							"type": "boolean",
+							"description": "Promoted to the top-level key on load."
+						},
+						"customDirectories": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							},
+							"description": "Becomes the `skills` array on load."
+						}
+					},
+					"additionalProperties": false,
+					"description": "Older object form of `skills`; migrated on load."
+				}
+			],
+			"description": "Local skill files or directories. The older `[skills]` table is migrated on load."
 		},
 		"prompts": {
 			"type": "array",
