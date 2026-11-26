@@ -580,7 +580,7 @@ export function provisionInstallCommand(
 
 /** Install the executable declared by a built-in plugin, when it is missing. */
 export async function provisionBuiltinPlugin(provision: StepPluginProvision): Promise<string | undefined> {
-	if (provision.command !== "steppage-mcp" || process.platform === "win32") {
+	if (provision.command !== "steppage-mcp") {
 		return undefined;
 	}
 	const install = provisionInstallCommand(provision);
