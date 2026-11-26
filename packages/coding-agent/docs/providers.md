@@ -22,7 +22,7 @@ Use `/login` in interactive mode, then select a provider:
 - xAI (Grok/X subscription)
 - OpenRouter (OAuth-minted API key billed from OpenRouter credits)
 
-Use `/logout` to clear credentials. Tokens are stored in `~/.stepcode/agent/auth.json` and auto-refresh when expired. OpenRouter instead mints a user-controlled API key that does not expire automatically.
+Use `/logout` to clear credentials. Tokens are stored in `~/.stepcode/auth.json` and auto-refresh when expired. OpenRouter instead mints a user-controlled API key that does not expire automatically.
 
 ### OpenAI Codex
 
@@ -102,7 +102,7 @@ Reference for environment variables and `auth.json` keys: [`const envMap`](https
 
 #### Auth File
 
-Store credentials in `~/.stepcode/agent/auth.json`:
+Store credentials in `~/.stepcode/auth.json`:
 
 ```json
 {

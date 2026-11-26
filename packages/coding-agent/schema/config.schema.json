@@ -1,0 +1,1735 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "StepCode config.toml",
+	"type": "object",
+	"properties": {
+		"lastChangelogVersion": {
+			"type": "string",
+			"description": "Last changelog version shown after an update. Written by the product."
+		},
+		"defaultProvider": {
+			"type": "string",
+			"description": "Startup provider; saved by pressing Enter in `/model`."
+		},
+		"defaultModel": {
+			"type": "string",
+			"description": "Startup model id; saved by pressing Enter in `/model`."
+		},
+		"recentModels": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"required": [
+					"provider",
+					"id"
+				],
+				"properties": {
+					"provider": {
+						"type": "string",
+						"minLength": 1
+					},
+					"id": {
+						"type": "string",
+						"minLength": 1
+					}
+				},
+				"additionalProperties": false,
+				"description": "A recently selected model."
+			},
+			"description": "Recently selected models, newest first (global only)."
+		},
+		"defaultThinkingLevel": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "off"
+				},
+				{
+					"type": "string",
+					"const": "minimal"
+				},
+				{
+					"type": "string",
+					"const": "low"
+				},
+				{
+					"type": "string",
+					"const": "medium"
+				},
+				{
+					"type": "string",
+					"const": "high"
+				},
+				{
+					"type": "string",
+					"const": "xhigh"
+				},
+				{
+					"type": "string",
+					"const": "max"
+				}
+			],
+			"description": "Startup thinking level; saved by pressing Enter in `/effort`."
+		},
+		"modelThinkingLevels": {
+			"type": "object",
+			"patternProperties": {
+				"^.*$": {
+					"anyOf": [
+						{
+							"type": "string",
+							"const": "off"
+						},
+						{
+							"type": "string",
+							"const": "minimal"
+						},
+						{
+							"type": "string",
+							"const": "low"
+						},
+						{
+							"type": "string",
+							"const": "medium"
+						},
+						{
+							"type": "string",
+							"const": "high"
+						},
+						{
+							"type": "string",
+							"const": "xhigh"
+						},
+						{
+							"type": "string",
+							"const": "max"
+						}
+					]
+				}
+			},
+			"description": "Per-model startup thinking levels keyed by `provider/modelId`."
+		},
+		"transport": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "sse"
+				},
+				{
+					"type": "string",
+					"const": "websocket"
+				},
+				{
+					"type": "string",
+					"const": "websocket-cached"
+				},
+				{
+					"type": "string",
+					"const": "auto"
+				}
+			],
+			"description": "Preferred transport for providers that support several: \"sse\", \"websocket\", \"websocket-cached\", or \"auto\" (default)."
+		},
+		"steeringMode": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "all"
+				},
+				{
+					"type": "string",
+					"const": "one-at-a-time"
+				}
+			],
+			"description": "How a message typed while the model is working is delivered (default one-at-a-time)."
+		},
+		"followUpMode": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "all"
+				},
+				{
+					"type": "string",
+					"const": "one-at-a-time"
+				}
+			],
+			"description": "How queued follow-up messages are delivered (default one-at-a-time)."
+		},
+		"theme": {
+			"type": "string",
+			"description": "Theme name: \"dark\", \"light\", \"step-blue\" (default), \"step-violet\", \"step-violet-light\", or a custom theme."
+		},
+		"compaction": {
+			"type": "object",
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"description": "Enable automatic compaction (default true)."
+				},
+				"reserveTokens": {
+					"type": "integer",
+					"minimum": 1,
+					"description": "Headroom kept free for the next response (default 16384). Under the v2 policy an explicit value only caps the trigger earlier; anything but a positive integer is ignored."
+				},
+				"keepRecentTokens": {
+					"type": "number",
+					"minimum": 0,
+					"description": "Recent tokens kept verbatim by the summary (default 20000)."
+				},
+				"triggerPolicy": {
+					"anyOf": [
+						{
+							"type": "string",
+							"const": "v2"
+						},
+						{
+							"type": "string",
+							"const": "legacy"
+						}
+					],
+					"description": "`v2` (default) checks once before each request; `legacy` keeps the previous checkpoints."
+				},
+				"triggerRatio": {
+					"type": "number",
+					"minimum": 0.5,
+					"maximum": 0.95,
+					"description": "Fraction of the context window that triggers compaction (default 0.9)."
+				},
+				"modelTriggerRatios": {
+					"type": "object",
+					"patternProperties": {
+						"^.*$": {
+							"type": "number",
+							"minimum": 0.5,
+							"maximum": 0.95
+						}
+					},
+					"description": "Per-model trigger ratios keyed by `provider/id` (0.5-0.95). A value outside the range is dropped and the global ratio applies."
+				},
+				"tokenLimit": {
+					"type": "integer",
+					"minimum": 1,
+					"description": "Absolute token ceiling; only makes compaction trigger earlier. Must be a positive integer, or it is ignored."
+				},
+				"contextProjection": {
+					"anyOf": [
+						{
+							"type": "string",
+							"const": "off"
+						},
+						{
+							"type": "string",
+							"const": "lightweight-v1"
+						},
+						{
+							"type": "string",
+							"const": "clm-v1"
+						}
+					],
+					"description": "Context projection mode: `off` (default, native compaction), `lightweight-v1`, or `clm-v1`."
+				},
+				"autoClm": {
+					"type": "object",
+					"properties": {
+						"enabled": {
+							"type": "boolean",
+							"description": "Enable CLM maintenance requests (default true)."
+						},
+						"softThresholdRatio": {
+							"type": "number",
+							"minimum": 0.3,
+							"maximum": 0.85,
+							"description": "Trigger CLM earlier than the native threshold (0.3-0.85). Omit for the native threshold."
+						},
+						"minContextTokens": {
+							"type": "integer",
+							"minimum": 1024,
+							"maximum": 1000000,
+							"description": "Smallest context that may trigger CLM (default 8000, 1024-1000000)."
+						},
+						"cooldownTurns": {
+							"type": "integer",
+							"minimum": 1,
+							"maximum": 100,
+							"description": "Turns between CLM requests (default 3, 1-100)."
+						},
+						"maxRequests": {
+							"type": "integer",
+							"minimum": 1,
+							"maximum": 3,
+							"description": "CLM requests per turn (default 2, 1-3)."
+						},
+						"timeoutMs": {
+							"type": "integer",
+							"minimum": 100,
+							"maximum": 300000,
+							"description": "CLM request timeout in milliseconds (default 90000, 100-300000)."
+						},
+						"maxOutputTokens": {
+							"type": "integer",
+							"minimum": 512,
+							"maximum": 32768,
+							"description": "CLM summary output token limit (default 8192, 512-32768)."
+						},
+						"minSavingsTokens": {
+							"type": "integer",
+							"minimum": 1,
+							"maximum": 1000000,
+							"description": "Smallest saving that justifies a CLM request (default 1024, 1-1000000)."
+						},
+						"minSavingsRatio": {
+							"type": "number",
+							"minimum": 0.01,
+							"maximum": 0.5,
+							"description": "Smallest saving ratio that justifies a CLM request (0.01-0.5)."
+						},
+						"coldMaxPrefillTokens": {
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 100000000,
+							"description": "Largest uncached CLM prefill in tokens; 0 removes the bound (default 262144, 0-100000000)."
+						}
+					},
+					"additionalProperties": false,
+					"description": "Host-scheduled maintenance inside `contextProjection = \"clm-v1\"`."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Automatic context compaction."
+		},
+		"branchSummary": {
+			"type": "object",
+			"properties": {
+				"reserveTokens": {
+					"type": "number",
+					"minimum": 0,
+					"description": "Tokens reserved for the prompt and the summary (default 16384)."
+				},
+				"skipPrompt": {
+					"type": "boolean",
+					"description": "Skip the \"Summarize branch?\" prompt and default to no summary (default false)."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Summaries written when navigating away from a branch."
+		},
+		"retry": {
+			"type": "object",
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"description": "Retry failed requests (default true)."
+				},
+				"maxRetries": {
+					"type": "number",
+					"minimum": 0,
+					"description": "Transient retry attempts (default 3)."
+				},
+				"rateLimitMaxRetries": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 20,
+					"description": "Rate-limit retry attempts, tracked separately (default 3, 0-20)."
+				},
+				"baseDelayMs": {
+					"type": "number",
+					"minimum": 0,
+					"description": "Exponential backoff base in milliseconds (default 2000)."
+				},
+				"provider": {
+					"type": "object",
+					"properties": {
+						"timeoutMs": {
+							"type": "number",
+							"minimum": 0,
+							"description": "Provider request timeout in milliseconds."
+						},
+						"maxRetries": {
+							"type": "number",
+							"minimum": 0,
+							"description": "Provider retry attempts."
+						},
+						"maxRetryDelayMs": {
+							"type": "number",
+							"minimum": 0,
+							"description": "Longest server-requested delay before failing (default 60000)."
+						},
+						"streamIdleTimeoutMs": {
+							"type": "number",
+							"minimum": 0,
+							"description": "Longest wait for the next provider event (default 300000); 0 disables it."
+						}
+					},
+					"additionalProperties": false,
+					"description": "Transport-level retry and timeout limits."
+				},
+				"maxDelayMs": {
+					"type": "number",
+					"minimum": 0,
+					"description": "Older spelling of `provider.maxRetryDelayMs`; migrated on load."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Retry and backoff behavior."
+		},
+		"hideThinkingBlock": {
+			"type": "boolean",
+			"description": "Hide thinking blocks in output."
+		},
+		"statusTips": {
+			"type": "boolean",
+			"description": "Show one tip per turn under the status row (default true)."
+		},
+		"showCacheMissNotices": {
+			"type": "boolean",
+			"description": "Show prompt-cache miss and compaction cost notices (default false)."
+		},
+		"externalEditor": {
+			"type": "string",
+			"description": "Command for Ctrl+G; takes precedence over `VISUAL` and `EDITOR`."
+		},
+		"shellPath": {
+			"type": "string",
+			"description": "Shell used for tool commands; supports a leading `~`."
+		},
+		"quietStartup": {
+			"type": "boolean",
+			"description": "Hide the startup header (default false)."
+		},
+		"defaultProjectTrust": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "ask"
+				},
+				{
+					"type": "string",
+					"const": "always"
+				},
+				{
+					"type": "string",
+					"const": "never"
+				}
+			],
+			"description": "Fallback project trust behavior for non-interactive runs (default \"ask\", global only)."
+		},
+		"shellCommandPrefix": {
+			"type": "string",
+			"description": "Text prepended to every shell command, for example alias setup."
+		},
+		"npmCommand": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "argv for package lookups, for example [\"mise\", \"exec\", \"npm\"]."
+		},
+		"collapseChangelog": {
+			"type": "boolean",
+			"description": "Show condensed changelog entries (default false)."
+		},
+		"enableAnalytics": {
+			"type": "boolean",
+			"description": "Opt-in analytics sharing (default false)."
+		},
+		"trackingId": {
+			"type": "string",
+			"description": "Analytics identifier, generated when analytics is enabled."
+		},
+		"packages": {
+			"type": "array",
+			"items": {
+				"anyOf": [
+					{
+						"type": "string"
+					},
+					{
+						"type": "object",
+						"required": [
+							"source"
+						],
+						"properties": {
+							"source": {
+								"type": "string",
+								"minLength": 1,
+								"description": "npm or git package source."
+							},
+							"autoload": {
+								"type": "boolean",
+								"description": "Start empty and only apply the explicit resource patterns below."
+							},
+							"extensions": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								},
+								"description": "Extension paths or patterns to load."
+							},
+							"skills": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								},
+								"description": "Skill paths or patterns to load."
+							},
+							"prompts": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								},
+								"description": "Prompt template paths or patterns to load."
+							},
+							"themes": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								},
+								"description": "Theme paths or patterns to load."
+							}
+						},
+						"additionalProperties": false,
+						"description": "A package source with resource filtering."
+					}
+				]
+			},
+			"description": "npm or git package sources."
+		},
+		"extensions": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Local extension files or directories."
+		},
+		"skills": {
+			"anyOf": [
+				{
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Local skill files or directories."
+				},
+				{
+					"type": "object",
+					"properties": {
+						"enableSkillCommands": {
+							"type": "boolean",
+							"description": "Promoted to the top-level key on load."
+						},
+						"customDirectories": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							},
+							"description": "Becomes the `skills` array on load."
+						}
+					},
+					"additionalProperties": false,
+					"description": "Older object form of `skills`; migrated on load."
+				}
+			],
+			"description": "Local skill files or directories. The older `[skills]` table is migrated on load."
+		},
+		"prompts": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Local prompt template files or directories."
+		},
+		"themes": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Local theme files or directories."
+		},
+		"enableSkillCommands": {
+			"type": "boolean",
+			"description": "Register skills as `/skill:name` commands (default true)."
+		},
+		"terminal": {
+			"type": "object",
+			"properties": {
+				"showImages": {
+					"type": "boolean",
+					"description": "Render inline images when the terminal supports them (default true)."
+				},
+				"imageWidthCells": {
+					"type": "number",
+					"minimum": 1,
+					"description": "Preferred inline image width in terminal cells (default 60)."
+				},
+				"clearOnShrink": {
+					"type": "boolean",
+					"description": "Clear empty rows when content shrinks (default false)."
+				},
+				"showTerminalProgress": {
+					"type": "boolean",
+					"description": "Emit OSC 9;4 progress indicators (default: auto, on in Otty and Ghostty)."
+				},
+				"hyperlinks": {
+					"anyOf": [
+						{
+							"type": "boolean"
+						},
+						{
+							"type": "string",
+							"const": "auto"
+						}
+					],
+					"description": "Emit OSC 8 hyperlinks: `\"auto\"` (default) decides per terminal."
+				},
+				"images": {
+					"anyOf": [
+						{
+							"type": "string",
+							"const": "kitty"
+						},
+						{
+							"type": "string",
+							"const": "iterm2"
+						},
+						{
+							"type": "string",
+							"const": "auto"
+						},
+						{
+							"type": "boolean",
+							"const": false
+						}
+					],
+					"description": "Inline image protocol: `\"kitty\"`, `\"iterm2\"`, `\"auto\"` (default), or `false`."
+				},
+				"trueColor": {
+					"anyOf": [
+						{
+							"type": "boolean"
+						},
+						{
+							"type": "string",
+							"const": "auto"
+						}
+					],
+					"description": "Use 24-bit color: `\"auto\"` (default) decides per terminal."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Terminal capability overrides; detection is the default."
+		},
+		"images": {
+			"type": "object",
+			"properties": {
+				"autoResize": {
+					"type": "boolean",
+					"description": "Resize images to at most 2000x2000 for model compatibility (default true). Applies to @file attachments, read, and tool-returned images."
+				},
+				"blockImages": {
+					"type": "boolean",
+					"description": "Never send images to providers (default false)."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Image handling before a request is sent."
+		},
+		"enabledModels": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Model patterns available to Ctrl+P cycling."
+		},
+		"defaultTools": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Initial built-in tool selection."
+		},
+		"doubleEscapeAction": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "fork"
+				},
+				{
+					"type": "string",
+					"const": "tree"
+				},
+				{
+					"type": "string",
+					"const": "none"
+				}
+			],
+			"description": "Action for double-escape with an empty editor (default \"tree\")."
+		},
+		"treeFilterMode": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "default"
+				},
+				{
+					"type": "string",
+					"const": "no-tools"
+				},
+				{
+					"type": "string",
+					"const": "user-only"
+				},
+				{
+					"type": "string",
+					"const": "labeled-only"
+				},
+				{
+					"type": "string",
+					"const": "all"
+				}
+			],
+			"description": "Default filter when opening `/tree` (default \"default\")."
+		},
+		"thinkingBudgets": {
+			"type": "object",
+			"properties": {
+				"minimal": {
+					"type": "number",
+					"minimum": 0,
+					"description": "Token budget for the `minimal` thinking level."
+				},
+				"low": {
+					"type": "number",
+					"minimum": 0,
+					"description": "Token budget for the `low` thinking level."
+				},
+				"medium": {
+					"type": "number",
+					"minimum": 0,
+					"description": "Token budget for the `medium` thinking level."
+				},
+				"high": {
+					"type": "number",
+					"minimum": 0,
+					"description": "Token budget for the `high` thinking level."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Custom token budgets per thinking level."
+		},
+		"editorPaddingX": {
+			"type": "number",
+			"minimum": 0,
+			"maximum": 3,
+			"description": "Horizontal padding for the input editor (default 0, 0-3). `/settings` clamps to this range."
+		},
+		"outputPad": {
+			"anyOf": [
+				{
+					"type": "number",
+					"const": 0
+				},
+				{
+					"type": "number",
+					"const": 1
+				}
+			],
+			"description": "Horizontal output padding (default 1)."
+		},
+		"autocompleteMaxVisible": {
+			"type": "number",
+			"minimum": 3,
+			"maximum": 20,
+			"description": "Visible rows in the autocomplete dropdown (default 5, 3-20)."
+		},
+		"showHardwareCursor": {
+			"type": "boolean",
+			"description": "Show the terminal cursor while still positioning it for IME."
+		},
+		"markdown": {
+			"type": "object",
+			"properties": {
+				"codeBlockIndent": {
+					"type": "string",
+					"description": "Indent applied to rendered code blocks (default \"  \")."
+				},
+				"mermaid": {
+					"anyOf": [
+						{
+							"type": "string",
+							"const": "off"
+						},
+						{
+							"type": "string",
+							"const": "final"
+						},
+						{
+							"type": "string",
+							"const": "streaming"
+						}
+					],
+					"description": "Mermaid rendering: `\"off\"`, `\"final\"`, or `\"streaming\"` (default)."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Markdown rendering options."
+		},
+		"warnings": {
+			"type": "object",
+			"properties": {
+				"anthropicExtraUsage": {
+					"type": "boolean",
+					"description": "Warn before an Anthropic request uses extra usage credits (default true)."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Startup and in-session warnings."
+		},
+		"sessionDir": {
+			"type": "string",
+			"description": "Session storage directory."
+		},
+		"httpProxy": {
+			"type": "string",
+			"description": "Proxy URL applied as `HTTP_PROXY` and `HTTPS_PROXY` for managed HTTP clients."
+		},
+		"httpIdleTimeoutMs": {
+			"anyOf": [
+				{
+					"type": "number",
+					"minimum": 0
+				},
+				{
+					"type": "string",
+					"const": "disabled"
+				},
+				{
+					"type": "string",
+					"pattern": "^\\s*\\d+\\s*$"
+				}
+			],
+			"description": "Milliseconds, a numeric string, or \"disabled\" for 0 (default 300000)."
+		},
+		"websocketConnectTimeoutMs": {
+			"anyOf": [
+				{
+					"type": "number",
+					"minimum": 0
+				},
+				{
+					"type": "string",
+					"const": "disabled"
+				},
+				{
+					"type": "string",
+					"pattern": "^\\s*\\d+\\s*$"
+				}
+			],
+			"description": "Milliseconds, a numeric string, or \"disabled\" for 0 (unset leaves it to the provider)."
+		},
+		"tuiMode": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "regular"
+				},
+				{
+					"type": "string",
+					"const": "fullscreen"
+				}
+			],
+			"description": "Interactive renderer mode (default \"regular\")."
+		},
+		"fullscreenExitOutput": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "transcript"
+				},
+				{
+					"type": "string",
+					"const": "resume-hint"
+				}
+			],
+			"description": "What fullscreen mode prints on exit (default \"transcript\")."
+		},
+		"fullscreenScrollbar": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "hidden"
+				},
+				{
+					"type": "string",
+					"const": "auto"
+				},
+				{
+					"type": "string",
+					"const": "always"
+				}
+			],
+			"description": "Fullscreen scrollbar visibility (default \"auto\")."
+		},
+		"fullscreenCopyOnSelect": {
+			"type": "boolean",
+			"description": "Copy the selection when the mouse is released in fullscreen mode (default true)."
+		},
+		"permissionPreset": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "ask"
+				},
+				{
+					"type": "string",
+					"const": "approve-for-me"
+				},
+				{
+					"type": "string",
+					"const": "full-access"
+				},
+				{
+					"type": "string",
+					"const": "confirm"
+				},
+				{
+					"type": "string",
+					"const": "approve"
+				},
+				{
+					"type": "string",
+					"const": "approveforme"
+				},
+				{
+					"type": "string",
+					"const": "bypass"
+				},
+				{
+					"type": "string",
+					"const": "auto"
+				},
+				{
+					"type": "string",
+					"const": "autopilot"
+				},
+				{
+					"type": "string",
+					"const": "bypasspermissions"
+				},
+				{
+					"type": "string",
+					"const": "fullaccess"
+				},
+				{
+					"type": "string",
+					"const": "full"
+				},
+				{
+					"type": "string",
+					"const": "yolo"
+				},
+				{
+					"type": "string",
+					"const": "never-ask"
+				},
+				{
+					"type": "string",
+					"const": "read-only"
+				},
+				{
+					"type": "string",
+					"const": "readonly"
+				},
+				{
+					"type": "string",
+					"const": "strict"
+				},
+				{
+					"type": "string",
+					"const": "plan"
+				}
+			],
+			"description": "Initial approval tier: `ask`, `approve-for-me` (default), or `full-access`. Legacy spellings are accepted and mapped: `confirm`/`auto`/`bypass`/`strict`/`plan`/`read-only` mean `ask`, `approve` means `approve-for-me`, `full`/`fullaccess`/`yolo`/`never-ask` mean `full-access`. Matching ignores case and surrounding spaces. Full Access also needs `fullAccessAcknowledged` from its one-time prompt."
+		},
+		"permissionMode": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "ask"
+				},
+				{
+					"type": "string",
+					"const": "approve-for-me"
+				},
+				{
+					"type": "string",
+					"const": "full-access"
+				},
+				{
+					"type": "string",
+					"const": "confirm"
+				},
+				{
+					"type": "string",
+					"const": "approve"
+				},
+				{
+					"type": "string",
+					"const": "approveforme"
+				},
+				{
+					"type": "string",
+					"const": "bypass"
+				},
+				{
+					"type": "string",
+					"const": "auto"
+				},
+				{
+					"type": "string",
+					"const": "autopilot"
+				},
+				{
+					"type": "string",
+					"const": "bypasspermissions"
+				},
+				{
+					"type": "string",
+					"const": "fullaccess"
+				},
+				{
+					"type": "string",
+					"const": "full"
+				},
+				{
+					"type": "string",
+					"const": "yolo"
+				},
+				{
+					"type": "string",
+					"const": "never-ask"
+				},
+				{
+					"type": "string",
+					"const": "read-only"
+				},
+				{
+					"type": "string",
+					"const": "readonly"
+				},
+				{
+					"type": "string",
+					"const": "strict"
+				},
+				{
+					"type": "string",
+					"const": "plan"
+				}
+			],
+			"description": "Initial approval tier: `ask`, `approve-for-me` (default), or `full-access`. Legacy spellings are accepted and mapped: `confirm`/`auto`/`bypass`/`strict`/`plan`/`read-only` mean `ask`, `approve` means `approve-for-me`, `full`/`fullaccess`/`yolo`/`never-ask` mean `full-access`. Matching ignores case and surrounding spaces. Full Access also needs `fullAccessAcknowledged` from its one-time prompt."
+		},
+		"approvalMode": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "confirm"
+				},
+				{
+					"type": "string",
+					"const": "auto"
+				},
+				{
+					"type": "string",
+					"const": "ask"
+				},
+				{
+					"type": "string",
+					"const": "default"
+				},
+				{
+					"type": "string",
+					"const": "acceptedits"
+				},
+				{
+					"type": "string",
+					"const": "strict"
+				},
+				{
+					"type": "string",
+					"const": "read-only"
+				},
+				{
+					"type": "string",
+					"const": "readonly"
+				},
+				{
+					"type": "string",
+					"const": "plan"
+				},
+				{
+					"type": "string",
+					"const": "bypass"
+				},
+				{
+					"type": "string",
+					"const": "bypasspermissions"
+				}
+			],
+			"description": "Low-level override of the tier's default approval mode: `confirm` or `auto`. Legacy spellings `ask`/`default`/`acceptedits`/`strict`/`read-only`/`plan` mean `confirm`; `bypass`/`bypasspermissions` mean `auto`."
+		},
+		"nonInteractiveApproval": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "allow"
+				},
+				{
+					"type": "string",
+					"const": "deny"
+				}
+			],
+			"description": "Approval fallback when no interactive UI can answer a confirmation: `allow` or `deny` (default). Matching ignores case."
+		},
+		"noninteractiveApproval": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "allow"
+				},
+				{
+					"type": "string",
+					"const": "deny"
+				}
+			],
+			"description": "Accepted for older files; prefer `nonInteractiveApproval`."
+		},
+		"autoResume": {
+			"type": "boolean",
+			"description": "Resume after a bounded model error without asking again."
+		},
+		"autopilot": {
+			"type": "boolean",
+			"description": "Accepted for older files; prefer `autoResume`."
+		},
+		"fullAccessAcknowledged": {
+			"type": "boolean",
+			"description": "Recorded Full Access risk acknowledgment."
+		},
+		"feedbackEnabled": {
+			"type": "boolean",
+			"description": "Allow the feedback submission flow (default true)."
+		},
+		"subagentBackground": {
+			"type": "boolean",
+			"description": "Flat form of `[subagent] background`."
+		},
+		"subagentBackgroundTimeoutSeconds": {
+			"type": "integer",
+			"minimum": 60,
+			"maximum": 7200,
+			"description": "Flat form of `[subagent] background_timeout_seconds`."
+		},
+		"subagentMaxConcurrency": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Flat form of `[subagent] max_concurrency`."
+		},
+		"approval": {
+			"type": "object",
+			"properties": {
+				"preset": {
+					"anyOf": [
+						{
+							"type": "string",
+							"const": "ask"
+						},
+						{
+							"type": "string",
+							"const": "approve-for-me"
+						},
+						{
+							"type": "string",
+							"const": "full-access"
+						},
+						{
+							"type": "string",
+							"const": "confirm"
+						},
+						{
+							"type": "string",
+							"const": "approve"
+						},
+						{
+							"type": "string",
+							"const": "approveforme"
+						},
+						{
+							"type": "string",
+							"const": "bypass"
+						},
+						{
+							"type": "string",
+							"const": "auto"
+						},
+						{
+							"type": "string",
+							"const": "autopilot"
+						},
+						{
+							"type": "string",
+							"const": "bypasspermissions"
+						},
+						{
+							"type": "string",
+							"const": "fullaccess"
+						},
+						{
+							"type": "string",
+							"const": "full"
+						},
+						{
+							"type": "string",
+							"const": "yolo"
+						},
+						{
+							"type": "string",
+							"const": "never-ask"
+						},
+						{
+							"type": "string",
+							"const": "read-only"
+						},
+						{
+							"type": "string",
+							"const": "readonly"
+						},
+						{
+							"type": "string",
+							"const": "strict"
+						},
+						{
+							"type": "string",
+							"const": "plan"
+						}
+					],
+					"description": "Initial approval tier: `ask`, `approve-for-me` (default), or `full-access`. Legacy spellings are accepted and mapped: `confirm`/`auto`/`bypass`/`strict`/`plan`/`read-only` mean `ask`, `approve` means `approve-for-me`, `full`/`fullaccess`/`yolo`/`never-ask` mean `full-access`. Matching ignores case and surrounding spaces. Full Access also needs `fullAccessAcknowledged` from its one-time prompt."
+				},
+				"mode": {
+					"anyOf": [
+						{
+							"type": "string",
+							"const": "confirm"
+						},
+						{
+							"type": "string",
+							"const": "auto"
+						},
+						{
+							"type": "string",
+							"const": "ask"
+						},
+						{
+							"type": "string",
+							"const": "default"
+						},
+						{
+							"type": "string",
+							"const": "acceptedits"
+						},
+						{
+							"type": "string",
+							"const": "strict"
+						},
+						{
+							"type": "string",
+							"const": "read-only"
+						},
+						{
+							"type": "string",
+							"const": "readonly"
+						},
+						{
+							"type": "string",
+							"const": "plan"
+						},
+						{
+							"type": "string",
+							"const": "bypass"
+						},
+						{
+							"type": "string",
+							"const": "bypasspermissions"
+						}
+					],
+					"description": "Low-level override of the tier's default approval mode: `confirm` or `auto`. Legacy spellings `ask`/`default`/`acceptedits`/`strict`/`read-only`/`plan` mean `confirm`; `bypass`/`bypasspermissions` mean `auto`."
+				},
+				"nonInteractive": {
+					"anyOf": [
+						{
+							"type": "string",
+							"const": "allow"
+						},
+						{
+							"type": "string",
+							"const": "deny"
+						}
+					],
+					"description": "Approval fallback when no interactive UI can answer a confirmation: `allow` or `deny` (default). Matching ignores case."
+				},
+				"noninteractive": {
+					"anyOf": [
+						{
+							"type": "string",
+							"const": "allow"
+						},
+						{
+							"type": "string",
+							"const": "deny"
+						}
+					],
+					"description": "Accepted for older files; prefer `nonInteractive`."
+				},
+				"autoResume": {
+					"type": "boolean",
+					"description": "Resume after a bounded model error without asking again."
+				},
+				"autopilot": {
+					"type": "boolean",
+					"description": "Accepted for older files; prefer `autoResume`."
+				},
+				"fullAccessAcknowledged": {
+					"type": "boolean",
+					"description": "Set by \"Yes, and do not ask again\" when Full Access is selected; cleared when the tier is not Full Access."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Approval tier overrides."
+		},
+		"tools": {
+			"type": "object",
+			"properties": {
+				"approval": {
+					"type": "object",
+					"properties": {
+						"preset": {
+							"anyOf": [
+								{
+									"type": "string",
+									"const": "ask"
+								},
+								{
+									"type": "string",
+									"const": "approve-for-me"
+								},
+								{
+									"type": "string",
+									"const": "full-access"
+								},
+								{
+									"type": "string",
+									"const": "confirm"
+								},
+								{
+									"type": "string",
+									"const": "approve"
+								},
+								{
+									"type": "string",
+									"const": "approveforme"
+								},
+								{
+									"type": "string",
+									"const": "bypass"
+								},
+								{
+									"type": "string",
+									"const": "auto"
+								},
+								{
+									"type": "string",
+									"const": "autopilot"
+								},
+								{
+									"type": "string",
+									"const": "bypasspermissions"
+								},
+								{
+									"type": "string",
+									"const": "fullaccess"
+								},
+								{
+									"type": "string",
+									"const": "full"
+								},
+								{
+									"type": "string",
+									"const": "yolo"
+								},
+								{
+									"type": "string",
+									"const": "never-ask"
+								},
+								{
+									"type": "string",
+									"const": "read-only"
+								},
+								{
+									"type": "string",
+									"const": "readonly"
+								},
+								{
+									"type": "string",
+									"const": "strict"
+								},
+								{
+									"type": "string",
+									"const": "plan"
+								}
+							],
+							"description": "Initial approval tier: `ask`, `approve-for-me` (default), or `full-access`. Legacy spellings are accepted and mapped: `confirm`/`auto`/`bypass`/`strict`/`plan`/`read-only` mean `ask`, `approve` means `approve-for-me`, `full`/`fullaccess`/`yolo`/`never-ask` mean `full-access`. Matching ignores case and surrounding spaces. Full Access also needs `fullAccessAcknowledged` from its one-time prompt."
+						},
+						"mode": {
+							"anyOf": [
+								{
+									"type": "string",
+									"const": "confirm"
+								},
+								{
+									"type": "string",
+									"const": "auto"
+								},
+								{
+									"type": "string",
+									"const": "ask"
+								},
+								{
+									"type": "string",
+									"const": "default"
+								},
+								{
+									"type": "string",
+									"const": "acceptedits"
+								},
+								{
+									"type": "string",
+									"const": "strict"
+								},
+								{
+									"type": "string",
+									"const": "read-only"
+								},
+								{
+									"type": "string",
+									"const": "readonly"
+								},
+								{
+									"type": "string",
+									"const": "plan"
+								},
+								{
+									"type": "string",
+									"const": "bypass"
+								},
+								{
+									"type": "string",
+									"const": "bypasspermissions"
+								}
+							],
+							"description": "Low-level override of the tier's default approval mode: `confirm` or `auto`. Legacy spellings `ask`/`default`/`acceptedits`/`strict`/`read-only`/`plan` mean `confirm`; `bypass`/`bypasspermissions` mean `auto`."
+						},
+						"nonInteractive": {
+							"anyOf": [
+								{
+									"type": "string",
+									"const": "allow"
+								},
+								{
+									"type": "string",
+									"const": "deny"
+								}
+							],
+							"description": "Approval fallback when no interactive UI can answer a confirmation: `allow` or `deny` (default). Matching ignores case."
+						},
+						"noninteractive": {
+							"anyOf": [
+								{
+									"type": "string",
+									"const": "allow"
+								},
+								{
+									"type": "string",
+									"const": "deny"
+								}
+							],
+							"description": "Accepted for older files; prefer `nonInteractive`."
+						},
+						"autoResume": {
+							"type": "boolean",
+							"description": "Resume after a bounded model error without asking again."
+						},
+						"autopilot": {
+							"type": "boolean",
+							"description": "Accepted for older files; prefer `autoResume`."
+						},
+						"fullAccessAcknowledged": {
+							"type": "boolean",
+							"description": "Set by \"Yes, and do not ask again\" when Full Access is selected; cleared when the tier is not Full Access."
+						}
+					},
+					"additionalProperties": false,
+					"description": "Approval tier overrides."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Tool policy tables."
+		},
+		"feedback": {
+			"type": "object",
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"description": "Allow the feedback submission flow."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Feedback submission."
+		},
+		"subagent": {
+			"type": "object",
+			"properties": {
+				"background": {
+					"type": "boolean",
+					"description": "Run `run_in_background` subagent calls in a background lane (default true)."
+				},
+				"background_timeout_seconds": {
+					"type": "integer",
+					"minimum": 60,
+					"maximum": 7200,
+					"description": "Per-turn wall-clock limit of a background lane in seconds (default 3600, 60-7200). A call's own timeout takes precedence."
+				},
+				"max_concurrency": {
+					"type": "integer",
+					"minimum": 1,
+					"description": "Child processes a parallel batch runs at once (default 8, no upper bound)."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Subagent concurrency and background lanes."
+		},
+		"queueMode": {
+			"anyOf": [
+				{
+					"type": "string",
+					"const": "all"
+				},
+				{
+					"type": "string",
+					"const": "one-at-a-time"
+				}
+			],
+			"description": "Older spelling of `steeringMode`; migrated on load."
+		},
+		"websockets": {
+			"type": "boolean",
+			"description": "Older spelling of `transport`; migrated on load (true -> websocket)."
+		},
+		"search": {
+			"type": "object",
+			"properties": {
+				"provider": {
+					"anyOf": [
+						{
+							"type": "string",
+							"const": "auto"
+						},
+						{
+							"type": "string",
+							"const": "off"
+						},
+						{
+							"type": "string",
+							"const": "step"
+						},
+						{
+							"type": "string",
+							"const": "exa"
+						},
+						{
+							"type": "string",
+							"const": "firecrawl"
+						},
+						{
+							"type": "string",
+							"const": "parallel"
+						},
+						{
+							"type": "string",
+							"const": "tavily"
+						},
+						{
+							"type": "string",
+							"const": "tinyfish"
+						}
+					],
+					"description": "Web search backend. `auto` (default) walks the chain; a backend id pins one; `off` keeps the tool but refuses calls. The runtime treats an unrecognized value as `auto`, so a misspelling silently disables the pin instead of failing."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Web search backend selection."
+		},
+		"telemetry": {
+			"type": "object",
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"description": "Send product telemetry. An explicit `false` is honored over any default."
+				},
+				"spool": {
+					"type": "boolean",
+					"description": "Buffer events on disk when the endpoint is unreachable."
+				},
+				"endpoint": {
+					"type": "string",
+					"description": "Telemetry endpoint override."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Product telemetry."
+		},
+		"mcp_servers": {
+			"type": "object",
+			"patternProperties": {
+				"^.*$": {
+					"type": "object",
+					"properties": {
+						"command": {
+							"type": "string",
+							"description": "Executable for a stdio server; mutually exclusive with `url`."
+						},
+						"args": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							},
+							"description": "Arguments for `command`."
+						},
+						"cwd": {
+							"type": "string",
+							"description": "Working directory for `command`."
+						},
+						"url": {
+							"type": "string",
+							"description": "Endpoint for an HTTP or SSE server."
+						},
+						"env": {
+							"type": "object",
+							"patternProperties": {
+								"^.*$": {
+									"type": "string"
+								}
+							},
+							"description": "Extra environment for `command`."
+						},
+						"bearer_token_env_var": {
+							"type": "string",
+							"description": "Environment variable holding a bearer token for `url`."
+						},
+						"http_headers": {
+							"type": "object",
+							"patternProperties": {
+								"^.*$": {
+									"type": "string"
+								}
+							},
+							"description": "Static headers sent with every HTTP request."
+						},
+						"env_http_headers": {
+							"type": "object",
+							"patternProperties": {
+								"^.*$": {
+									"type": "string"
+								}
+							},
+							"description": "Header names whose value is read from the named environment variable."
+						},
+						"enabled": {
+							"type": "boolean",
+							"description": "Set `false` to keep the declaration but skip connecting."
+						},
+						"tool_timeout_sec": {
+							"type": "number",
+							"minimum": 0,
+							"description": "Per-call timeout in seconds."
+						},
+						"startup_timeout_sec": {
+							"type": "number",
+							"minimum": 0,
+							"description": "Connection timeout in seconds."
+						},
+						"enabled_tools": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							},
+							"description": "Publish only these tools."
+						},
+						"disabled_tools": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							},
+							"description": "Never publish these tools."
+						},
+						"oauth": {
+							"type": "object",
+							"properties": {
+								"client_id": {
+									"type": "string",
+									"description": "Static OAuth client id."
+								},
+								"client_secret": {
+									"type": "string",
+									"description": "Static OAuth client secret."
+								},
+								"scopes": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									},
+									"description": "Requested OAuth scopes."
+								},
+								"callback_port": {
+									"type": "integer",
+									"minimum": 1,
+									"maximum": 65535,
+									"description": "Local callback port."
+								}
+							},
+							"additionalProperties": false,
+							"description": "OAuth settings for an HTTP MCP server."
+						}
+					},
+					"additionalProperties": false,
+					"description": "One MCP server declaration."
+				}
+			},
+			"description": "MCP servers keyed by the name shown in `/mcp`."
+		},
+		"mcp_import": {
+			"type": "object",
+			"properties": {
+				"reviewed": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Import sources already offered, by source id."
+				}
+			},
+			"additionalProperties": false,
+			"description": "Record of MCP import sources already reviewed."
+		}
+	},
+	"additionalProperties": false,
+	"description": "StepCode `config.toml`. The global file is `~/.stepcode/config.toml`; a trusted project may add `.stepcode/config.toml`, whose values win per key."
+}

@@ -8,12 +8,23 @@
  * Pi's parser/local runtime low-risk.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
+import {
+	CONFIG_SCHEMA_FILE_NAME,
+	MODELS_SCHEMA_FILE_NAME,
+	renderConfigSchema,
+	renderModelsSchema,
+} from "./config-schema.ts";
+import { isStepConfigSubcommand, STEP_CONFIG_SUBCOMMANDS, stepConfigSubcommandNames } from "./config-subcommands.ts";
 import { readStepConfig, resolveStepConfigPath, STEP_CONFIG_FILE_NAME } from "./config-toml.ts";
+import { STEP_DEFAULT_MODEL, STEP_DEFAULT_PROVIDER } from "./defaults.ts";
 import { resolveStepAgentDir, resolveStepConfigDir, resolveStepConfigRoot } from "./environment.ts";
 import { normalizeStepStableVersion } from "./local-update.ts";
+import { configSchemaDirective, writeSchemaFiles } from "./schema-files.ts";
+
+const SCHEMA_FILE_NAMES = [CONFIG_SCHEMA_FILE_NAME, MODELS_SCHEMA_FILE_NAME];
 
 export type StepTopLevelCommand = "config" | "exec" | "models" | "resume";
 
@@ -109,6 +120,40 @@ export function translateStepCommandArgs(argv: readonly string[]): StepCommandCo
 	}
 }
 
+/**
+ * Replace credential material with a placeholder.
+ *
+ * `config show` is the discovery entry, so its output is likely to be pasted
+ * into a transcript or an issue. Field names are what a reader needs; the
+ * values are not. MCP declarations carry credentials in three places: a name
+ * like `apiKey`, an `env` table, and `http_headers`, so the value of any entry
+ * whose key looks like a secret is replaced at every level.
+ */
+function redact(value: unknown, referencesOnly = false): unknown {
+	if (Array.isArray(value)) return value.map((entry) => redact(entry, referencesOnly));
+	if (value === null || typeof value !== "object") return value;
+	return Object.fromEntries(
+		Object.entries(value as Record<string, unknown>).map(([key, entry]) => {
+			// Inside `env_http_headers` every value is the name of a variable, not
+			// the value it holds, so the header name must not trigger redaction:
+			// otherwise a reader cannot tell which variable to export.
+			const child = referencesOnly || key === "env_http_headers";
+			return [
+				key,
+				!referencesOnly && looksSecret(key) && typeof entry === "string" ? "(redacted)" : redact(entry, child),
+			];
+		}),
+	);
+}
+
+/** Whether a key names credential material rather than a reference to it. */
+function looksSecret(key: string): boolean {
+	// `bearer_token_env_var` holds the name of an environment variable, which is
+	// not itself a secret, so it stays readable.
+	if (/^(?:[a-z0-9]+_)*?(?:token|secret|key)_(?:env_)?var$/i.test(key)) return false;
+	return /api_?key|token|secret|passw(?:or)?d|authorization|cookie|credential|private_?key/i.test(key);
+}
+
 /** Parse the intentionally small Step self-update surface. */
 export function parseStepUpdateCommand(argv: readonly string[]): StepUpdateCommand | { error: string } | undefined {
 	const command = argv[0];
@@ -125,11 +170,12 @@ export function parseStepUpdateCommand(argv: readonly string[]): StepUpdateComma
 
 /** Return whether argv selects a Step config inspection command. */
 export function isStepConfigCommand(argv: readonly string[]): boolean {
-	return argv[0] === "config" && ["path", "show", "init"].includes(argv[1] ?? "");
+	return argv[0] === "config" && isStepConfigSubcommand(argv[1]);
 }
 
 export interface StepConfigCommandIo {
 	stdout?: Pick<NodeJS.WriteStream, "write">;
+	stderr?: Pick<NodeJS.WriteStream, "write">;
 	cwd?: string;
 	homeEnv?: Record<string, string | undefined>;
 }
@@ -143,17 +189,21 @@ export interface StepConfigCommandIo {
  */
 export async function runStepConfigCommand(argv: readonly string[], io: StepConfigCommandIo = {}): Promise<void> {
 	const stdout = io.stdout ?? process.stdout;
+	const stderr = io.stderr ?? process.stderr;
 	const cwd = resolve(io.cwd ?? process.cwd());
 	const env = io.homeEnv ?? process.env;
 	const agentDir = resolveStepAgentDir(env);
 	const configRoot = resolveStepConfigRoot(env);
 	const configDirName = resolveStepConfigDir(env);
 	const projectDir = join(cwd, configDirName);
+	const globalSettings = resolveStepConfigPath(env);
 	const paths = {
 		agentDir,
-		globalSettings: resolveStepConfigPath(env),
+		globalSettings,
 		globalModels: join(configRoot, "models.json"),
 		globalAuth: join(configRoot, "auth.json"),
+		globalConfigSchema: join(dirname(globalSettings), CONFIG_SCHEMA_FILE_NAME),
+		globalModelsSchema: join(dirname(globalSettings), MODELS_SCHEMA_FILE_NAME),
 		projectDir,
 		projectSettings: join(projectDir, STEP_CONFIG_FILE_NAME),
 	};
@@ -188,6 +238,8 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 			globalSettingsPath: paths.globalSettings,
 			globalModelsPath: paths.globalModels,
 			globalAuthPath: paths.globalAuth,
+			globalConfigSchemaPath: paths.globalConfigSchema,
+			globalModelsSchemaPath: paths.globalModelsSchema,
 			workspaceConfigDir: paths.projectDir,
 			workspaceSettingsPath: paths.projectSettings,
 			existingPaths: Object.values(paths).filter((value) => existsSync(value)),
@@ -201,6 +253,8 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 					`global settings: ${paths.globalSettings}`,
 					`global models: ${paths.globalModels}`,
 					`global auth: ${paths.globalAuth}`,
+					`global config schema: ${paths.globalConfigSchema}`,
+					`global models schema: ${paths.globalModelsSchema}`,
 					`workspace: ${paths.projectDir}`,
 					`workspace settings: ${paths.projectSettings}`,
 					`existing: ${payload.existingPaths.length > 0 ? payload.existingPaths.join(", ") : "(none)"}`,
@@ -218,18 +272,92 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 		const explicitPath = readOption(argv, "--path");
 		const target = resolve(explicitPath ?? (scope === "workspace" ? paths.projectSettings : paths.globalSettings));
 		const force = argv.includes("--force");
-		if (existsSync(target) && !force) {
+		// A launch creates an empty config file before the user asks for one, so
+		// `init` must fill that file rather than refuse. Any setting already in it
+		// still needs --force, because the template does not preserve content.
+		if (existsSync(target) && !force && !isEmptyConfigFile(target)) {
 			throw new Error(`Config file already exists: ${target} (pass --force to overwrite)`);
 		}
 		await mkdir(join(target, ".."), { recursive: true, mode: 0o700 });
+		// Every section is commented out except the two defaults `step` already
+		// resolves, so the file states the shape without pinning a policy the
+		// user has not chosen. The first line points the editor at the schema
+		// written beside the file.
+		// A workspace file gets no directive: the schema lives beside the global
+		// file, and a relative path cannot reach it from another directory.
+		const writesSchemas = scope === "user" && !explicitPath;
 		const template = [
+			...(writesSchemas ? [configSchemaDirective()] : []),
 			"# StepCode configuration",
-			'defaultProvider = "step"',
-			'defaultModel = "step-5-preview"',
+			`defaultProvider = "${STEP_DEFAULT_PROVIDER}"`,
+			`defaultModel = "${STEP_DEFAULT_MODEL}"`,
+			"",
+			"# Uncomment to change a default; the schema above completes and validates",
+			"# every key. `step config schema` prints the same schema.",
+			"#",
+			"# [compaction]",
+			"# triggerRatio = 0.9        # 0.5-0.95 of the context window",
+			"#",
+			"# [subagent]",
+			"# max_concurrency = 8",
+			"# background_timeout_seconds = 3600",
+			"#",
+			"# [approval]",
+			'# preset = "approve-for-me" # ask | approve-for-me | full-access',
+			"#",
+			"# [search]",
+			'# provider = "auto"         # auto | step | exa | firecrawl | parallel | tavily | tinyfish | off',
 			"",
 		].join("\n");
 		await writeFile(target, template, { encoding: "utf8", mode: 0o600 });
 		stdout.write(`Wrote Step config template: ${target}\n`);
+		if (writesSchemas) {
+			const schemas = writeSchemaFiles(dirname(target));
+			const missing = SCHEMA_FILE_NAMES.filter((name) => !schemas.some((path) => path.endsWith(name)));
+			if (missing.length > 0) {
+				// The template's `#:schema` line points at these, so saying the write
+				// succeeded would leave an editor reporting a missing schema.
+				stderr.write(
+					`Could not write ${missing.join(", ")} beside ${target}; the editor directive will not resolve.\n`,
+				);
+			}
+			if (schemas.length > 0) stdout.write(`Wrote config schemas: ${schemas.join(", ")}\n`);
+		}
+		return;
+	}
+
+	if (subcommand === "schema") {
+		// `--out` may appear before or after the target, and its value must not be
+		// mistaken for the target: skip by position, not by comparing the strings,
+		// so `--out models` still means the config schema.
+		const rest = argv.slice(2);
+		const out = readOption(argv, "--out");
+		const positionals: string[] = [];
+		for (let index = 0; index < rest.length; index += 1) {
+			const arg = rest[index]!;
+			if (arg === "--out") {
+				index += 1;
+				continue;
+			}
+			if (arg.startsWith("--out=")) continue;
+			if (arg.startsWith("-")) continue;
+			positionals.push(arg);
+		}
+		if (positionals.length > 1) {
+			throw new Error(
+				`Unexpected argument "${positionals[1]}" for step config schema. Usage: step config schema [config|models] [--out <file>]`,
+			);
+		}
+		const target = resolveSchemaTarget(positionals[0]);
+		const content = target.render();
+		if (!out) {
+			stdout.write(content);
+			return;
+		}
+		const destination = resolve(out);
+		await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+		await writeFile(destination, content, { encoding: "utf8", mode: 0o644 });
+		stdout.write(`Wrote ${target.fileName}: ${destination}\n`);
 		return;
 	}
 
@@ -237,16 +365,17 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 		const json = argv.includes("--json");
 		const readJson = async (path: string): Promise<unknown> => {
 			try {
-				return JSON.parse(await readFile(path, "utf8")) as unknown;
+				return redact(JSON.parse(await readFile(path, "utf8")) as unknown);
 			} catch {
 				return undefined;
 			}
 		};
 		// Settings are TOML; a missing or malformed file reads as absent here
-		// because `show` is a diagnostic, not a validator.
+		// because `show` is a diagnostic, not a validator. MCP declarations hold
+		// credentials too, so the same redaction applies to both formats.
 		const readToml = (path: string): unknown => {
 			try {
-				return readStepConfig(path);
+				return redact(readStepConfig(path));
 			} catch {
 				return undefined;
 			}
@@ -259,15 +388,14 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 			// Auth presence is useful for diagnostics; credential material is not.
 			auth: { configured: existsSync(paths.globalAuth), path: paths.globalAuth },
 		};
-		if (json) {
-			stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-		} else {
-			stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-		}
+		// `show` has one machine-readable output; `--json` is accepted because it
+		// is the obvious spelling, not because it changes anything.
+		void json;
+		stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 		return;
 	}
 
-	throw new Error(`Usage: step config ${"path|show|init"}`);
+	throw new Error(`Usage: step config ${stepConfigSubcommandNames()}`);
 }
 
 function translateExecArgs(args: readonly string[]): string[] {
@@ -351,31 +479,68 @@ function readOption(argv: readonly string[], name: string): string | undefined {
 }
 
 /** Flags each `step config` subcommand accepts. Anything else is a user error. */
-const STEP_CONFIG_SUBCOMMAND_FLAGS: Record<string, readonly string[]> = {
-	path: ["--json"],
-	show: ["--json"],
-	init: ["--scope", "--path", "--force"],
+const STEP_CONFIG_SUBCOMMAND_FLAGS: Record<string, readonly string[]> = Object.fromEntries(
+	STEP_CONFIG_SUBCOMMANDS.map((sub) => [sub.name, sub.flags]),
+);
+
+const STEP_CONFIG_SCHEMA_TARGETS: Record<string, { readonly render: () => string; readonly fileName: string }> = {
+	config: { render: renderConfigSchema, fileName: CONFIG_SCHEMA_FILE_NAME },
+	models: { render: renderModelsSchema, fileName: MODELS_SCHEMA_FILE_NAME },
 };
 
-/** `step config` subcommands with one-line summaries, surfaced by `config --help`. */
-export const STEP_CONFIG_SUBCOMMANDS: readonly { readonly name: string; readonly summary: string }[] = [
-	{ name: "path", summary: "Print the resolved Step config file paths." },
-	{ name: "show", summary: "Print the effective Step config (credentials omitted)." },
-	{ name: "init", summary: "Write a Step config template (--scope, --path, --force)." },
-];
+/**
+ * Whether a config file exists but holds nothing the template would replace.
+ *
+ * "No parsed keys" is not enough: a file with only comments holds the user's
+ * notes, and overwriting it loses them. Only the exact header a launch writes,
+ * with or without the editor directive, counts as empty.
+ */
+function isEmptyConfigFile(path: string): boolean {
+	let content: string;
+	try {
+		content = readFileSync(path, "utf8");
+	} catch {
+		return false;
+	}
+	if (Object.keys(readStepConfig(path) as Record<string, unknown>).length > 0) return false;
+
+	const remaining = content
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0 && !line.startsWith("#:schema"))
+		.join("\n");
+	// Exactly the header, nothing else.
+	return remaining === "# StepCode configuration";
+}
+
+/** `config|models`, defaulting to the settings file. */
+function resolveSchemaTarget(value: string | undefined): { render: () => string; fileName: string } {
+	const name = value ?? "config";
+	const target = STEP_CONFIG_SCHEMA_TARGETS[name];
+	if (!target) {
+		throw new Error(`Unknown schema "${name}". Use config or models.`);
+	}
+	return target;
+}
 
 function stepConfigUsage(subcommand: string): string {
 	switch (subcommand) {
 		case "path":
 			return "Usage: step config path [--json]\n  Print the resolved Step config file paths.";
 		case "show":
-			return "Usage: step config show [--json]\n  Print the effective Step config (credentials omitted).";
+			return "Usage: step config show [--json]\n  Print the stored config.toml and models.json documents (values not merged, credentials redacted).";
 		case "init":
 			return [
 				"Usage: step config init [--scope user|workspace] [--path <file>] [--force]",
 				"  Write a Step config template. Defaults to the user scope; --force overwrites an existing file.",
 			].join("\n");
+		case "schema":
+			return [
+				"Usage: step config schema [config|models] [--out <file>]",
+				"  Print the editor JSON Schema for config.toml (default) or models.json.",
+				"  --out writes the schema to a file instead of stdout.",
+			].join("\n");
 		default:
-			return "Usage: step config path|show|init";
+			return `Usage: step config ${STEP_CONFIG_SUBCOMMANDS.map((sub) => sub.name).join("|")}`;
 	}
 }

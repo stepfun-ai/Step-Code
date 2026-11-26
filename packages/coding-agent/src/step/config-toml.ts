@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { acquireSettingsLockSync, type SettingsScope, type SettingsStorage } from "../core/settings-manager.ts";
 import { resolveStepConfigDir, resolveStepConfigRoot } from "./environment.ts";
+import { configSchemaDirective, refreshSchemaFiles } from "./schema-files.ts";
 
 export const STEP_CONFIG_FILE_NAME = "config.toml";
 
@@ -44,12 +45,48 @@ export function resolveStepConfigPath(env: NodeJS.ProcessEnv = process.env, cwd?
 	return join(root, STEP_CONFIG_FILE_NAME);
 }
 
-/** Create a config file once, without replacing an existing file. */
-export function ensureStepConfigFile(path: string): string {
+/**
+ * The header a StepCode-created config file starts with.
+ *
+ * Only the global file gets the editor directive, because only the global
+ * directory receives a copy of the schema. A project file lives in a directory
+ * the repository owns, and dropping two ~80 KB schemas into every project would
+ * be noise in `git status`; its directive would also point at a file that is
+ * not there.
+ */
+function configFileHeader(withSchemaDirective: boolean): string {
+	return withSchemaDirective ? `${configSchemaDirective()}\n# StepCode configuration\n` : "# StepCode configuration\n";
+}
+
+/**
+ * Whether a path is the global `config.toml` (as opposed to a project one).
+ *
+ * The environment is a parameter rather than `process.env`: an embedded host
+ * and the tests inject `STEP_CODING_AGENT_DIR`, and comparing against the
+ * process environment would then classify the injected global file as a project
+ * one.
+ */
+export function isGlobalStepConfigPath(path: string, env: NodeJS.ProcessEnv = process.env): boolean {
+	return resolve(path) === resolve(resolveStepConfigPath(env));
+}
+
+/**
+ * Create a config file once, without replacing an existing file.
+ *
+ * The first line is the editor schema directive when the schema sits beside the
+ * file. `writeStepConfig` preserves the leading comment block, so the directive
+ * survives settings writes instead of disappearing the first time a setting is
+ * saved.
+ */
+export function ensureStepConfigFile(path: string, options: { withSchemaDirective?: boolean } = {}): string {
 	if (!existsSync(path)) {
 		mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 		try {
-			writeFileSync(path, "# StepCode configuration\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
+			writeFileSync(path, configFileHeader(options.withSchemaDirective ?? false), {
+				encoding: "utf8",
+				mode: 0o600,
+				flag: "wx",
+			});
 		} catch (error) {
 			if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
 		}
@@ -57,9 +94,16 @@ export function ensureStepConfigFile(path: string): string {
 	return path;
 }
 
-/** Create the global config once, without replacing an existing file. */
+/**
+ * Create the global config once, and keep the adjacent editor schemas current.
+ *
+ * Refreshing here covers every launch, so upgrading the binary updates the
+ * schema an editor validates against instead of leaving a stale copy behind.
+ */
 export function ensureStepGlobalConfig(env: NodeJS.ProcessEnv = process.env): string {
-	return ensureStepConfigFile(resolveStepConfigPath(env));
+	const path = ensureStepConfigFile(resolveStepConfigPath(env), { withSchemaDirective: true });
+	refreshSchemaFiles(dirname(path));
+	return path;
 }
 
 export function readStepConfig(path: string): StepConfigDocument {
@@ -147,6 +191,20 @@ function readLeadingComments(path: string): string {
 }
 
 /**
+ * Add the editor directive to a header that does not have one.
+ *
+ * A file written by an older release keeps its settings and gains one comment
+ * line, so the schema that a launch now writes beside it is actually referenced.
+ * Only the global file goes through this; a project file has no schema to point
+ * at.
+ */
+function withSchemaDirective(header: string): string {
+	if (/^#:schema\s/m.test(header)) return header;
+	const directive = `${configSchemaDirective()}\n`;
+	return header.length > 0 ? `${directive}${header}` : `${directive}# StepCode configuration\n`;
+}
+
+/**
  * TOML cannot express null. Drop those keys deliberately here rather than
  * letting the serializer decide, so "cleared" and "absent" mean the same thing
  * at every nesting level instead of silently reshaping the document.
@@ -162,9 +220,29 @@ function stripNullValues(value: unknown): unknown {
 	return result;
 }
 
-/** Atomically write a TOML document. Callers must preserve unknown fields before calling. */
-export function writeStepConfig(path: string, document: StepConfigDocument): void {
-	const header = readLeadingComments(path);
+/**
+ * Atomically write a TOML document. Callers must preserve unknown fields before
+ * calling.
+ *
+ * A file this call creates keeps the header an existing file would have: the
+ * global file keeps or gains the editor directive, a project file stays plain.
+ * An existing file keeps whatever header it has.
+ */
+export function writeStepConfig(
+	path: string,
+	document: StepConfigDocument,
+	options: { env?: NodeJS.ProcessEnv; editorDirective?: boolean } = {},
+): void {
+	const created = !existsSync(path);
+	// The caller writes either the global file or a project file and knows which;
+	// fall back to the path only when it does not say.
+	const wantsDirective = options.editorDirective ?? isGlobalStepConfigPath(path, options.env);
+	const existing = created ? undefined : readLeadingComments(path);
+	const header = created
+		? configFileHeader(wantsDirective)
+		: wantsDirective
+			? withSchemaDirective(existing ?? "")
+			: (existing ?? "");
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 	const body = stringifyToml(stripNullValues(document) as Record<string, unknown>);
 	const temporary = `${path}.${process.pid}.tmp`;
@@ -185,7 +263,7 @@ export function updateGlobalStepConfig(
 	const path = ensureStepGlobalConfig(env);
 	const release = acquireSettingsLockSync(path);
 	try {
-		writeStepConfig(path, update(readStepConfig(path)));
+		writeStepConfig(path, update(readStepConfig(path)), { env, editorDirective: true });
 	} finally {
 		release();
 	}
@@ -212,8 +290,10 @@ export interface StepTomlSettingsStoragePaths {
 export class StepTomlSettingsStorage implements SettingsStorage {
 	private readonly globalPath: string;
 	private readonly projectPath: string;
+	private readonly env: NodeJS.ProcessEnv;
 
 	constructor(cwd: string, env: NodeJS.ProcessEnv = process.env, paths: StepTomlSettingsStoragePaths = {}) {
+		this.env = env;
 		// The product decorator derives its paths from the injected agent and
 		// config directories. Accept the same paths here, or the Pi settings and
 		// the Step settings of one manager end up in two different files.
@@ -245,7 +325,7 @@ export class StepTomlSettingsStorage implements SettingsStorage {
 			}
 			const mcp = (document ?? readStepConfig(path)).mcp_servers;
 			const merged: StepConfigDocument = { ...settings, ...(mcp ? { mcp_servers: mcp } : {}) };
-			writeStepConfig(path, merged);
+			writeStepConfig(path, merged, { env: this.env, editorDirective: scope === "global" });
 		} finally {
 			release?.();
 		}

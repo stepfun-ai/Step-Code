@@ -845,9 +845,9 @@ describe("Step extension", () => {
 			sessionManager: { getSessionId: () => "session-1" },
 		} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
 		// The native Step endpoint is a direct model API, not the cloud-trace
-		// collector: workspace identifiers stay off it, while the session id rides
-		// along as first-party attribution under its single vendor-neutral name.
-		expect(headers).toEqual({ "x-step-client": "cli", "x-session-id": "session-1" });
+		// collector. Keep session/workspace identifiers off custom or direct
+		// provider requests; only the low-sensitivity client marker is universal.
+		expect(headers).toEqual({ "x-step-client": "cli" });
 
 		const originalOrigin = process.env.STEPCODE_CLOUD_TRACE_ORIGIN;
 		process.env.STEPCODE_CLOUD_TRACE_ORIGIN = "https://trace.example.test/v1";
@@ -864,7 +864,7 @@ describe("Step extension", () => {
 			} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
 			expect(otherHeaders).toMatchObject({
 				"x-step-client": "cli",
-				"x-session-id": "session-2",
+				"x-step-session-id": "session-2",
 				"x-step-workspace-id": "/workspace",
 				"x-step-provider-id": "stepfunModelProxy",
 				"x-step-model": "step-proxy",

@@ -1,0 +1,2004 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "StepCode models.json",
+	"type": "object",
+	"required": [
+		"providers"
+	],
+	"properties": {
+		"$schema": {
+			"type": "string",
+			"description": "Editor reference for this file, for example \"./models.schema.json\" beside the file."
+		},
+		"providers": {
+			"type": "object",
+			"patternProperties": {
+				"^.*$": {
+					"type": "object",
+					"properties": {
+						"name": {
+							"type": "string",
+							"minLength": 1,
+							"description": "Display name for the provider."
+						},
+						"baseUrl": {
+							"type": "string",
+							"minLength": 1,
+							"description": "Endpoint base URL, for example http://127.0.0.1:8000/v1."
+						},
+						"apiKey": {
+							"type": "string",
+							"minLength": 1,
+							"description": "Credential or a reference to one: a literal key, `$ENV_VAR`, or `!command`. A keyless local server still needs a placeholder value to appear in `/model`."
+						},
+						"api": {
+							"type": "string",
+							"minLength": 1,
+							"description": "Default request dialect: \"openai-completions\", \"openai-responses\", or \"anthropic-messages\"."
+						},
+						"headers": {
+							"type": "object",
+							"patternProperties": {
+								"^.*$": {
+									"type": "string"
+								}
+							},
+							"description": "Headers sent with every request to this provider."
+						},
+						"compat": {
+							"anyOf": [
+								{
+									"type": "object",
+									"properties": {
+										"supportsStore": {
+											"type": "boolean"
+										},
+										"supportsDeveloperRole": {
+											"type": "boolean"
+										},
+										"supportsReasoningEffort": {
+											"type": "boolean"
+										},
+										"supportsUsageInStreaming": {
+											"type": "boolean"
+										},
+										"supportsFinishReason": {
+											"type": "boolean"
+										},
+										"maxTokensField": {
+											"anyOf": [
+												{
+													"type": "string",
+													"const": "max_completion_tokens"
+												},
+												{
+													"type": "string",
+													"const": "max_tokens"
+												}
+											]
+										},
+										"requiresToolResultName": {
+											"type": "boolean"
+										},
+										"requiresAssistantAfterToolResult": {
+											"type": "boolean"
+										},
+										"requiresThinkingAsText": {
+											"type": "boolean"
+										},
+										"requiresReasoningContentOnAssistantMessages": {
+											"type": "boolean"
+										},
+										"thinkingFormat": {
+											"anyOf": [
+												{
+													"type": "string",
+													"const": "openai"
+												},
+												{
+													"type": "string",
+													"const": "openrouter"
+												},
+												{
+													"type": "string",
+													"const": "together"
+												},
+												{
+													"type": "string",
+													"const": "baseten"
+												},
+												{
+													"type": "string",
+													"const": "deepseek"
+												},
+												{
+													"type": "string",
+													"const": "zai"
+												},
+												{
+													"type": "string",
+													"const": "qwen"
+												},
+												{
+													"type": "string",
+													"const": "chat-template"
+												},
+												{
+													"type": "string",
+													"const": "qwen-chat-template"
+												},
+												{
+													"type": "string",
+													"const": "string-thinking"
+												},
+												{
+													"type": "string",
+													"const": "ant-ling"
+												}
+											]
+										},
+										"chatTemplateKwargs": {
+											"type": "object",
+											"patternProperties": {
+												"^.*$": {
+													"anyOf": [
+														{
+															"anyOf": [
+																{
+																	"type": "string"
+																},
+																{
+																	"type": "number"
+																},
+																{
+																	"type": "boolean"
+																},
+																{
+																	"type": "null"
+																}
+															]
+														},
+														{
+															"type": "object",
+															"required": [
+																"$var"
+															],
+															"properties": {
+																"$var": {
+																	"anyOf": [
+																		{
+																			"type": "string",
+																			"const": "thinking.enabled"
+																		},
+																		{
+																			"type": "string",
+																			"const": "thinking.effort"
+																		}
+																	]
+																},
+																"omitWhenOff": {
+																	"type": "boolean"
+																}
+															},
+															"additionalProperties": false
+														}
+													]
+												}
+											}
+										},
+										"chatTemplateArgs": {
+											"type": "object",
+											"patternProperties": {
+												"^.*$": {
+													"anyOf": [
+														{
+															"anyOf": [
+																{
+																	"type": "string"
+																},
+																{
+																	"type": "number"
+																},
+																{
+																	"type": "boolean"
+																},
+																{
+																	"type": "null"
+																}
+															]
+														},
+														{
+															"type": "object",
+															"required": [
+																"$var"
+															],
+															"properties": {
+																"$var": {
+																	"anyOf": [
+																		{
+																			"type": "string",
+																			"const": "thinking.enabled"
+																		},
+																		{
+																			"type": "string",
+																			"const": "thinking.effort"
+																		}
+																	]
+																},
+																"omitWhenOff": {
+																	"type": "boolean"
+																}
+															},
+															"additionalProperties": false
+														}
+													]
+												}
+											}
+										},
+										"cacheControlFormat": {
+											"type": "string",
+											"const": "anthropic"
+										},
+										"openRouterRouting": {
+											"type": "object",
+											"properties": {
+												"allow_fallbacks": {
+													"type": "boolean"
+												},
+												"require_parameters": {
+													"type": "boolean"
+												},
+												"data_collection": {
+													"anyOf": [
+														{
+															"type": "string",
+															"const": "deny"
+														},
+														{
+															"type": "string",
+															"const": "allow"
+														}
+													]
+												},
+												"zdr": {
+													"type": "boolean"
+												},
+												"enforce_distillable_text": {
+													"type": "boolean"
+												},
+												"order": {
+													"type": "array",
+													"items": {
+														"type": "string"
+													}
+												},
+												"only": {
+													"type": "array",
+													"items": {
+														"type": "string"
+													}
+												},
+												"ignore": {
+													"type": "array",
+													"items": {
+														"type": "string"
+													}
+												},
+												"quantizations": {
+													"type": "array",
+													"items": {
+														"type": "string"
+													}
+												},
+												"sort": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "object",
+															"properties": {
+																"by": {
+																	"type": "string"
+																},
+																"partition": {
+																	"anyOf": [
+																		{
+																			"type": "string"
+																		},
+																		{
+																			"type": "null"
+																		}
+																	]
+																}
+															},
+															"additionalProperties": false
+														}
+													]
+												},
+												"max_price": {
+													"type": "object",
+													"properties": {
+														"prompt": {
+															"anyOf": [
+																{
+																	"type": "number"
+																},
+																{
+																	"type": "string"
+																}
+															]
+														},
+														"completion": {
+															"anyOf": [
+																{
+																	"type": "number"
+																},
+																{
+																	"type": "string"
+																}
+															]
+														},
+														"image": {
+															"anyOf": [
+																{
+																	"type": "number"
+																},
+																{
+																	"type": "string"
+																}
+															]
+														},
+														"audio": {
+															"anyOf": [
+																{
+																	"type": "number"
+																},
+																{
+																	"type": "string"
+																}
+															]
+														},
+														"request": {
+															"anyOf": [
+																{
+																	"type": "number"
+																},
+																{
+																	"type": "string"
+																}
+															]
+														}
+													},
+													"additionalProperties": false
+												},
+												"preferred_min_throughput": {
+													"anyOf": [
+														{
+															"type": "number"
+														},
+														{
+															"type": "object",
+															"properties": {
+																"p50": {
+																	"type": "number"
+																},
+																"p75": {
+																	"type": "number"
+																},
+																"p90": {
+																	"type": "number"
+																},
+																"p99": {
+																	"type": "number"
+																}
+															},
+															"additionalProperties": false
+														}
+													]
+												},
+												"preferred_max_latency": {
+													"anyOf": [
+														{
+															"type": "number"
+														},
+														{
+															"type": "object",
+															"properties": {
+																"p50": {
+																	"type": "number"
+																},
+																"p75": {
+																	"type": "number"
+																},
+																"p90": {
+																	"type": "number"
+																},
+																"p99": {
+																	"type": "number"
+																}
+															},
+															"additionalProperties": false
+														}
+													]
+												}
+											},
+											"additionalProperties": false
+										},
+										"vercelGatewayRouting": {
+											"type": "object",
+											"properties": {
+												"only": {
+													"type": "array",
+													"items": {
+														"type": "string"
+													}
+												},
+												"order": {
+													"type": "array",
+													"items": {
+														"type": "string"
+													}
+												}
+											},
+											"additionalProperties": false
+										},
+										"supportsOpenAIGrammarTools": {
+											"type": "boolean"
+										},
+										"supportsStrictMode": {
+											"type": "boolean"
+										},
+										"sendSessionAffinityHeaders": {
+											"type": "boolean"
+										},
+										"deferredToolsMode": {
+											"type": "string",
+											"const": "kimi"
+										},
+										"sessionAffinityFormat": {
+											"anyOf": [
+												{
+													"type": "string",
+													"const": "openai"
+												},
+												{
+													"type": "string",
+													"const": "openai-nosession"
+												},
+												{
+													"type": "string",
+													"const": "openrouter"
+												}
+											]
+										},
+										"supportsLongCacheRetention": {
+											"type": "boolean"
+										}
+									},
+									"additionalProperties": false
+								},
+								{
+									"type": "object",
+									"properties": {
+										"supportsDeveloperRole": {
+											"type": "boolean"
+										},
+										"sessionAffinityFormat": {
+											"anyOf": [
+												{
+													"type": "string",
+													"const": "openai"
+												},
+												{
+													"type": "string",
+													"const": "openai-nosession"
+												},
+												{
+													"type": "string",
+													"const": "openrouter"
+												}
+											]
+										},
+										"supportsLongCacheRetention": {
+											"type": "boolean"
+										},
+										"supportsStrictMode": {
+											"type": "boolean"
+										},
+										"supportsOpenAIGrammarTools": {
+											"type": "boolean"
+										},
+										"supportsAdditionalTools": {
+											"type": "boolean"
+										},
+										"supportsToolSearch": {
+											"type": "boolean"
+										}
+									},
+									"additionalProperties": false
+								},
+								{
+									"type": "object",
+									"properties": {
+										"supportsEagerToolInputStreaming": {
+											"type": "boolean"
+										},
+										"supportsLongCacheRetention": {
+											"type": "boolean"
+										},
+										"sendSessionAffinityHeaders": {
+											"type": "boolean"
+										},
+										"supportsCacheControlOnTools": {
+											"type": "boolean"
+										},
+										"supportsTemperature": {
+											"type": "boolean"
+										},
+										"forceAdaptiveThinking": {
+											"type": "boolean"
+										},
+										"allowEmptySignature": {
+											"type": "boolean"
+										},
+										"supportsStrictTools": {
+											"type": "boolean"
+										},
+										"supportsToolReferences": {
+											"type": "boolean"
+										}
+									},
+									"additionalProperties": false
+								}
+							]
+						},
+						"authHeader": {
+							"type": "boolean",
+							"description": "Send the credential as an Authorization header (default true for most dialects)."
+						},
+						"models": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"required": [
+									"id"
+								],
+								"properties": {
+									"id": {
+										"type": "string",
+										"minLength": 1,
+										"description": "Model id as the endpoint expects it in the request body."
+									},
+									"name": {
+										"type": "string",
+										"minLength": 1,
+										"description": "Display name in `/model`; defaults to `id`."
+									},
+									"api": {
+										"type": "string",
+										"minLength": 1,
+										"description": "Request dialect for this model, overriding the provider: \"openai-completions\", \"openai-responses\", or \"anthropic-messages\"."
+									},
+									"baseUrl": {
+										"type": "string",
+										"minLength": 1,
+										"description": "Endpoint for this model only; overrides the provider."
+									},
+									"reasoning": {
+										"type": "boolean",
+										"description": "The model exposes a thinking/reasoning channel."
+									},
+									"thinkingLevelMap": {
+										"type": "object",
+										"properties": {
+											"off": {
+												"anyOf": [
+													{
+														"type": "string"
+													},
+													{
+														"type": "null"
+													}
+												]
+											},
+											"minimal": {
+												"anyOf": [
+													{
+														"type": "string"
+													},
+													{
+														"type": "null"
+													}
+												]
+											},
+											"low": {
+												"anyOf": [
+													{
+														"type": "string"
+													},
+													{
+														"type": "null"
+													}
+												]
+											},
+											"medium": {
+												"anyOf": [
+													{
+														"type": "string"
+													},
+													{
+														"type": "null"
+													}
+												]
+											},
+											"high": {
+												"anyOf": [
+													{
+														"type": "string"
+													},
+													{
+														"type": "null"
+													}
+												]
+											},
+											"xhigh": {
+												"anyOf": [
+													{
+														"type": "string"
+													},
+													{
+														"type": "null"
+													}
+												]
+											},
+											"max": {
+												"anyOf": [
+													{
+														"type": "string"
+													},
+													{
+														"type": "null"
+													}
+												]
+											}
+										},
+										"description": "Maps a Step thinking level onto the value this model expects. Omitted levels use the provider default.",
+										"additionalProperties": false
+									},
+									"input": {
+										"type": "array",
+										"items": {
+											"anyOf": [
+												{
+													"type": "string",
+													"const": "text"
+												},
+												{
+													"type": "string",
+													"const": "image"
+												}
+											]
+										},
+										"description": "Modalities this model accepts: \"text\" and/or \"image\". Defaults to text only."
+									},
+									"cost": {
+										"type": "object",
+										"required": [
+											"input",
+											"output",
+											"cacheRead",
+											"cacheWrite"
+										],
+										"properties": {
+											"input": {
+												"type": "number",
+												"description": "USD per million input tokens."
+											},
+											"output": {
+												"type": "number",
+												"description": "USD per million output tokens."
+											},
+											"cacheRead": {
+												"type": "number",
+												"description": "USD per million cached input tokens read back."
+											},
+											"cacheWrite": {
+												"type": "number",
+												"description": "USD per million tokens written to the prompt cache."
+											},
+											"tiers": {
+												"type": "array",
+												"items": {
+													"type": "object",
+													"required": [
+														"inputTokensAbove",
+														"input",
+														"output",
+														"cacheRead",
+														"cacheWrite"
+													],
+													"properties": {
+														"inputTokensAbove": {
+															"type": "number",
+															"description": "Input token count above which this tier's rates apply."
+														},
+														"input": {
+															"type": "number"
+														},
+														"output": {
+															"type": "number"
+														},
+														"cacheRead": {
+															"type": "number"
+														},
+														"cacheWrite": {
+															"type": "number"
+														}
+													},
+													"description": "One pricing tier for long-context requests.",
+													"additionalProperties": false
+												},
+												"description": "Long-context pricing; the base rates apply below the first tier."
+											}
+										},
+										"description": "Cost per million tokens, used for usage and cache-miss reporting. Not used for billing.",
+										"additionalProperties": false
+									},
+									"contextWindow": {
+										"type": "number",
+										"minimum": 1,
+										"description": "Context window in tokens (default 128000). Drives compaction."
+									},
+									"maxTokens": {
+										"type": "number",
+										"minimum": 1,
+										"description": "Output token limit per request (default 16384)."
+									},
+									"samplingParams": {
+										"type": "object",
+										"patternProperties": {
+											"^.*$": {}
+										},
+										"description": "Extra request fields, for example temperature, top_p, or a vendor-specific flag."
+									},
+									"headers": {
+										"type": "object",
+										"patternProperties": {
+											"^.*$": {
+												"type": "string"
+											}
+										},
+										"description": "Headers added to requests for this model."
+									},
+									"compat": {
+										"anyOf": [
+											{
+												"type": "object",
+												"properties": {
+													"supportsStore": {
+														"type": "boolean"
+													},
+													"supportsDeveloperRole": {
+														"type": "boolean"
+													},
+													"supportsReasoningEffort": {
+														"type": "boolean"
+													},
+													"supportsUsageInStreaming": {
+														"type": "boolean"
+													},
+													"supportsFinishReason": {
+														"type": "boolean"
+													},
+													"maxTokensField": {
+														"anyOf": [
+															{
+																"type": "string",
+																"const": "max_completion_tokens"
+															},
+															{
+																"type": "string",
+																"const": "max_tokens"
+															}
+														]
+													},
+													"requiresToolResultName": {
+														"type": "boolean"
+													},
+													"requiresAssistantAfterToolResult": {
+														"type": "boolean"
+													},
+													"requiresThinkingAsText": {
+														"type": "boolean"
+													},
+													"requiresReasoningContentOnAssistantMessages": {
+														"type": "boolean"
+													},
+													"thinkingFormat": {
+														"anyOf": [
+															{
+																"type": "string",
+																"const": "openai"
+															},
+															{
+																"type": "string",
+																"const": "openrouter"
+															},
+															{
+																"type": "string",
+																"const": "together"
+															},
+															{
+																"type": "string",
+																"const": "baseten"
+															},
+															{
+																"type": "string",
+																"const": "deepseek"
+															},
+															{
+																"type": "string",
+																"const": "zai"
+															},
+															{
+																"type": "string",
+																"const": "qwen"
+															},
+															{
+																"type": "string",
+																"const": "chat-template"
+															},
+															{
+																"type": "string",
+																"const": "qwen-chat-template"
+															},
+															{
+																"type": "string",
+																"const": "string-thinking"
+															},
+															{
+																"type": "string",
+																"const": "ant-ling"
+															}
+														]
+													},
+													"chatTemplateKwargs": {
+														"type": "object",
+														"patternProperties": {
+															"^.*$": {
+																"anyOf": [
+																	{
+																		"anyOf": [
+																			{
+																				"type": "string"
+																			},
+																			{
+																				"type": "number"
+																			},
+																			{
+																				"type": "boolean"
+																			},
+																			{
+																				"type": "null"
+																			}
+																		]
+																	},
+																	{
+																		"type": "object",
+																		"required": [
+																			"$var"
+																		],
+																		"properties": {
+																			"$var": {
+																				"anyOf": [
+																					{
+																						"type": "string",
+																						"const": "thinking.enabled"
+																					},
+																					{
+																						"type": "string",
+																						"const": "thinking.effort"
+																					}
+																				]
+																			},
+																			"omitWhenOff": {
+																				"type": "boolean"
+																			}
+																		},
+																		"additionalProperties": false
+																	}
+																]
+															}
+														}
+													},
+													"chatTemplateArgs": {
+														"type": "object",
+														"patternProperties": {
+															"^.*$": {
+																"anyOf": [
+																	{
+																		"anyOf": [
+																			{
+																				"type": "string"
+																			},
+																			{
+																				"type": "number"
+																			},
+																			{
+																				"type": "boolean"
+																			},
+																			{
+																				"type": "null"
+																			}
+																		]
+																	},
+																	{
+																		"type": "object",
+																		"required": [
+																			"$var"
+																		],
+																		"properties": {
+																			"$var": {
+																				"anyOf": [
+																					{
+																						"type": "string",
+																						"const": "thinking.enabled"
+																					},
+																					{
+																						"type": "string",
+																						"const": "thinking.effort"
+																					}
+																				]
+																			},
+																			"omitWhenOff": {
+																				"type": "boolean"
+																			}
+																		},
+																		"additionalProperties": false
+																	}
+																]
+															}
+														}
+													},
+													"cacheControlFormat": {
+														"type": "string",
+														"const": "anthropic"
+													},
+													"openRouterRouting": {
+														"type": "object",
+														"properties": {
+															"allow_fallbacks": {
+																"type": "boolean"
+															},
+															"require_parameters": {
+																"type": "boolean"
+															},
+															"data_collection": {
+																"anyOf": [
+																	{
+																		"type": "string",
+																		"const": "deny"
+																	},
+																	{
+																		"type": "string",
+																		"const": "allow"
+																	}
+																]
+															},
+															"zdr": {
+																"type": "boolean"
+															},
+															"enforce_distillable_text": {
+																"type": "boolean"
+															},
+															"order": {
+																"type": "array",
+																"items": {
+																	"type": "string"
+																}
+															},
+															"only": {
+																"type": "array",
+																"items": {
+																	"type": "string"
+																}
+															},
+															"ignore": {
+																"type": "array",
+																"items": {
+																	"type": "string"
+																}
+															},
+															"quantizations": {
+																"type": "array",
+																"items": {
+																	"type": "string"
+																}
+															},
+															"sort": {
+																"anyOf": [
+																	{
+																		"type": "string"
+																	},
+																	{
+																		"type": "object",
+																		"properties": {
+																			"by": {
+																				"type": "string"
+																			},
+																			"partition": {
+																				"anyOf": [
+																					{
+																						"type": "string"
+																					},
+																					{
+																						"type": "null"
+																					}
+																				]
+																			}
+																		},
+																		"additionalProperties": false
+																	}
+																]
+															},
+															"max_price": {
+																"type": "object",
+																"properties": {
+																	"prompt": {
+																		"anyOf": [
+																			{
+																				"type": "number"
+																			},
+																			{
+																				"type": "string"
+																			}
+																		]
+																	},
+																	"completion": {
+																		"anyOf": [
+																			{
+																				"type": "number"
+																			},
+																			{
+																				"type": "string"
+																			}
+																		]
+																	},
+																	"image": {
+																		"anyOf": [
+																			{
+																				"type": "number"
+																			},
+																			{
+																				"type": "string"
+																			}
+																		]
+																	},
+																	"audio": {
+																		"anyOf": [
+																			{
+																				"type": "number"
+																			},
+																			{
+																				"type": "string"
+																			}
+																		]
+																	},
+																	"request": {
+																		"anyOf": [
+																			{
+																				"type": "number"
+																			},
+																			{
+																				"type": "string"
+																			}
+																		]
+																	}
+																},
+																"additionalProperties": false
+															},
+															"preferred_min_throughput": {
+																"anyOf": [
+																	{
+																		"type": "number"
+																	},
+																	{
+																		"type": "object",
+																		"properties": {
+																			"p50": {
+																				"type": "number"
+																			},
+																			"p75": {
+																				"type": "number"
+																			},
+																			"p90": {
+																				"type": "number"
+																			},
+																			"p99": {
+																				"type": "number"
+																			}
+																		},
+																		"additionalProperties": false
+																	}
+																]
+															},
+															"preferred_max_latency": {
+																"anyOf": [
+																	{
+																		"type": "number"
+																	},
+																	{
+																		"type": "object",
+																		"properties": {
+																			"p50": {
+																				"type": "number"
+																			},
+																			"p75": {
+																				"type": "number"
+																			},
+																			"p90": {
+																				"type": "number"
+																			},
+																			"p99": {
+																				"type": "number"
+																			}
+																		},
+																		"additionalProperties": false
+																	}
+																]
+															}
+														},
+														"additionalProperties": false
+													},
+													"vercelGatewayRouting": {
+														"type": "object",
+														"properties": {
+															"only": {
+																"type": "array",
+																"items": {
+																	"type": "string"
+																}
+															},
+															"order": {
+																"type": "array",
+																"items": {
+																	"type": "string"
+																}
+															}
+														},
+														"additionalProperties": false
+													},
+													"supportsOpenAIGrammarTools": {
+														"type": "boolean"
+													},
+													"supportsStrictMode": {
+														"type": "boolean"
+													},
+													"sendSessionAffinityHeaders": {
+														"type": "boolean"
+													},
+													"deferredToolsMode": {
+														"type": "string",
+														"const": "kimi"
+													},
+													"sessionAffinityFormat": {
+														"anyOf": [
+															{
+																"type": "string",
+																"const": "openai"
+															},
+															{
+																"type": "string",
+																"const": "openai-nosession"
+															},
+															{
+																"type": "string",
+																"const": "openrouter"
+															}
+														]
+													},
+													"supportsLongCacheRetention": {
+														"type": "boolean"
+													}
+												},
+												"additionalProperties": false
+											},
+											{
+												"type": "object",
+												"properties": {
+													"supportsDeveloperRole": {
+														"type": "boolean"
+													},
+													"sessionAffinityFormat": {
+														"anyOf": [
+															{
+																"type": "string",
+																"const": "openai"
+															},
+															{
+																"type": "string",
+																"const": "openai-nosession"
+															},
+															{
+																"type": "string",
+																"const": "openrouter"
+															}
+														]
+													},
+													"supportsLongCacheRetention": {
+														"type": "boolean"
+													},
+													"supportsStrictMode": {
+														"type": "boolean"
+													},
+													"supportsOpenAIGrammarTools": {
+														"type": "boolean"
+													},
+													"supportsAdditionalTools": {
+														"type": "boolean"
+													},
+													"supportsToolSearch": {
+														"type": "boolean"
+													}
+												},
+												"additionalProperties": false
+											},
+											{
+												"type": "object",
+												"properties": {
+													"supportsEagerToolInputStreaming": {
+														"type": "boolean"
+													},
+													"supportsLongCacheRetention": {
+														"type": "boolean"
+													},
+													"sendSessionAffinityHeaders": {
+														"type": "boolean"
+													},
+													"supportsCacheControlOnTools": {
+														"type": "boolean"
+													},
+													"supportsTemperature": {
+														"type": "boolean"
+													},
+													"forceAdaptiveThinking": {
+														"type": "boolean"
+													},
+													"allowEmptySignature": {
+														"type": "boolean"
+													},
+													"supportsStrictTools": {
+														"type": "boolean"
+													},
+													"supportsToolReferences": {
+														"type": "boolean"
+													}
+												},
+												"additionalProperties": false
+											}
+										]
+									}
+								},
+								"description": "One model served by a provider.",
+								"additionalProperties": false
+							},
+							"description": "Models this provider serves."
+						},
+						"modelOverrides": {
+							"type": "object",
+							"patternProperties": {
+								"^.*$": {
+									"type": "object",
+									"properties": {
+										"name": {
+											"type": "string",
+											"minLength": 1,
+											"description": "Display name overriding the built-in catalog."
+										},
+										"reasoning": {
+											"type": "boolean",
+											"description": "Whether the model exposes a thinking channel."
+										},
+										"thinkingLevelMap": {
+											"type": "object",
+											"properties": {
+												"off": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"minimal": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"low": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"medium": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"high": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"xhigh": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"max": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												}
+											},
+											"description": "Maps a Step thinking level onto the value this model expects. Omitted levels use the provider default.",
+											"additionalProperties": false
+										},
+										"input": {
+											"type": "array",
+											"items": {
+												"anyOf": [
+													{
+														"type": "string",
+														"const": "text"
+													},
+													{
+														"type": "string",
+														"const": "image"
+													}
+												]
+											},
+											"description": "Modalities this model accepts: \"text\" and/or \"image\"."
+										},
+										"cost": {
+											"type": "object",
+											"properties": {
+												"input": {
+													"type": "number",
+													"description": "USD per million input tokens."
+												},
+												"output": {
+													"type": "number",
+													"description": "USD per million output tokens."
+												},
+												"cacheRead": {
+													"type": "number",
+													"description": "USD per million cached input tokens read back."
+												},
+												"cacheWrite": {
+													"type": "number",
+													"description": "USD per million tokens written to the cache."
+												},
+												"tiers": {
+													"type": "array",
+													"items": {
+														"type": "object",
+														"required": [
+															"inputTokensAbove",
+															"input",
+															"output",
+															"cacheRead",
+															"cacheWrite"
+														],
+														"properties": {
+															"inputTokensAbove": {
+																"type": "number",
+																"description": "Input token count above which this tier's rates apply."
+															},
+															"input": {
+																"type": "number"
+															},
+															"output": {
+																"type": "number"
+															},
+															"cacheRead": {
+																"type": "number"
+															},
+															"cacheWrite": {
+																"type": "number"
+															}
+														},
+														"description": "One pricing tier for long-context requests.",
+														"additionalProperties": false
+													},
+													"description": "Long-context pricing tiers."
+												}
+											},
+											"description": "Overrides for a built-in model's cost. Omitted rates keep the catalog value.",
+											"additionalProperties": false
+										},
+										"contextWindow": {
+											"type": "number",
+											"minimum": 1,
+											"description": "Context window in tokens."
+										},
+										"maxTokens": {
+											"type": "number",
+											"minimum": 1,
+											"description": "Output token limit per request."
+										},
+										"samplingParams": {
+											"type": "object",
+											"patternProperties": {
+												"^.*$": {}
+											},
+											"description": "Extra request fields for this model."
+										},
+										"headers": {
+											"type": "object",
+											"patternProperties": {
+												"^.*$": {
+													"type": "string"
+												}
+											},
+											"description": "Headers added to requests for this model."
+										},
+										"compat": {
+											"anyOf": [
+												{
+													"type": "object",
+													"properties": {
+														"supportsStore": {
+															"type": "boolean"
+														},
+														"supportsDeveloperRole": {
+															"type": "boolean"
+														},
+														"supportsReasoningEffort": {
+															"type": "boolean"
+														},
+														"supportsUsageInStreaming": {
+															"type": "boolean"
+														},
+														"supportsFinishReason": {
+															"type": "boolean"
+														},
+														"maxTokensField": {
+															"anyOf": [
+																{
+																	"type": "string",
+																	"const": "max_completion_tokens"
+																},
+																{
+																	"type": "string",
+																	"const": "max_tokens"
+																}
+															]
+														},
+														"requiresToolResultName": {
+															"type": "boolean"
+														},
+														"requiresAssistantAfterToolResult": {
+															"type": "boolean"
+														},
+														"requiresThinkingAsText": {
+															"type": "boolean"
+														},
+														"requiresReasoningContentOnAssistantMessages": {
+															"type": "boolean"
+														},
+														"thinkingFormat": {
+															"anyOf": [
+																{
+																	"type": "string",
+																	"const": "openai"
+																},
+																{
+																	"type": "string",
+																	"const": "openrouter"
+																},
+																{
+																	"type": "string",
+																	"const": "together"
+																},
+																{
+																	"type": "string",
+																	"const": "baseten"
+																},
+																{
+																	"type": "string",
+																	"const": "deepseek"
+																},
+																{
+																	"type": "string",
+																	"const": "zai"
+																},
+																{
+																	"type": "string",
+																	"const": "qwen"
+																},
+																{
+																	"type": "string",
+																	"const": "chat-template"
+																},
+																{
+																	"type": "string",
+																	"const": "qwen-chat-template"
+																},
+																{
+																	"type": "string",
+																	"const": "string-thinking"
+																},
+																{
+																	"type": "string",
+																	"const": "ant-ling"
+																}
+															]
+														},
+														"chatTemplateKwargs": {
+															"type": "object",
+															"patternProperties": {
+																"^.*$": {
+																	"anyOf": [
+																		{
+																			"anyOf": [
+																				{
+																					"type": "string"
+																				},
+																				{
+																					"type": "number"
+																				},
+																				{
+																					"type": "boolean"
+																				},
+																				{
+																					"type": "null"
+																				}
+																			]
+																		},
+																		{
+																			"type": "object",
+																			"required": [
+																				"$var"
+																			],
+																			"properties": {
+																				"$var": {
+																					"anyOf": [
+																						{
+																							"type": "string",
+																							"const": "thinking.enabled"
+																						},
+																						{
+																							"type": "string",
+																							"const": "thinking.effort"
+																						}
+																					]
+																				},
+																				"omitWhenOff": {
+																					"type": "boolean"
+																				}
+																			},
+																			"additionalProperties": false
+																		}
+																	]
+																}
+															}
+														},
+														"chatTemplateArgs": {
+															"type": "object",
+															"patternProperties": {
+																"^.*$": {
+																	"anyOf": [
+																		{
+																			"anyOf": [
+																				{
+																					"type": "string"
+																				},
+																				{
+																					"type": "number"
+																				},
+																				{
+																					"type": "boolean"
+																				},
+																				{
+																					"type": "null"
+																				}
+																			]
+																		},
+																		{
+																			"type": "object",
+																			"required": [
+																				"$var"
+																			],
+																			"properties": {
+																				"$var": {
+																					"anyOf": [
+																						{
+																							"type": "string",
+																							"const": "thinking.enabled"
+																						},
+																						{
+																							"type": "string",
+																							"const": "thinking.effort"
+																						}
+																					]
+																				},
+																				"omitWhenOff": {
+																					"type": "boolean"
+																				}
+																			},
+																			"additionalProperties": false
+																		}
+																	]
+																}
+															}
+														},
+														"cacheControlFormat": {
+															"type": "string",
+															"const": "anthropic"
+														},
+														"openRouterRouting": {
+															"type": "object",
+															"properties": {
+																"allow_fallbacks": {
+																	"type": "boolean"
+																},
+																"require_parameters": {
+																	"type": "boolean"
+																},
+																"data_collection": {
+																	"anyOf": [
+																		{
+																			"type": "string",
+																			"const": "deny"
+																		},
+																		{
+																			"type": "string",
+																			"const": "allow"
+																		}
+																	]
+																},
+																"zdr": {
+																	"type": "boolean"
+																},
+																"enforce_distillable_text": {
+																	"type": "boolean"
+																},
+																"order": {
+																	"type": "array",
+																	"items": {
+																		"type": "string"
+																	}
+																},
+																"only": {
+																	"type": "array",
+																	"items": {
+																		"type": "string"
+																	}
+																},
+																"ignore": {
+																	"type": "array",
+																	"items": {
+																		"type": "string"
+																	}
+																},
+																"quantizations": {
+																	"type": "array",
+																	"items": {
+																		"type": "string"
+																	}
+																},
+																"sort": {
+																	"anyOf": [
+																		{
+																			"type": "string"
+																		},
+																		{
+																			"type": "object",
+																			"properties": {
+																				"by": {
+																					"type": "string"
+																				},
+																				"partition": {
+																					"anyOf": [
+																						{
+																							"type": "string"
+																						},
+																						{
+																							"type": "null"
+																						}
+																					]
+																				}
+																			},
+																			"additionalProperties": false
+																		}
+																	]
+																},
+																"max_price": {
+																	"type": "object",
+																	"properties": {
+																		"prompt": {
+																			"anyOf": [
+																				{
+																					"type": "number"
+																				},
+																				{
+																					"type": "string"
+																				}
+																			]
+																		},
+																		"completion": {
+																			"anyOf": [
+																				{
+																					"type": "number"
+																				},
+																				{
+																					"type": "string"
+																				}
+																			]
+																		},
+																		"image": {
+																			"anyOf": [
+																				{
+																					"type": "number"
+																				},
+																				{
+																					"type": "string"
+																				}
+																			]
+																		},
+																		"audio": {
+																			"anyOf": [
+																				{
+																					"type": "number"
+																				},
+																				{
+																					"type": "string"
+																				}
+																			]
+																		},
+																		"request": {
+																			"anyOf": [
+																				{
+																					"type": "number"
+																				},
+																				{
+																					"type": "string"
+																				}
+																			]
+																		}
+																	},
+																	"additionalProperties": false
+																},
+																"preferred_min_throughput": {
+																	"anyOf": [
+																		{
+																			"type": "number"
+																		},
+																		{
+																			"type": "object",
+																			"properties": {
+																				"p50": {
+																					"type": "number"
+																				},
+																				"p75": {
+																					"type": "number"
+																				},
+																				"p90": {
+																					"type": "number"
+																				},
+																				"p99": {
+																					"type": "number"
+																				}
+																			},
+																			"additionalProperties": false
+																		}
+																	]
+																},
+																"preferred_max_latency": {
+																	"anyOf": [
+																		{
+																			"type": "number"
+																		},
+																		{
+																			"type": "object",
+																			"properties": {
+																				"p50": {
+																					"type": "number"
+																				},
+																				"p75": {
+																					"type": "number"
+																				},
+																				"p90": {
+																					"type": "number"
+																				},
+																				"p99": {
+																					"type": "number"
+																				}
+																			},
+																			"additionalProperties": false
+																		}
+																	]
+																}
+															},
+															"additionalProperties": false
+														},
+														"vercelGatewayRouting": {
+															"type": "object",
+															"properties": {
+																"only": {
+																	"type": "array",
+																	"items": {
+																		"type": "string"
+																	}
+																},
+																"order": {
+																	"type": "array",
+																	"items": {
+																		"type": "string"
+																	}
+																}
+															},
+															"additionalProperties": false
+														},
+														"supportsOpenAIGrammarTools": {
+															"type": "boolean"
+														},
+														"supportsStrictMode": {
+															"type": "boolean"
+														},
+														"sendSessionAffinityHeaders": {
+															"type": "boolean"
+														},
+														"deferredToolsMode": {
+															"type": "string",
+															"const": "kimi"
+														},
+														"sessionAffinityFormat": {
+															"anyOf": [
+																{
+																	"type": "string",
+																	"const": "openai"
+																},
+																{
+																	"type": "string",
+																	"const": "openai-nosession"
+																},
+																{
+																	"type": "string",
+																	"const": "openrouter"
+																}
+															]
+														},
+														"supportsLongCacheRetention": {
+															"type": "boolean"
+														}
+													},
+													"additionalProperties": false
+												},
+												{
+													"type": "object",
+													"properties": {
+														"supportsDeveloperRole": {
+															"type": "boolean"
+														},
+														"sessionAffinityFormat": {
+															"anyOf": [
+																{
+																	"type": "string",
+																	"const": "openai"
+																},
+																{
+																	"type": "string",
+																	"const": "openai-nosession"
+																},
+																{
+																	"type": "string",
+																	"const": "openrouter"
+																}
+															]
+														},
+														"supportsLongCacheRetention": {
+															"type": "boolean"
+														},
+														"supportsStrictMode": {
+															"type": "boolean"
+														},
+														"supportsOpenAIGrammarTools": {
+															"type": "boolean"
+														},
+														"supportsAdditionalTools": {
+															"type": "boolean"
+														},
+														"supportsToolSearch": {
+															"type": "boolean"
+														}
+													},
+													"additionalProperties": false
+												},
+												{
+													"type": "object",
+													"properties": {
+														"supportsEagerToolInputStreaming": {
+															"type": "boolean"
+														},
+														"supportsLongCacheRetention": {
+															"type": "boolean"
+														},
+														"sendSessionAffinityHeaders": {
+															"type": "boolean"
+														},
+														"supportsCacheControlOnTools": {
+															"type": "boolean"
+														},
+														"supportsTemperature": {
+															"type": "boolean"
+														},
+														"forceAdaptiveThinking": {
+															"type": "boolean"
+														},
+														"allowEmptySignature": {
+															"type": "boolean"
+														},
+														"supportsStrictTools": {
+															"type": "boolean"
+														},
+														"supportsToolReferences": {
+															"type": "boolean"
+														}
+													},
+													"additionalProperties": false
+												}
+											]
+										}
+									},
+									"description": "Edits applied to a built-in model, keyed by model id under `modelOverrides`.",
+									"additionalProperties": false
+								}
+							},
+							"description": "Edits to built-in models, keyed by model id."
+						}
+					},
+					"description": "One provider entry, keyed by the id used in `/model` and `--model provider/id`.",
+					"additionalProperties": false
+				}
+			},
+			"description": "Providers keyed by provider id."
+		}
+	},
+	"additionalProperties": false,
+	"description": "StepCode `models.json`: provider endpoints, credentials and model definitions. JSON with `//` comments is accepted. The global file is `~/.stepcode/models.json`."
+}

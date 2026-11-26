@@ -528,7 +528,7 @@ Authentication resolution priority (handled by `ModelRuntime`):
 import { InMemoryCredentialStore } from "@step-harness/providers";
 import { createAgentSession, ModelRuntime } from "@step-harness/coding-agent";
 
-// Default: uses ~/.stepcode/agent/auth.json and ~/.stepcode/agent/models.json
+// Default: uses ~/.stepcode/auth.json and ~/.stepcode/models.json
 const modelRuntime = await ModelRuntime.create();
 
 // Provider-owned auth methods and current status

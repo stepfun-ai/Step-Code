@@ -653,6 +653,16 @@ ${chalk.bold("Ultracode (multi-agent workflows):")}
   One turn: "ultracode: <task>" (also "ultraloop: <task>").
   From the shell: ${APP_NAME} -p "ultracode: <task>"`
 		: "";
+	const stepConfigurationText = IS_STEP_ENTRYPOINT
+		? `
+
+${chalk.bold("Configuration:")}
+  ~/.stepcode/config.toml         Settings: models, compaction, permissions, search, MCP servers
+  ~/.stepcode/models.json         Custom providers and models
+  .stepcode/config.toml           Project overrides, loaded when the project is trusted
+  ${APP_NAME} config show         Print the stored config.toml, models.json, and paths
+  ${APP_NAME} config schema       Print the JSON Schema an editor completes against`
+		: "";
 	const extensionFlagsText =
 		extensionFlags && extensionFlags.length > 0
 			? `\n${chalk.bold("Extension CLI Flags:")}\n${extensionFlags
@@ -675,9 +685,10 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} update [source|self|${APP_NAME}]   Update ${APP_NAME}, extensions, or model catalogs
   ${APP_NAME} list                      List installed extensions from settings
   ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
+  ${APP_NAME} config <subcommand>       Same command; the subcommands are listed by \`config --help\`
   ${APP_NAME} auth <command>            Print credentials or check provider readiness
 ${stepAuthCommandsText}
-  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth${stepUltracodeHelpText}
+  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth${stepConfigurationText}${stepUltracodeHelpText}
 
 ${chalk.bold("Options:")}
   --provider <name>              Provider name (default: ${defaultProvider})

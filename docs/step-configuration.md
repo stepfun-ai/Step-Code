@@ -1,6 +1,7 @@
 # Step configuration files
 
-Step creates the global `~/.stepcode/config.toml` when it first runs.
+Step creates the global `~/.stepcode/config.toml` when it first runs, together
+with `config.schema.json` and `models.schema.json` beside it.
 The project file `<cwd>/.stepcode/config.toml` is optional: a missing file
 contributes no project settings and does not produce a startup warning.
 Reading or reloading settings does not create the project file or directory.
@@ -18,6 +19,47 @@ There is no automatic import from the legacy pre-Step `config.json` layout. `mod
 and `auth.json` keep their own formats — they hold model definitions and
 credentials, not settings — and a stale Step endpoint recorded in `models.json`
 by an older release is still repaired in place at startup.
+
+## Editor schema and configuration discovery
+
+`config.toml` and `models.json` each have a JSON Schema generated from the same
+TypeBox definitions their loaders validate with, so a key exists in the schema
+exactly when the runtime reads it. Nothing is published at a URL and nothing is
+fetched: the schema travels with the build, which means an editor never
+validates a file against a different version than the binary that wrote it.
+
+| Command | Result |
+| --- | --- |
+| `step config show` | The stored global and project documents, `models.json`, and every resolved path. Values are not merged or defaulted; credentials are redacted |
+| `step config path --json` | The same paths, including both schema files |
+| `step config schema [config\|models]` | The schema on stdout |
+| `step config schema --out <file>` | The schema written to a file |
+| `step config init` | Template, `#:schema ./config.schema.json`, and both schemas beside the file |
+
+The schemas are written beside the global `config.toml` only. A project file
+does not receive a copy: the repository owns that directory, two ~80 KB files in
+every checkout would show up in `git status`, and a relative directive there
+would point at a file that is not present. Use `step config schema --out` when a
+project needs one.
+
+The schemas are committed at `packages/coding-agent/schema/`. `pnpm run
+generate:config-schema` writes them; `pnpm run check:config-schema`, which is
+part of `pnpm run check`, renders them again and fails when the committed copy
+differs. The theme schema is generated the same way into
+`packages/coding-agent/src/theme/theme-schema.json`, which is why the built-in
+themes reference it as `./theme-schema.json` instead of a repository URL.
+
+The global file this product creates starts with the editor directive. An
+existing file keeps its own header, so adding one by hand is the only step
+needed for a file written by an older release:
+
+```toml
+#:schema ./config.schema.json
+```
+
+The schema describes what a file may contain; it does not replace read-time
+validation. Step still reports a bad value once at load and then uses its
+default, and it still ignores an unknown key rather than refusing to start.
 
 ## Step Plan login and API-key fallback
 

@@ -62,7 +62,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 step
 ```
 
-You can also run `/login` and select an API-key provider to store the key in `~/.stepcode/agent/auth.json`.
+You can also run `/login` and select an API-key provider to store the key in `~/.stepcode/auth.json`.
 
 See [Providers](providers.md) for all supported providers, environment variables, and cloud-provider setup.
 

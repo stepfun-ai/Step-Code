@@ -506,7 +506,12 @@ describe("Step settings manager decorator", () => {
 		});
 
 		const written = readFileSync(path, "utf8");
-		expect(written.startsWith("# StepCode configuration\n# hand written note\n")).toBe(true);
+		// A file written by an older release has no editor directive; the first
+		// write adds one so the schema now shipped beside it is actually used, and
+		// every existing comment survives in order.
+		expect(written.startsWith("#:schema ./config.schema.json\n# StepCode configuration\n# hand written note\n")).toBe(
+			true,
+		);
 		expect(readStepConfig(path)).toEqual({ defaultModel: "next", mcp_servers: { demo: { command: "demo" } } });
 	});
 

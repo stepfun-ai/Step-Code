@@ -47,35 +47,15 @@ const TRACE_HEADER_ENV_NAMES = [
 const STEP_TRACE_PRODUCT_PROVIDERS = new Set(["stepfunModelProxy", "neocodex"]);
 
 /**
- * Step's first-party hosts (domestic `.com` + oversea `.ai`). Requests there
- * carry the session id as the vendor-neutral `x-session-id`: on our own model
- * endpoint that is product attribution, not third-party egress.
- */
-export const STEP_FIRST_PARTY_TRACE_HOSTS: readonly string[] = ["api.stepfun.com", "api.stepfun.ai"];
-
-/** Whether a request URL targets a Step first-party host over https. */
-export function isStepFirstPartyTraceUrl(requestUrl: string | undefined): boolean {
-	if (!requestUrl) return false;
-	try {
-		const url = new URL(requestUrl);
-		return url.protocol === "https:" && STEP_FIRST_PARTY_TRACE_HOSTS.includes(url.hostname);
-	} catch {
-		return false;
-	}
-}
-
-/**
  * Add Step attribution headers in place.
  *
- * `x-step-client` is sent on every request. Step's first-party hosts
- * (`https://api.stepfun.com/...`, `https://api.stepfun.ai/...`) additionally
- * receive the session id as `x-session-id`. Every other high-sensitivity field
- * (workspace/goal/...) — and the session id on any other host — is sent only
- * when the request URL matches `options.allowedBaseUrls` AND the field appears
- * in `options.highSensitivityFields`; an omitted or empty field list sends none
- * of them (fail closed), so the local cwd never egresses to a third-party model
- * endpoint. The session id keeps that single name on every path. Values are
- * size-bounded and header-safe via {@link encodeStepTraceHeaderValue}.
+ * `x-step-client` is sent on every request. The high-sensitivity fields
+ * (session/workspace/goal/...) are sent only when the request URL matches
+ * `options.allowedBaseUrls` AND the field appears in
+ * `options.highSensitivityFields`; an omitted or empty field list sends none of
+ * them (fail closed), so the local cwd and session id never egress to a
+ * third-party model endpoint. Values are size-bounded and header-safe via
+ * {@link encodeStepTraceHeaderValue}.
  */
 export function applyStepTraceHeaders(
 	headers: Record<string, string | null>,
@@ -83,12 +63,6 @@ export function applyStepTraceHeaders(
 	options: StepTraceHeaderOptions = {},
 ): void {
 	setHeader(headers, "x-step-client", options.clientType ?? "cli");
-
-	// Step's own hosts always receive the session id, independent of the host
-	// trace policy; any other host only gets it through the allowlist below.
-	if (isStepFirstPartyTraceUrl(options.requestUrl)) {
-		setHeader(headers, "x-session-id", trace.sessionId);
-	}
 
 	const traceAllowed =
 		options.requestUrl === undefined ||
@@ -104,9 +78,7 @@ export function applyStepTraceHeaders(
 	const setIfAllowed = (field: string, value: string | undefined): void => {
 		if (allowed.has(field)) setHeader(headers, `x-step-${field}`, value);
 	};
-	// The session id keeps one name on every path; the other attributed fields
-	// stay under the x-step-* prefix.
-	if (allowed.has("session-id")) setHeader(headers, "x-session-id", trace.sessionId);
+	setIfAllowed("session-id", trace.sessionId);
 	setIfAllowed("goal-id", trace.goalId);
 	setIfAllowed("attempt-id", trace.attemptId);
 	setIfAllowed("harness-id", trace.harnessId);

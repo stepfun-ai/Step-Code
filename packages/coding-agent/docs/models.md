@@ -1,6 +1,22 @@
 # Custom Models
 
-Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.stepcode/agent/models.json`.
+Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via
+`~/.stepcode/models.json`.
+
+The file is validated as a whole when it loads. A structural problem — a model
+without `id`, a field with the wrong type — is reported with the failing path and
+**no** custom provider is registered until the file is fixed. A half-loaded
+catalog would make a model silently disappear from `/model`, which is harder to
+diagnose than an explicit error.
+
+An unknown field inside a provider or model is ignored rather than rejected, the
+same way an unknown key in `config.toml` is: a newer Step may add a field, and an
+older one should keep loading the file. The editor schema flags those fields, so a
+typo is visible without starting a session; the runtime still ignores them.
+
+A schema for editor completions ships with Step: run `step config init` to write
+`models.schema.json` beside the file and add `"$schema": "./models.schema.json"`
+as the first key, or print it with `step config schema models`.
 
 ## Table of Contents
 
