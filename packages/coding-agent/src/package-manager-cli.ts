@@ -81,8 +81,9 @@ project-local modes.
 Settings themselves (models, compaction, permissions, search, MCP servers) live
 in the same config.toml. \`config show\` prints the stored global and project
 documents with credentials redacted, \`config schema\` prints the JSON Schema an
-editor completes and validates against, and \`config init\` writes a template
-plus that schema beside the global file.
+editor completes and validates against, \`config check\` reports keys and values
+this build would ignore, and \`config init\` writes a template plus that schema
+beside the global file.
 
 Options:
   -l, --local       Edit project overrides (${CONFIG_DIR_NAME}/config.toml)

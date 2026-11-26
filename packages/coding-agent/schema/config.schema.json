@@ -1571,7 +1571,7 @@
 							"const": "tinyfish"
 						}
 					],
-					"description": "Web search backend. `auto` (default) walks the chain; a backend id pins one; `off` keeps the tool but refuses calls. The runtime treats an unrecognized value as `auto`, so a misspelling silently disables the pin instead of failing."
+					"description": "Web search backend. `auto` (default) walks the chain; a backend id pins one; `off` keeps the tool but refuses calls. The runtime treats an unrecognized value as `auto`, so a misspelling silently disables the pin instead of failing; `step config check` flags it."
 				}
 			},
 			"additionalProperties": false,

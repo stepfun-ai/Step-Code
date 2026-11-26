@@ -661,7 +661,8 @@ ${chalk.bold("Configuration:")}
   ~/.stepcode/models.json         Custom providers and models
   .stepcode/config.toml           Project overrides, loaded when the project is trusted
   ${APP_NAME} config show         Print the stored config.toml, models.json, and paths
-  ${APP_NAME} config schema       Print the JSON Schema an editor completes against`
+  ${APP_NAME} config schema       Print the JSON Schema an editor completes against
+  ${APP_NAME} config check        Report keys and values this build would ignore`
 		: "";
 	const extensionFlagsText =
 		extensionFlags && extensionFlags.length > 0

@@ -27,7 +27,7 @@ describe("config --help subcommands", () => {
 			expect(result.isStepEntrypoint).toBe(true);
 			expect(result.configHandled).toBe(true);
 			expect(result.configHelp).toContain(`${appName} config [-l]`);
-			expect(STEP_CONFIG_SUBCOMMANDS.map((sub) => sub.name)).toEqual(["path", "show", "init", "schema"]);
+			expect(STEP_CONFIG_SUBCOMMANDS.map((sub) => sub.name)).toEqual(["path", "show", "init", "schema", "check"]);
 			for (const { name } of STEP_CONFIG_SUBCOMMANDS) {
 				expect(result.configHelp).toMatch(new RegExp(`^\\s+${name}\\s`, "m"));
 			}

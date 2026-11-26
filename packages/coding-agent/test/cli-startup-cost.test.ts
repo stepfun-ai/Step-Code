@@ -28,6 +28,7 @@ const FORBIDDEN_MODULES = [
 	"src/step/config-toml.ts",
 	"src/step/command-compat.ts",
 	"src/step/settings-manager.ts",
+	"src/step/config-check.ts",
 	"src/step/schema-files.ts",
 	"src/step/subagent-limits.ts",
 	"src/core/model-config.ts",

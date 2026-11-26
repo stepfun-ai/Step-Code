@@ -36,6 +36,11 @@ export const STEP_CONFIG_SUBCOMMANDS: readonly StepConfigSubcommand[] = [
 		summary: "Print the editor JSON Schema for config.toml or models.json (--out <file>).",
 		flags: ["--out"],
 	},
+	{
+		name: "check",
+		summary: "Validate config.toml and models.json against that schema (--json, --allow-unknown).",
+		flags: ["--json", "--allow-unknown"],
+	},
 ];
 
 /** Whether `name` selects a subcommand, so a bare `step config` still opens the TUI. */
