@@ -25,7 +25,6 @@ const ENTRY = resolve(packageRoot, "src/cli/args.ts");
  */
 const FORBIDDEN_MODULES = [
 	"src/step/config-schema.ts",
-	"src/step/config-check.ts",
 	"src/step/config-toml.ts",
 	"src/step/command-compat.ts",
 	"src/step/settings-manager.ts",
