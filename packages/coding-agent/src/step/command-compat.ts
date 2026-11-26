@@ -11,6 +11,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
+import { checkStepConfigFiles, describePath } from "./config-check.ts";
 import {
 	CONFIG_SCHEMA_FILE_NAME,
 	MODELS_SCHEMA_FILE_NAME,
@@ -361,6 +362,51 @@ export async function runStepConfigCommand(argv: readonly string[], io: StepConf
 		return;
 	}
 
+	if (subcommand === "check") {
+		const result = checkStepConfigFiles({
+			globalSettings: paths.globalSettings,
+			projectSettings: paths.projectSettings,
+			models: paths.globalModels,
+		});
+
+		if (argv.includes("--json")) {
+			stdout.write(
+				`${JSON.stringify(
+					{
+						ok: result.problems.length === 0,
+						checkedFiles: result.checkedFiles,
+						notes: result.notes,
+						problems: result.problems,
+					},
+					null,
+					2,
+				)}\n`,
+			);
+		} else if (result.problems.length === 0) {
+			stdout.write(`Configuration is valid: ${result.checkedFiles.join(", ") || "(no files yet)"}\n`);
+			for (const note of result.notes) stdout.write(`note: ${note}\n`);
+		} else {
+			for (const problem of result.problems) {
+				const where = problem.path ? `${problem.file}:${describePath(problem.path)}` : problem.file;
+				stdout.write(`${where}: ${problem.message}\n`);
+			}
+			for (const note of result.notes) stdout.write(`note: ${note}\n`);
+		}
+		// An unknown key means this binary ignores it, which is a real problem for
+		// the file's author but not for someone reading a config written by a newer
+		// release. `--allow-unknown` downgrades those to a note.
+		const blocking = argv.includes("--allow-unknown")
+			? result.problems.filter((problem) => problem.kind !== "unknown")
+			: result.problems;
+		if (blocking.length > 0) {
+			const count = blocking.length;
+			throw new Error(
+				`${count} configuration ${count === 1 ? "problem" : "problems"} found. Run "step config schema" for the full key list.`,
+			);
+		}
+		return;
+	}
+
 	if (subcommand === "show") {
 		const json = argv.includes("--json");
 		const readJson = async (path: string): Promise<unknown> => {
@@ -533,6 +579,16 @@ function stepConfigUsage(subcommand: string): string {
 			return [
 				"Usage: step config init [--scope user|workspace] [--path <file>] [--force]",
 				"  Write a Step config template. Defaults to the user scope; --force overwrites an existing file.",
+			].join("\n");
+		case "check":
+			return [
+				"Usage: step config check [--json] [--allow-unknown]",
+				"  Validate the global and project config.toml plus models.json against the",
+				"  schema this build ships. An unknown key or a rejected value is reported",
+				"  and the exit code is 1.",
+				"  --allow-unknown  Do not fail on a key this build does not read. Use it in",
+				"                   CI for a config shared with a newer release; the key is",
+				"                   still reported.",
 			].join("\n");
 		case "schema":
 			return [

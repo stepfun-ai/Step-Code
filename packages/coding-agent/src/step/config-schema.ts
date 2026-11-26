@@ -10,8 +10,8 @@
  *
  * `additionalProperties: false` makes the schema stricter than the runtime on
  * purpose: the loaders keep an unknown key and ignore it, while an editor flags
- * it. That difference is the feature — a typo becomes visible where it is
- * written, and a launch never fails because of it.
+ * it. That difference is the feature — `step config check` reports the same key
+ * so a typo is visible without an editor, and a launch never fails because of it.
  */
 
 import { type Static, Type } from "typebox";
@@ -143,7 +143,7 @@ const SearchTableSchema = Type.Object(
 				SEARCH_CHAIN_MODES.map((mode) => Type.Literal(mode)),
 				{
 					description:
-						"Web search backend. `auto` (default) walks the chain; a backend id pins one; `off` keeps the tool but refuses calls. The runtime treats an unrecognized value as `auto`, so a misspelling silently disables the pin instead of failing.",
+						"Web search backend. `auto` (default) walks the chain; a backend id pins one; `off` keeps the tool but refuses calls. The runtime treats an unrecognized value as `auto`, so a misspelling silently disables the pin instead of failing; `step config check` flags it.",
 				},
 			),
 		),
@@ -290,7 +290,8 @@ const StepProductProperties = {
 		),
 	),
 	// Rewritten by `SettingsManager.migrateSettings` before any read. Listed here
-	// so a file that still uses them is not flagged as invalid.
+	// so the editor and `config check`, which validates the file as written,
+	// agree about a file that still uses them.
 	queueMode: Type.Optional(
 		Type.Union([Type.Literal("all"), Type.Literal("one-at-a-time")], {
 			description: "Older spelling of `steeringMode`; migrated on load.",
@@ -395,7 +396,7 @@ function closeObjects(node: SchemaNode): SchemaNode {
 	return closed;
 }
 
-/** `models.json` as the editor should see it. */
+/** `models.json` as the editor and `step config check` should see it. */
 const StrictModelsJsonSchema = closeObjects(ModelsJsonSchema as unknown as SchemaNode) as object;
 
 export type ConfigTomlDocument = Static<typeof ConfigTomlSchema>;
@@ -430,7 +431,7 @@ export const PermissiveModelsJsonSchema = ModelsJsonSchema;
 /** The closed tree. */
 export const ClosedModelsJsonSchema = StrictModelsJsonSchema;
 
-/** `models.json` with unknown fields closed, for editors. */
+/** `models.json` with unknown fields closed, for editors and `config check`. */
 export function renderStrictModelsSchema(): string {
 	return renderSchemaJson(StrictModelsJsonSchema, MODELS_SCHEMA_TITLE);
 }
