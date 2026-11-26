@@ -62,6 +62,7 @@ import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import type { InlineExtension, ToolDefinition } from "./core/extensions/types.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
+import type { ModelFetchFactory } from "./core/model-fetch.ts";
 import type { ModelRequestObserver } from "./core/model-request-observer.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
@@ -792,6 +793,8 @@ export interface MainOptions {
 	uiHooks?: StartupUiHooks;
 	/** Optional best-effort observer for provider request lifecycle metrics. */
 	modelRequestObserver?: ModelRequestObserver;
+	/** Optional host wrapper around each model request's HTTP fetch. */
+	modelFetch?: ModelFetchFactory;
 	/** Optional product identity used by the default system prompt. */
 	systemPromptProduct?: SystemPromptProduct;
 	/**
@@ -1307,6 +1310,7 @@ export async function prepareMain(args: string[], options?: MainOptions): Promis
 			noTools: sessionOptions.noTools,
 			customTools: sessionOptions.customTools,
 			modelRequestObserver: options?.modelRequestObserver,
+			modelFetch: options?.modelFetch,
 			systemPromptProduct: options?.systemPromptProduct,
 		});
 		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;

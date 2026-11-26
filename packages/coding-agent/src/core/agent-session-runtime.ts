@@ -263,6 +263,7 @@ export class AgentSessionRuntime implements AgentSessionRuntimeHost {
 		this.beforeSessionInvalidate?.();
 		session.dispose();
 		if (this._session === session) this.currentSessionDisposed = true;
+		await session.settleRequestTeardowns();
 	}
 
 	private apply(result: CreateAgentSessionRuntimeResult): boolean {
@@ -538,6 +539,9 @@ export class AgentSessionRuntime implements AgentSessionRuntimeHost {
 					this.beforeSessionInvalidate?.();
 					session.dispose();
 					this.currentSessionDisposed = true;
+					// Bounded: what the stopped requests still owe (a released reservation)
+					// gets its chance before the host exits.
+					await session.settleRequestTeardowns();
 				}
 			} finally {
 				this.rebindSession = undefined;

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import process from "node:process";
+import { STEP_CLIENT_DEFAULT } from "./environment.ts";
 
 /** Values copied from the request context into Step's attribution headers. */
 export interface StepTraceContext {
@@ -49,7 +50,9 @@ const STEP_TRACE_PRODUCT_PROVIDERS = new Set(["stepfunModelProxy", "neocodex"]);
 /**
  * Add Step attribution headers in place.
  *
- * `x-step-client` is sent on every request. The high-sensitivity fields
+ * `x-step-client` is sent on every request (`STEP_CLIENT_DEFAULT`, or the
+ * caller's `clientType` when it names the product).
+ * The high-sensitivity fields
  * (session/workspace/goal/...) are sent only when the request URL matches
  * `options.allowedBaseUrls` AND the field appears in
  * `options.highSensitivityFields`; an omitted or empty field list sends none of
@@ -62,7 +65,7 @@ export function applyStepTraceHeaders(
 	trace: StepTraceContext,
 	options: StepTraceHeaderOptions = {},
 ): void {
-	setHeader(headers, "x-step-client", options.clientType ?? "cli");
+	setHeader(headers, "x-step-client", options.clientType ?? STEP_CLIENT_DEFAULT);
 
 	const traceAllowed =
 		options.requestUrl === undefined ||

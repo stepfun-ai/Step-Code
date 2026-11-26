@@ -68,13 +68,13 @@ describe("Step trace headers", () => {
 			accept: "application/json",
 		};
 		applyStepTraceHeaders(headers, trace, {
-			clientType: " cli ",
+			clientType: " stepcode-desktop ",
 			requestUrl: "https://other.example/v1/messages",
 			allowedBaseUrls: ["https://allowed.example/v1"],
 		});
 
 		expect(headers).toEqual({
-			"x-step-client": "cli",
+			"x-step-client": "stepcode-desktop",
 			"x-step-session-id": "stale-session",
 			accept: "application/json",
 		});
@@ -86,7 +86,7 @@ describe("Step trace headers", () => {
 			requestUrl: "https://collector.example/v1/messages",
 			allowedBaseUrls: [],
 		});
-		expect(headers).toEqual({ "x-step-client": "cli" });
+		expect(headers).toEqual({ "x-step-client": "stepcode-cli" });
 	});
 
 	it("matches only a complete URL prefix", () => {

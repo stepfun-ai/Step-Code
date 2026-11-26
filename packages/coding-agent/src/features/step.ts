@@ -42,8 +42,8 @@ import { applyStepTraceHeaders } from "../step/trace-headers.ts";
 import { isPlanExtensionMounted, planModeToolCallDecision } from "./step-plan.ts";
 import {
 	fetchStepModelEfforts,
+	isStepProvider,
 	registerStepProvider,
-	STEP_PROVIDER_ID,
 	stepModelsDetailBaseUrl,
 	stepThinkingLevelMap,
 } from "./step-provider/index.ts";
@@ -81,7 +81,7 @@ async function enrichStepModelEffort(
 	pi: ExtensionAPI,
 ): Promise<void> {
 	try {
-		if (!model || model.provider !== STEP_PROVIDER_ID) return;
+		if (!model || !isStepProvider(model)) return;
 		if (!model.thinkingLevelMap) {
 			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
 			if (auth.ok && auth.apiKey) {

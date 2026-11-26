@@ -1,3 +1,4 @@
+import { isStepPlatformUrl } from "@step-harness/providers/step-provider";
 import type { ModelRequestObserver } from "../core/model-request-observer.ts";
 import type {
 	StepTelemetryPrimitive as RegistryTelemetryPrimitive,
@@ -143,15 +144,7 @@ export function classifyStepEndpoint(
 	) {
 		return "local";
 	}
-	for (const name of ["STEP_BASE_URL", "STEP_MODELS_PROXY_BASE_URL", "STEPFUN_MESSAGES_ENDPOINT"] as const) {
-		for (const candidate of (_env[name] ?? "").split(",")) {
-			try {
-				if (new URL(candidate.trim()).hostname.toLowerCase() === hostname) return "platform";
-			} catch {
-				// Ignore malformed overrides.
-			}
-		}
-	}
-	if (hostname === "api.stepfun.com") return "platform";
-	return "custom";
+	// The Step provider's default, its endpoint overrides and a declared models
+	// proxy decide (comma-separated lists allowed), not a list kept here.
+	return isStepPlatformUrl(baseUrl, _env) ? "platform" : "custom";
 }

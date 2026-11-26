@@ -139,11 +139,13 @@ import {
 	recordIncompleteTurn,
 } from "./incomplete-turn-recovery.ts";
 import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
+import type { ModelQueueChannel, ModelQueueState } from "./model-fetch.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import { isRateLimitError, rateLimitDelay } from "./rate-limit.ts";
 import type { RequestLedger } from "./request-provenance.ts";
+import type { RequestTeardowns } from "./request-teardowns.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import type { AgentRunFailure } from "./run-failure.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
@@ -222,6 +224,19 @@ export type AgentSessionEvent =
 	| { type: "summarization_retry_finished" }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| { type: "bash_execution_update"; id?: string; delta: string }
+	| {
+			/**
+			 * A model request waits in a server-side line (`queue`), or left it
+			 * (`queue: null`, with `closedReason` when the server closed its place).
+			 * Reported by the host's model-fetch wrapper. A live frame (see
+			 * `session-event-durability.ts`): records skip it, live consumers and
+			 * `--include-live-events` streams (a subagent's parent) receive it.
+			 */
+			type: "model_queue";
+			queueId: string;
+			queue: ModelQueueState | null;
+			closedReason?: string;
+	  }
 	| {
 			/** Request-time lightweight context projection telemetry (step.compaction.contextProjection). */
 			type: "context_projection";
@@ -326,6 +341,10 @@ export interface AgentSessionConfig {
 	 * the message are recorded.
 	 */
 	requestLedger?: RequestLedger;
+	/** Queue reports from the model-fetch wrappers of this session's requests, published as `model_queue`. */
+	modelQueue?: ModelQueueChannel;
+	/** Work this session's model requests still owe; see {@link AgentSession.settleRequestTeardowns}. */
+	requestTeardowns?: RequestTeardowns;
 }
 
 export interface ExtensionBindings {
@@ -621,6 +640,16 @@ export class AgentSession {
 			sessionId: () => this.sessionManager.getSessionId(),
 			...(config.requestLedger ? { ledger: config.requestLedger } : {}),
 		});
+		this._modelQueue = config.modelQueue;
+		this._requestTeardowns = config.requestTeardowns;
+		this._modelQueue?.connect((queueId, queue, exit) =>
+			this._emit({
+				type: "model_queue",
+				queueId,
+				queue,
+				...(exit?.closedReason === undefined ? {} : { closedReason: exit.closedReason }),
+			}),
+		);
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
@@ -1472,6 +1501,9 @@ export class AgentSession {
 	private _lastAssistantEntryId: string | undefined = undefined;
 	/** What the session writes about how it ran (tool calls, turns, thinking, requests); see `execution-trace.ts`. */
 	private readonly _trace: SessionExecutionTrace;
+	/** Queue reports from this session's model-fetch wrappers; disconnected on dispose. */
+	private readonly _modelQueue: ModelQueueChannel | undefined;
+	private readonly _requestTeardowns: RequestTeardowns | undefined;
 	/** Recovery prompt selected at the end of a turn and waiting for its continuation to start. */
 	private _pendingIncompleteTurnRecovery: CustomMessage | undefined = undefined;
 
@@ -1850,6 +1882,16 @@ export class AgentSession {
 	}
 
 	/**
+	 * Wait, at most `limitMs`, for the work this session's model requests still
+	 * owe after `dispose()` stopped them (for example releasing a server-side
+	 * reservation). Returns at once when there is none. Owners that dispose a
+	 * session (runtime dispose and replacement) await it before going on.
+	 */
+	async settleRequestTeardowns(limitMs?: number): Promise<void> {
+		await this._requestTeardowns?.settle(limitMs);
+	}
+
+	/**
 	 * Remove all listeners and disconnect from agent.
 	 * Call this when completely done with the session.
 	 */
@@ -1857,6 +1899,7 @@ export class AgentSession {
 		// The filter is this session's, not the agent's: a caller that keeps the
 		// agent must not inherit a rule about a decision nobody owns any more.
 		this.agent.setQueueDeliveryFilter(undefined);
+		this._modelQueue?.connect(undefined);
 		try {
 			this.abortRetry();
 			this.abortCompaction();

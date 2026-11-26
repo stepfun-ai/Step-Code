@@ -36,7 +36,7 @@ type JsonAgentSessionEvent =
   | { type: "agent_end"; willRetry: boolean; messageCount: number };
 ```
 
-`queue_update` emits the full pending steering and follow-up queues whenever they change. `compaction_start` and `compaction_end` cover both manual and automatic compaction.
+`queue_update` emits the full pending steering and follow-up queues whenever they change. `model_queue` is a live frame (written only with `--include-live-events`): a model request waits in the model request queue (`{ queueId, queue: { position? } }`), then `queue: null` (with `closedReason` when the server closed its place) when it leaves the line. Text mode (`-p`) writes each change to stderr instead. `compaction_start` and `compaction_end` cover both manual and automatic compaction.
 
 Other events are the session loop's own
 [`AgentSessionEvent`](https://github.com/stepfun-ai/step-harness/blob/main/packages/coding-agent/src/core/agent-session.ts),

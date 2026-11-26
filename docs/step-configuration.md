@@ -183,6 +183,23 @@ confirms the child's actual route after it starts, rejecting CLI fuzzy matches o
 falls back to a different model. A background lane keeps the route it was launched with
 when a reply respawns its child.
 
+### Model request queue
+
+When Step's model pool is busy, the server can keep a model request sent to
+Step's API in a first-come line instead of rejecting it. The client side is on
+by default:
+
+```toml
+model_queue = true
+```
+
+Every model request sent to `api.stepfun.com` or `api.stepfun.ai` takes part,
+whichever provider sends it. `STEPCODE_MODEL_QUEUE=1` / `0` overrides the setting; a trusted project's
+`.stepcode/config.toml` overrides the global one; with neither, the queue is on,
+for every host alike. See
+[Step integration](../packages/coding-agent/docs/step-integration.md#model-request-queue)
+for the protocol.
+
 ### Plan file storage
 
 Native Markdown plans default to

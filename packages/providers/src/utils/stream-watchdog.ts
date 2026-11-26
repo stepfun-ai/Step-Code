@@ -15,6 +15,41 @@ export interface StreamIdleWatchdogOptions {
 	onTimeout: () => void;
 	/** Response shell used when the provider has not produced a partial response yet. */
 	fallback: () => AssistantMessage;
+	/** Suspends the idle bound while the request waits outside the provider (see {@link StreamIdleHold}). */
+	hold?: StreamIdleHold;
+}
+
+/**
+ * Pauses a stream's idle bound while its request is deliberately held before
+ * the provider answers, e.g. while the server has not admitted it yet. While any
+ * acquisition is outstanding the watchdog does not fire; releasing the last one
+ * starts a full idle window again.
+ */
+export class StreamIdleHold {
+	private count = 0;
+	private readonly listeners = new Set<() => void>();
+
+	get held(): boolean {
+		return this.count > 0;
+	}
+
+	/** Hold the bound; the returned function releases this acquisition (idempotent). */
+	acquire(): () => void {
+		this.count++;
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			this.count--;
+			if (this.count === 0) for (const listener of this.listeners) listener();
+		};
+	}
+
+	/** Called whenever the last acquisition is released. Returns the unsubscribe function. */
+	onRelease(listener: () => void): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
 }
 
 /**
@@ -62,8 +97,17 @@ async function pump(
 	};
 	for (;;) {
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		let stopRearming: (() => void) | undefined;
 		const expired = new Promise<"timeout">((resolve) => {
-			timer = setTimeout(() => resolve("timeout"), options.idleTimeoutMs);
+			const arm = () => {
+				clearTimeout(timer);
+				timer = setTimeout(() => {
+					// A held request is not stalled; the release re-arms a full window.
+					if (!options.hold?.held) resolve("timeout");
+				}, options.idleTimeoutMs);
+			};
+			stopRearming = options.hold?.onRelease(arm);
+			arm();
 		});
 		let next: IteratorResult<AssistantMessageEvent> | "timeout";
 		try {
@@ -73,6 +117,7 @@ async function pump(
 			return;
 		} finally {
 			clearTimeout(timer);
+			stopRearming?.();
 		}
 		if (next === "timeout") {
 			options.onTimeout();

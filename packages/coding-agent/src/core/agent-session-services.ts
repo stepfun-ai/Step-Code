@@ -51,6 +51,8 @@ export interface CreateAgentSessionServicesOptions {
 	extensionFlagValues?: Map<string, boolean | string>;
 	resourceLoaderOptions?: Omit<DefaultResourceLoaderOptions, "cwd" | "agentDir" | "settingsManager">;
 	resourceLoaderReloadOptions?: ResourceLoaderReloadOptions;
+	/** Default model-fetch wrapper for sessions created from these services. */
+	modelFetch?: CreateAgentSessionOptions["modelFetch"];
 }
 
 /**
@@ -76,6 +78,8 @@ export interface CreateAgentSessionFromServicesOptions {
 	customTools?: ToolDefinition[];
 	/** Optional best-effort observer for provider request lifecycle metrics. */
 	modelRequestObserver?: ModelRequestObserver;
+	/** Optional host wrapper around each model request's HTTP fetch; replaces `services.modelFetch`. */
+	modelFetch?: CreateAgentSessionOptions["modelFetch"];
 	/** Optional product identity used by the default system prompt. */
 	systemPromptProduct?: SystemPromptProduct;
 }
@@ -95,6 +99,8 @@ export interface AgentSessionServices {
 	settingsManager: SettingsManager;
 	resourceLoader: ResourceLoader;
 	diagnostics: AgentSessionRuntimeDiagnostic[];
+	/** Default model-fetch wrapper for sessions created from these services. */
+	modelFetch?: CreateAgentSessionOptions["modelFetch"];
 }
 
 function applyExtensionFlagValues(
@@ -215,6 +221,7 @@ export async function createAgentSessionServices(
 		settingsManager,
 		resourceLoader,
 		diagnostics,
+		...(options.modelFetch ? { modelFetch: options.modelFetch } : {}),
 	};
 }
 
@@ -246,6 +253,7 @@ export async function createAgentSessionFromServices(
 		customTools: options.customTools,
 		sessionStartEvent: options.sessionStartEvent,
 		modelRequestObserver: options.modelRequestObserver,
+		modelFetch: options.modelFetch ?? options.services.modelFetch,
 		systemPromptProduct: options.systemPromptProduct,
 	});
 }

@@ -11,10 +11,10 @@ describe("Step early environment", () => {
 		expect(getStepDefaultTheme(env)).toBe("step-blue");
 	});
 
-	test("defaults the downstream client marker to stepcode, honoring an explicit value", () => {
+	test("defaults the downstream client marker to stepcode-cli, honoring an explicit value", () => {
 		const fresh: NodeJS.ProcessEnv = {};
 		applyStepEnvironment(fresh);
-		expect(fresh.STEP_CLIENT).toBe("stepcode");
+		expect(fresh.STEP_CLIENT).toBe("stepcode-cli");
 
 		const explicit: NodeJS.ProcessEnv = { STEP_CLIENT: "embedding-host" };
 		applyStepEnvironment(explicit);
@@ -22,7 +22,7 @@ describe("Step early environment", () => {
 
 		const blank: NodeJS.ProcessEnv = { STEP_CLIENT: "   " };
 		applyStepEnvironment(blank);
-		expect(blank.STEP_CLIENT).toBe("stepcode");
+		expect(blank.STEP_CLIENT).toBe("stepcode-cli");
 	});
 
 	test("recognizes source, bundled, and binary launchers", () => {

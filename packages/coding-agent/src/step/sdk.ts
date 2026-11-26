@@ -13,6 +13,7 @@ import { createAgentSession } from "../core/sdk.ts";
 import type { SettingsManager } from "../core/settings-manager.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "./environment.ts";
+import { createStepModelQueueFactory } from "./model-queue.ts";
 import { createStepSessionManager, wrapStepSessionManager } from "./session.ts";
 import {
 	createStepSettingsManager,
@@ -89,6 +90,16 @@ function ensureStepSettingsManager(
 	});
 }
 
+/**
+ * The Step model request queue for sessions using these settings. A caller's
+ * own `modelFetch` replaces it.
+ */
+function stepModelQueueFactory(settingsManager: StepSettingsManager) {
+	return createStepModelQueueFactory({
+		settings: () => settingsManager.getStepSettings(),
+	});
+}
+
 /** Create a Pi AgentSession with Step's settings decorator installed. */
 export async function createStepAgentSession(
 	options: CreateStepAgentSessionOptions = {},
@@ -108,6 +119,7 @@ export async function createStepAgentSession(
 		configDirName: paths.configDirName,
 		settingsManager,
 		sessionManager,
+		modelFetch: options.modelFetch ?? stepModelQueueFactory(settingsManager),
 	});
 }
 
@@ -123,5 +135,6 @@ export async function createStepAgentSessionServices(
 		agentDir: paths.agentDir,
 		configDirName: paths.configDirName,
 		settingsManager,
+		modelFetch: options.modelFetch ?? stepModelQueueFactory(settingsManager),
 	}) as Promise<StepAgentSessionServices>;
 }

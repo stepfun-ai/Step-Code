@@ -1,6 +1,7 @@
 import {
 	type AccountUsageState,
 	type ExtensionCommandContext,
+	isStepProvider,
 	stripAnsi,
 	theme,
 	type UsagePresentation,
@@ -237,7 +238,7 @@ export function usagePresentationRows(model: UsagePresentation, width = 100, det
 		);
 		if (model.session.invalid || model.session.missing)
 			rows.push(`Usage coverage: ${model.session.invalid} invalid, ${model.session.missing} missing records`);
-		if (s.provider !== "step") rows.push(`Step account quota · current model uses ${s.provider}`);
+		if (!isStepProvider(s.provider)) rows.push(`Step account quota · current model uses ${s.provider}`);
 		rows.push("", "R refresh account");
 	}
 	rows.push("1/2 or ←/→ switch tab · ↑/↓ scroll · Esc close");

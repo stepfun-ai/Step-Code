@@ -17,6 +17,7 @@ import {
 	configureHttpDispatcher,
 	createStepCode,
 	createStepCodeProviderInlineExtension,
+	createStepModelQueueFactory,
 	createStepProviderConfig,
 	createStepSessionManagerFactory,
 	createStepSettingsManager,
@@ -35,6 +36,7 @@ import {
 	installProcessStderrDevLogCapture,
 	isStepConfigCommand,
 	isStepInteractiveLoginStartup,
+	isStepProvider,
 	isStepServicesDisabled,
 	loginMcpServer,
 	logoutMcpServer,
@@ -74,6 +76,7 @@ import {
 	type StepSettingsManager,
 	scanUsageOverview,
 	setStderrDevLogStorageRootDirectory,
+	stepModelQueueStatusText,
 	stopThemeWatcher,
 	syncStepLoginProfileEndpoint,
 	trackStepTelemetry,
@@ -270,7 +273,7 @@ const stepMainOptions: MainOptions = {
 	interactiveModeOptions: {
 		showChangelog: false,
 		tuiStyle: "step" as const,
-		defaultModelForProvider: (providerId) => (providerId === STEP_PROVIDER_ID ? STEP_DEFAULT_MODEL : undefined),
+		defaultModelForProvider: (providerId) => (isStepProvider(providerId) ? STEP_DEFAULT_MODEL : undefined),
 		allowedAuthProviders: [STEP_PROVIDER_ID],
 		stepLogin: (host) =>
 			runStepLogin({
@@ -320,6 +323,11 @@ const stepMainOptions: MainOptions = {
 		},
 	},
 	...(modelRequestObserver ? { modelRequestObserver } : {}),
+	// Every mode (interactive, print/json, rpc and the subagent children it
+	// starts) runs through here; the switch decides per request.
+	modelFetch: createStepModelQueueFactory({
+		settings: () => currentStepSettingsManager?.getStepSettings(),
+	}),
 	systemPromptProduct: {
 		name: "StepCode",
 		role: "an interactive terminal coding agent developed by StepFun",
@@ -741,7 +749,7 @@ try {
 					STEP_DEFAULT_PROVIDER;
 				if (
 					interactiveStartup &&
-					selectedProvider === STEP_PROVIDER_ID &&
+					isStepProvider(selectedProvider) &&
 					!hasExplicitStepCredential &&
 					!hasConfiguredStepCodeCredential(stepCodeConfig)
 				) {
@@ -924,6 +932,7 @@ async function dispatchStepAppMode(prep: Extract<MainPreparation, { kind: "dispa
 				messages: prep.parsed.messages,
 				initialMessage: prep.initialMessage,
 				initialImages: prep.initialImages,
+				formatModelQueue: stepModelQueueStatusText,
 			});
 			stopThemeWatcher();
 			restoreStdout();

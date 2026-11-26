@@ -231,3 +231,13 @@ test("the record is bounded per line even with a large payload", async () => {
 	// message, one execution outcome.
 	expect(hits.length).toBe(4);
 });
+
+test("a queued model request is a live frame: kept out of records, sent to live-event consumers", () => {
+	const waiting: AgentSessionEvent = { type: "model_queue", queueId: "r1", queue: { position: 2 } };
+	const left: AgentSessionEvent = { type: "model_queue", queueId: "r1", queue: null, closedReason: "queue_full" };
+	expect(sessionEventDurability(waiting)).toBe("ephemeral");
+	expect(toJsonEvent(waiting, { includeLiveEvents: false })).toBeUndefined();
+	// A subagent parent starts its child with --include-live-events, so it receives both.
+	expect(toJsonEvent(waiting, { includeLiveEvents: true })).toEqual(waiting);
+	expect(toJsonEvent(left, { includeLiveEvents: true })).toEqual(left);
+});

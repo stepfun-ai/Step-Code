@@ -28,6 +28,7 @@ import type {
 	ExtensionUIDialogOptions,
 	InteractiveModeOptions,
 	MarkdownTransformer,
+	ModelQueueState,
 	SessionEntry,
 } from "@step-harness/coding-agent";
 import type { Container, EditorComponent, MarkdownTheme, TUI, TuiAltScreen, TuiMainScreen } from "@step-harness/pi-tui";
@@ -128,6 +129,10 @@ export interface RuntimeContext {
 	showWorkingStatusIndicator(): void;
 	showTurnDoneIndicator(durationSeconds: number): void;
 	clearStatusIndicator(kind?: StatusIndicator["kind"]): void;
+	/** Show (or, with `null`, drop) one model request's place in line; see `ModelQueueStatusSlot`. */
+	updateModelQueue(queueId: string, state: ModelQueueState | null): void;
+	/** Drop every queue row and restore what they covered. */
+	clearModelQueue(): void;
 	showError(errorMessage: string): void;
 	renderSessionEntries(entries: SessionEntry[], options?: { updateFooter?: boolean; populateHistory?: boolean }): void;
 	addCompactionCostNotice(notice: {

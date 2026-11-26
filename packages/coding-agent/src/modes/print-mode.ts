@@ -10,6 +10,7 @@ import type { AgentMessage } from "@step-harness/agent-core";
 import { type AssistantMessage, type ImageContent, INCOMPLETE_TURN_MESSAGES } from "@step-harness/providers";
 import type { AgentSessionEvent } from "../core/agent-session.ts";
 import type { AgentSessionRuntimeHost } from "../core/agent-session-runtime.ts";
+import type { ModelQueueState } from "../core/model-fetch.ts";
 import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
 import { type ExternalPlanHandoff, readExternalPlanHandoff } from "../features/plan-handoff.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
@@ -41,6 +42,12 @@ export interface PrintModeOptions extends CompletionCheckOptions {
 	 * `core/session-event-durability.ts`.
 	 */
 	includeLiveEvents?: boolean;
+	/**
+	 * Text mode: the stderr line for a model request waiting in line (a
+	 * `model_queue` report), supplied by the host that installed the queue.
+	 * Without it, text mode prints no queue lines.
+	 */
+	formatModelQueue?: (queue: ModelQueueState) => string;
 }
 
 interface TerminatingBlock {
@@ -226,6 +233,10 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 				// first would be a second, silently divergent policy.
 				const projected = toJsonEvent(event, { includeLiveEvents });
 				if (projected) writeRawStdout(`${JSON.stringify(projected)}\n`);
+			} else if (event.type === "model_queue" && event.queue && options.formatModelQueue) {
+				// Text mode keeps stdout for the answer; each change of place in line
+				// is reported once (the wrapper reports changes only) on stderr.
+				console.error(options.formatModelQueue(event.queue));
 			}
 		});
 		unsubscribeBackpressure =

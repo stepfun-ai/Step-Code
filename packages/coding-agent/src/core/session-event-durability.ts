@@ -39,10 +39,18 @@ export type SessionEventDurability = "durable" | "ephemeral";
  * The successor test is what keeps `bash_execution_update` out: it carries a
  * delta, not a snapshot, and a user-issued `!` command has no message event that
  * would restate its output. Dropping it would lose the output, not repeat it.
+ *
+ * `model_queue` passes it: it is the in-progress state of a model request
+ * waiting in a server-side line, each report replaces the previous one, and the
+ * request's own `message_end` (an answer, or the queue's error) is the
+ * replayable outcome. A record therefore keeps nothing of it, while live
+ * consumers still get it: the in-process TUI and web host, and the parent of a
+ * subagent, which starts its child's `--mode rpc` with `--include-live-events`.
  */
 const EPHEMERAL_SESSION_EVENT_TYPES: ReadonlySet<AgentSessionEvent["type"]> = new Set([
 	"message_update",
 	"tool_execution_update",
+	"model_queue",
 ]);
 
 export function sessionEventDurability(event: Pick<AgentSessionEvent, "type">): SessionEventDurability {

@@ -47,6 +47,13 @@ export interface StepSettings {
 	subagentBackgroundTimeoutSeconds?: number;
 	/** `[subagent] max_concurrency`: default number of child processes a parallel subagent batch runs at once. */
 	subagentMaxConcurrency?: number;
+	/**
+	 * `model_queue`: model requests sent to Step's API hosts (`api.stepfun.com`,
+	 * `api.stepfun.ai`), whichever provider sends them, carry the queue protocol
+	 * and wait when the server queues them. On unless set; `STEPCODE_MODEL_QUEUE`
+	 * overrides it (`src/step/model-queue.ts`).
+	 */
+	modelQueue?: boolean;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -105,6 +112,16 @@ function rawSubagentConcurrencies(value: JsonObject): unknown[] {
 	return [value.subagentMaxConcurrency, asObject(value.subagent)?.max_concurrency].filter(
 		(candidate) => candidate !== undefined,
 	);
+}
+
+/** The raw configured queue switches, from `model_queue` and the flat key. */
+function rawModelQueueValues(value: JsonObject): unknown[] {
+	return [value.model_queue, value.modelQueue].filter((candidate) => candidate !== undefined);
+}
+
+/** Message for a configured queue switch that is ignored because it is not a boolean. */
+export function invalidModelQueueMessage(value: unknown, keyPath = "model_queue"): string {
+	return `${keyPath} must be true or false; ignoring ${JSON.stringify(value)}`;
 }
 
 export interface StepSettingsPaths {
@@ -307,6 +324,10 @@ function normalizeSettings(value: JsonObject, resetLegacy = true): StepSettings 
 		isValidSubagentMaxConcurrency,
 	);
 	if (subagentConcurrency !== undefined) result.subagentMaxConcurrency = subagentConcurrency;
+	const modelQueue = [value.model_queue, value.modelQueue].find(
+		(candidate): candidate is boolean => typeof candidate === "boolean",
+	);
+	if (modelQueue !== undefined) result.modelQueue = modelQueue;
 	if (resetLegacy) resetLegacyPermissionSettings(result, winningPresetCandidate, winningModeCandidate);
 	return result;
 }
@@ -335,6 +356,7 @@ const STEP_SETTING_ALIASES: Record<keyof StepSettings, readonly string[]> = {
 	subagentBackground: [],
 	subagentBackgroundTimeoutSeconds: [],
 	subagentMaxConcurrency: [],
+	modelQueue: ["model_queue"],
 };
 
 const STEP_SETTING_NESTED_ALIASES: Record<keyof StepSettings, readonly (readonly string[])[]> = {
@@ -366,6 +388,7 @@ const STEP_SETTING_NESTED_ALIASES: Record<keyof StepSettings, readonly (readonly
 	subagentBackground: [["subagent", "background"]],
 	subagentBackgroundTimeoutSeconds: [["subagent", "background_timeout_seconds"]],
 	subagentMaxConcurrency: [["subagent", "max_concurrency"]],
+	modelQueue: [],
 };
 
 function deleteNestedAlias(root: JsonObject, path: readonly string[]): void {
@@ -432,6 +455,9 @@ function validatePatch(settings: Partial<StepSettings>): Partial<StepSettings> {
 		throw new Error(
 			`Invalid Step subagentMaxConcurrency setting: ${String(settings.subagentMaxConcurrency)} (expected a positive integer)`,
 		);
+	}
+	if (settings.modelQueue !== undefined && typeof settings.modelQueue !== "boolean") {
+		throw new Error(`Invalid Step modelQueue setting: ${String(settings.modelQueue)}`);
 	}
 	const normalized = { ...settings };
 	if (settings.permissionPreset !== undefined) {
@@ -546,6 +572,10 @@ class StepSettingsStore {
 		for (const concurrency of rawSubagentConcurrencies(value)) {
 			if (isValidSubagentMaxConcurrency(concurrency)) continue;
 			this.errors.push({ scope, path, error: new Error(invalidSubagentMaxConcurrencyMessage(concurrency)) });
+		}
+		for (const queue of rawModelQueueValues(value)) {
+			if (typeof queue === "boolean") continue;
+			this.errors.push({ scope, path, error: new Error(invalidModelQueueMessage(queue)) });
 		}
 		return value;
 	}

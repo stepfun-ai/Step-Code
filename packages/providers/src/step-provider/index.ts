@@ -602,3 +602,53 @@ function readStringArray(value: Record<string, unknown>, key: string): string[] 
 	const items = result.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
 	return items.length > 0 ? items : undefined;
 }
+
+/**
+ * Whether a model (or provider id) belongs to the Step provider: the one rule
+ * every "is this Step's own provider?" question uses. A custom provider pointed
+ * at a Step endpoint is not the Step provider; its id, not its URL, decides.
+ * Questions about a request's destination use {@link isStepPlatformUrl}.
+ */
+export function isStepProvider(model: { readonly provider: string } | string | undefined): boolean {
+	const provider = typeof model === "string" ? model : model?.provider;
+	return provider === STEP_PROVIDER_ID;
+}
+
+/**
+ * Variables that declare a Step platform endpoint without being one the provider
+ * sends model requests to: the models proxy a host routes Step requests through.
+ */
+const PLATFORM_DECLARATION_ENV_NAMES = ["STEP_MODELS_PROXY_BASE_URL"] as const;
+
+/**
+ * Host names of the Step platform API this process is configured for: the
+ * provider default, every API base URL override the Step provider reads, and a
+ * declared models proxy. A variable may list several URLs, comma-separated. For
+ * callers that only have a URL (telemetry endpoint classes); provider questions
+ * use {@link isStepProvider}.
+ */
+export function stepPlatformHosts(env: Record<string, string | undefined> = process.env): ReadonlySet<string> {
+	const hosts = new Set<string>();
+	const declared = [...API_BASE_URL_ENV_NAMES, ...PLATFORM_DECLARATION_ENV_NAMES].map((name) => env[name]);
+	for (const value of [STEP_PROVIDER_DEFAULTS.apiBaseUrl, ...declared]) {
+		for (const candidate of (value ?? "").split(",")) {
+			const url = candidate.trim();
+			if (!url) continue;
+			try {
+				hosts.add(new URL(url).hostname.toLowerCase());
+			} catch {
+				// A malformed override names no host; the provider reports it on use.
+			}
+		}
+	}
+	return hosts;
+}
+
+/** Whether a URL addresses the Step platform API (exact host match, see {@link stepPlatformHosts}). */
+export function isStepPlatformUrl(url: string, env: Record<string, string | undefined> = process.env): boolean {
+	try {
+		return stepPlatformHosts(env).has(new URL(url).hostname.toLowerCase());
+	} catch {
+		return false;
+	}
+}

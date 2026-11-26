@@ -78,6 +78,7 @@ import {
 	listStepSessions,
 	loadAllHighlightLanguages,
 	MissingSessionCwdError,
+	type ModelQueueState,
 	messageSkillInvocations,
 	normalizeChangelogLinks,
 	onThemeChange,
@@ -172,6 +173,7 @@ import { FooterComponent, formatTokens } from "./view/chrome/footer.ts";
 import {
 	BranchSummaryStatusIndicator,
 	IdleStatus,
+	ModelQueueStatusSlot,
 	STEP_WORKING_INDICATOR_INTERVAL_MS,
 	type StatusIndicator,
 	TurnDoneIndicator,
@@ -2530,7 +2532,31 @@ export class InteractiveMode {
 		this.statusContainer.addChild(indicator);
 	}
 
+	/** Created on the first queue report; until then nothing is covered. */
+	private modelQueueSlot: ModelQueueStatusSlot | undefined;
+
+	updateModelQueue(queueId: string, state: ModelQueueState | null): void {
+		this.modelQueueSlot ??= new ModelQueueStatusSlot({
+			ui: () => this.ui,
+			presentation: () => this.presentation,
+			active: () => this.activeStatusIndicator,
+			swap: (next) => {
+				const previous = this.activeStatusIndicator;
+				this.activeStatusIndicator = next;
+				this.statusContainer.clear();
+				if (next) this.statusContainer.addChild(next);
+				return previous;
+			},
+		});
+		this.modelQueueSlot.update(queueId, state);
+	}
+
+	clearModelQueue(): void {
+		this.modelQueueSlot?.leave();
+	}
+
 	clearStatusIndicator(kind?: StatusIndicator["kind"]): void {
+		this.modelQueueSlot?.forget(kind);
 		if (kind && this.activeStatusIndicator?.kind !== kind) {
 			return;
 		}
