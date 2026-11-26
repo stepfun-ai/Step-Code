@@ -1,40 +1,38 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "Pi Coding Agent Theme",
-	"description": "Theme schema for Pi coding agent",
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "StepCode theme",
 	"type": "object",
-	"required": ["name", "colors"],
+	"required": [
+		"name",
+		"colors"
+	],
 	"properties": {
 		"$schema": {
-			"type": "string",
-			"description": "JSON schema reference"
+			"type": "string"
 		},
 		"name": {
 			"type": "string",
-			"pattern": "^[^/]+$",
-			"description": "Theme name. Must not contain '/' because it is reserved for automatic light/dark theme settings."
+			"minLength": 1
 		},
 		"vars": {
 			"type": "object",
-			"description": "Reusable color variables",
-			"additionalProperties": {
-				"oneOf": [
-					{
-						"type": "string",
-						"description": "Hex color (#RRGGBB), variable reference, or empty string for terminal default"
-					},
-					{
-						"type": "integer",
-						"minimum": 0,
-						"maximum": 255,
-						"description": "256-color palette index (0-255)"
-					}
-				]
+			"patternProperties": {
+				"^.*$": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
+				}
 			}
 		},
 		"colors": {
 			"type": "object",
-			"description": "Theme color definitions (thinkingMax, scrollbarThumb, and search highlight colors are optional and use compatible fallbacks)",
 			"required": [
 				"accent",
 				"border",
@@ -59,7 +57,6 @@
 				"toolTitle",
 				"toolOutput",
 				"mdHeading",
-				"mdTableHeader",
 				"mdLink",
 				"mdLinkUrl",
 				"mdCode",
@@ -91,271 +88,731 @@
 			],
 			"properties": {
 				"accent": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Primary accent color (logo, selected items, cursor)"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"border": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Normal borders"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"borderAccent": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Highlighted borders"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"borderMuted": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Subtle borders"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"success": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Success states"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"error": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Error states"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"warning": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Warning states"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"muted": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Secondary/dimmed text"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"dim": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Very dimmed text (more subtle than muted)"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"text": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Default text color (usually empty string)"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"thinkingText": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Thinking block text color"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"selectedBg": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Selected item background"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"scrollbarThumb": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Fullscreen scrollbar thumb background (falls back to selectedBg when omitted)"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"searchMatchBg": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Transcript search match background and current-match text (falls back to selectedBg when omitted)"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"searchMatchText": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Transcript search match text and current-match background (falls back to text when omitted)"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"userMessageBg": {
-					"$ref": "#/$defs/colorValue",
-					"description": "User message background"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"userMessageText": {
-					"$ref": "#/$defs/colorValue",
-					"description": "User message text color"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"customMessageBg": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Custom message background (hook-injected messages)"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"codeInlineBg": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Inline code chip background (optional; falls back to customMessageBg)"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"customMessageText": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Custom message text color"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"customMessageLabel": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Custom message type label color"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"toolPendingBg": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Tool execution box (pending state)"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"toolSuccessBg": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Tool execution box (success state)"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"toolErrorBg": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Tool execution box (error state)"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"toolTitle": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Tool execution box title color"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"toolOutput": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Tool execution box output text color"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"mdHeading": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Markdown heading text"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"mdTableHeader": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Markdown table header text"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"mdLink": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Markdown link text"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"mdLinkUrl": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Markdown link URL"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"mdCode": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Markdown inline code"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"mdCodeBlock": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Markdown code block content"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"mdCodeBlockBorder": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Markdown code block fences"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"mdQuote": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Markdown blockquote text"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"mdQuoteBorder": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Markdown blockquote border"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"mdHr": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Markdown horizontal rule"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"mdListBullet": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Markdown list bullets/numbers"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"toolDiffAdded": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Added lines in tool diffs"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"toolDiffRemoved": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Removed lines in tool diffs"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"toolDiffContext": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Context lines in tool diffs"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"syntaxComment": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Syntax highlighting: comments"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"syntaxKeyword": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Syntax highlighting: keywords"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"syntaxFunction": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Syntax highlighting: function names"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"syntaxVariable": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Syntax highlighting: variable names"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"syntaxString": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Syntax highlighting: string literals"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"syntaxNumber": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Syntax highlighting: number literals"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"syntaxType": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Syntax highlighting: type names"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"syntaxOperator": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Syntax highlighting: operators"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"syntaxPunctuation": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Syntax highlighting: punctuation"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"thinkingOff": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Thinking level border: off"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"thinkingMinimal": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Thinking level border: minimal"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"thinkingLow": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Thinking level border: low"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"thinkingMedium": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Thinking level border: medium"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"thinkingHigh": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Thinking level border: high"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"thinkingXhigh": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Thinking level border: xhigh"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"thinkingMax": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Thinking level border: max (falls back to thinkingXhigh when omitted)"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"bashMode": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Editor border color in bash mode"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				}
-			},
-			"additionalProperties": false
+			}
 		},
 		"export": {
 			"type": "object",
-			"description": "Optional colors for HTML export (defaults derived from userMessageBg if not specified)",
 			"properties": {
 				"pageBg": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Page background color"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"cardBg": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Card/container background color"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				},
 				"infoBg": {
-					"$ref": "#/$defs/colorValue",
-					"description": "Info sections background (system prompt, notices)"
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 255
+						}
+					]
 				}
-			},
-			"additionalProperties": false
-		}
-	},
-	"additionalProperties": false,
-	"$defs": {
-		"colorValue": {
-			"oneOf": [
-				{
-					"type": "string",
-					"description": "Hex color (#RRGGBB), variable reference, or empty string for terminal default"
-				},
-				{
-					"type": "integer",
-					"minimum": 0,
-					"maximum": 255,
-					"description": "256-color palette index (0-255)"
-				}
-			]
+			}
 		}
 	}
 }

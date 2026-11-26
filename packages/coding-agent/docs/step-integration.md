@@ -68,7 +68,7 @@ The built-in Step provider uses the `anthropic-messages` adapter, which appends
 accepts the older `.../v1` and `.../v1/messages` spellings; the provider
 normalizes them before registering the model so the version segment is never
 sent twice. Startup also repairs the same stale spellings in an existing
-`.stepcode/agent/models.json`, including model-level overrides. If an older
+`~/.stepcode/models.json`, including model-level overrides. If an older
 legacy Step projection recorded a built-in Step id as an OpenAI-compatible
 model, startup restores its `anthropic-messages` API and Step endpoint as well.
 Upgrading from an earlier Step build therefore does not require signing

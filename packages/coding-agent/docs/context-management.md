@@ -63,7 +63,7 @@ next request. This avoids an unused context-edit/summary call after a completed
 task, while explicit maintenance commands and error recovery keep their normal
 behavior. By default it uses the native compact trigger,
 `contextTokens > floor(contextWindow * compaction.triggerRatio)` with a default
-ratio of 0.85, so a 131,072-token window triggers above 111,411 tokens. Smaller
+ratio of 0.9, so a 131,072-token window triggers above 117,964 tokens. Smaller
 windows trigger earlier to keep room for the next response. See
 [Compaction](compaction.md#when-it-triggers) for the exact rule, per-model ratios, and the legacy policy.
 With at least 8,000 context tokens and enough editable old text, CLM gets the first

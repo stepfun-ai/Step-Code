@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { STEP_CONFIG_SUBCOMMANDS } from "../src/step/command-compat.ts";
+import { STEP_CONFIG_SUBCOMMANDS } from "../src/step/config-subcommands.ts";
 import { runCliBrandingProbe } from "./cli-branding-probe.ts";
 
 describe("config --help subcommands", () => {
@@ -27,7 +27,7 @@ describe("config --help subcommands", () => {
 			expect(result.isStepEntrypoint).toBe(true);
 			expect(result.configHandled).toBe(true);
 			expect(result.configHelp).toContain(`${appName} config [-l]`);
-			expect(STEP_CONFIG_SUBCOMMANDS.map((sub) => sub.name)).toEqual(["path", "show", "init"]);
+			expect(STEP_CONFIG_SUBCOMMANDS.map((sub) => sub.name)).toEqual(["path", "show", "init", "schema"]);
 			for (const { name } of STEP_CONFIG_SUBCOMMANDS) {
 				expect(result.configHelp).toMatch(new RegExp(`^\\s+${name}\\s`, "m"));
 			}

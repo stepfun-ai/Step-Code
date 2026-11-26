@@ -10,7 +10,7 @@ import { DefaultResourceLoader } from "./core/resource-loader.ts";
 import { SettingsManager, type SettingsManagerCreateOptions } from "./core/settings-manager.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import type { StartupUiHooks } from "./modes/interactive-contract.ts";
-import { STEP_CONFIG_SUBCOMMANDS } from "./step/command-compat.ts";
+import { STEP_CONFIG_SUBCOMMANDS } from "./step/config-subcommands.ts";
 import { isStepStorageContext, resolveStepAgentDir } from "./step/environment.ts";
 
 export type PackageCommand = "install" | "remove" | "update" | "list";
@@ -73,9 +73,16 @@ function printConfigCommandHelp(): void {
 	console.log(`${chalk.bold("Usage:")}
   ${CONFIG_COMMAND_USAGE}
 
-Open the resource configuration TUI to enable or disable package resources.
-Without -l, starts in global settings (~/${CONFIG_DIR_NAME}/config.toml).
-Press Tab in the TUI to switch between global and project-local modes.
+Without a subcommand, opens the resource configuration TUI to enable or disable
+package resources. Without -l, it starts in global settings
+(~/${CONFIG_DIR_NAME}/config.toml); press Tab to switch between global and
+project-local modes.
+
+Settings themselves (models, compaction, permissions, search, MCP servers) live
+in the same config.toml. \`config show\` prints the stored global and project
+documents with credentials redacted, \`config schema\` prints the JSON Schema an
+editor completes and validates against, and \`config init\` writes a template
+plus that schema beside the global file.
 
 Options:
   -l, --local       Edit project overrides (${CONFIG_DIR_NAME}/config.toml)

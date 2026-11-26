@@ -53,15 +53,21 @@ const VercelGatewayRoutingSchema = Type.Object({
 });
 
 const ThinkingLevelMapValueSchema = Type.Union([Type.String(), Type.Null()]);
-const ThinkingLevelMapSchema = Type.Object({
-	off: Type.Optional(ThinkingLevelMapValueSchema),
-	minimal: Type.Optional(ThinkingLevelMapValueSchema),
-	low: Type.Optional(ThinkingLevelMapValueSchema),
-	medium: Type.Optional(ThinkingLevelMapValueSchema),
-	high: Type.Optional(ThinkingLevelMapValueSchema),
-	xhigh: Type.Optional(ThinkingLevelMapValueSchema),
-	max: Type.Optional(ThinkingLevelMapValueSchema),
-});
+const ThinkingLevelMapSchema = Type.Object(
+	{
+		off: Type.Optional(ThinkingLevelMapValueSchema),
+		minimal: Type.Optional(ThinkingLevelMapValueSchema),
+		low: Type.Optional(ThinkingLevelMapValueSchema),
+		medium: Type.Optional(ThinkingLevelMapValueSchema),
+		high: Type.Optional(ThinkingLevelMapValueSchema),
+		xhigh: Type.Optional(ThinkingLevelMapValueSchema),
+		max: Type.Optional(ThinkingLevelMapValueSchema),
+	},
+	{
+		description:
+			"Maps a Step thinking level onto the value this model expects. Omitted levels use the provider default.",
+	},
+);
 
 const ChatTemplateKwargScalarSchema = Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]);
 const ChatTemplateKwargVariableSchema = Type.Object({
@@ -147,66 +153,154 @@ const ModelCostRatesSchema = {
 	cacheRead: Type.Number(),
 	cacheWrite: Type.Number(),
 };
-const ModelCostTierSchema = Type.Object({
-	inputTokensAbove: Type.Number(),
-	...ModelCostRatesSchema,
-});
-const ModelCostSchema = Type.Object({
-	...ModelCostRatesSchema,
-	tiers: Type.Optional(Type.Array(ModelCostTierSchema)),
-});
+const ModelCostTierSchema = Type.Object(
+	{
+		inputTokensAbove: Type.Number({ description: "Input token count above which this tier's rates apply." }),
+		...ModelCostRatesSchema,
+	},
+	{ description: "One pricing tier for long-context requests." },
+);
+const ModelCostSchema = Type.Object(
+	{
+		input: Type.Number({ description: "USD per million input tokens." }),
+		output: Type.Number({ description: "USD per million output tokens." }),
+		cacheRead: Type.Number({ description: "USD per million cached input tokens read back." }),
+		cacheWrite: Type.Number({ description: "USD per million tokens written to the prompt cache." }),
+		tiers: Type.Optional(
+			Type.Array(ModelCostTierSchema, {
+				description: "Long-context pricing; the base rates apply below the first tier.",
+			}),
+		),
+	},
+	{ description: "Cost per million tokens, used for usage and cache-miss reporting. Not used for billing." },
+);
 
-const ModelDefinitionSchema = Type.Object({
-	id: Type.String({ minLength: 1 }),
-	name: Type.Optional(Type.String({ minLength: 1 })),
-	api: Type.Optional(Type.String({ minLength: 1 })),
-	baseUrl: Type.Optional(Type.String({ minLength: 1 })),
-	reasoning: Type.Optional(Type.Boolean()),
-	thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
-	input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
-	cost: Type.Optional(ModelCostSchema),
-	contextWindow: Type.Optional(Type.Number()),
-	maxTokens: Type.Optional(Type.Number()),
-	samplingParams: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-	compat: Type.Optional(ProviderCompatSchema),
-});
+const ModelDefinitionSchema = Type.Object(
+	{
+		id: Type.String({ minLength: 1, description: "Model id as the endpoint expects it in the request body." }),
+		name: Type.Optional(Type.String({ minLength: 1, description: "Display name in `/model`; defaults to `id`." })),
+		api: Type.Optional(
+			Type.String({
+				minLength: 1,
+				description:
+					'Request dialect for this model, overriding the provider: "openai-completions", "openai-responses", or "anthropic-messages".',
+			}),
+		),
+		baseUrl: Type.Optional(
+			Type.String({ minLength: 1, description: "Endpoint for this model only; overrides the provider." }),
+		),
+		reasoning: Type.Optional(Type.Boolean({ description: "The model exposes a thinking/reasoning channel." })),
+		thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
+		input: Type.Optional(
+			Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]), {
+				description: 'Modalities this model accepts: "text" and/or "image". Defaults to text only.',
+			}),
+		),
+		cost: Type.Optional(ModelCostSchema),
+		contextWindow: Type.Optional(
+			Type.Number({ minimum: 1, description: "Context window in tokens (default 128000). Drives compaction." }),
+		),
+		maxTokens: Type.Optional(
+			Type.Number({ minimum: 1, description: "Output token limit per request (default 16384)." }),
+		),
+		samplingParams: Type.Optional(
+			Type.Record(Type.String(), Type.Unknown(), {
+				description: "Extra request fields, for example temperature, top_p, or a vendor-specific flag.",
+			}),
+		),
+		headers: Type.Optional(
+			Type.Record(Type.String(), Type.String(), { description: "Headers added to requests for this model." }),
+		),
+		compat: Type.Optional(ProviderCompatSchema),
+	},
+	{ description: "One model served by a provider." },
+);
 
-const ModelOverrideSchema = Type.Object({
-	name: Type.Optional(Type.String({ minLength: 1 })),
-	reasoning: Type.Optional(Type.Boolean()),
-	thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
-	input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
-	cost: Type.Optional(
-		Type.Object({
-			input: Type.Optional(Type.Number()),
-			output: Type.Optional(Type.Number()),
-			cacheRead: Type.Optional(Type.Number()),
-			cacheWrite: Type.Optional(Type.Number()),
-			tiers: Type.Optional(Type.Array(ModelCostTierSchema)),
-		}),
-	),
-	contextWindow: Type.Optional(Type.Number()),
-	maxTokens: Type.Optional(Type.Number()),
-	samplingParams: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-	compat: Type.Optional(ProviderCompatSchema),
-});
+const ModelOverrideCostSchema = Type.Object(
+	{
+		input: Type.Optional(Type.Number({ description: "USD per million input tokens." })),
+		output: Type.Optional(Type.Number({ description: "USD per million output tokens." })),
+		cacheRead: Type.Optional(Type.Number({ description: "USD per million cached input tokens read back." })),
+		cacheWrite: Type.Optional(Type.Number({ description: "USD per million tokens written to the cache." })),
+		tiers: Type.Optional(Type.Array(ModelCostTierSchema, { description: "Long-context pricing tiers." })),
+	},
+	{ description: "Overrides for a built-in model's cost. Omitted rates keep the catalog value." },
+);
 
-const ProviderConfigSchema = Type.Object({
-	name: Type.Optional(Type.String({ minLength: 1 })),
-	baseUrl: Type.Optional(Type.String({ minLength: 1 })),
-	apiKey: Type.Optional(Type.String({ minLength: 1 })),
-	api: Type.Optional(Type.String({ minLength: 1 })),
-	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-	compat: Type.Optional(ProviderCompatSchema),
-	authHeader: Type.Optional(Type.Boolean()),
-	models: Type.Optional(Type.Array(ModelDefinitionSchema)),
-	modelOverrides: Type.Optional(Type.Record(Type.String(), ModelOverrideSchema)),
-});
+const ModelOverrideSchema = Type.Object(
+	{
+		name: Type.Optional(Type.String({ minLength: 1, description: "Display name overriding the built-in catalog." })),
+		reasoning: Type.Optional(Type.Boolean({ description: "Whether the model exposes a thinking channel." })),
+		thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
+		input: Type.Optional(
+			Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]), {
+				description: 'Modalities this model accepts: "text" and/or "image".',
+			}),
+		),
+		cost: Type.Optional(ModelOverrideCostSchema),
+		contextWindow: Type.Optional(Type.Number({ minimum: 1, description: "Context window in tokens." })),
+		maxTokens: Type.Optional(Type.Number({ minimum: 1, description: "Output token limit per request." })),
+		samplingParams: Type.Optional(
+			Type.Record(Type.String(), Type.Unknown(), { description: "Extra request fields for this model." }),
+		),
+		headers: Type.Optional(
+			Type.Record(Type.String(), Type.String(), { description: "Headers added to requests for this model." }),
+		),
+		compat: Type.Optional(ProviderCompatSchema),
+	},
+	{ description: "Edits applied to a built-in model, keyed by model id under `modelOverrides`." },
+);
 
-const ModelsConfigSchema = Type.Object({
-	providers: Type.Record(Type.String(), ProviderConfigSchema),
+const ProviderConfigSchema = Type.Object(
+	{
+		name: Type.Optional(Type.String({ minLength: 1, description: "Display name for the provider." })),
+		baseUrl: Type.Optional(
+			Type.String({ minLength: 1, description: "Endpoint base URL, for example http://127.0.0.1:8000/v1." }),
+		),
+		apiKey: Type.Optional(
+			Type.String({
+				minLength: 1,
+				description:
+					"Credential or a reference to one: a literal key, `$ENV_VAR`, or `!command`. A keyless local server still needs a placeholder value to appear in `/model`.",
+			}),
+		),
+		api: Type.Optional(
+			Type.String({
+				minLength: 1,
+				description: 'Default request dialect: "openai-completions", "openai-responses", or "anthropic-messages".',
+			}),
+		),
+		headers: Type.Optional(
+			Type.Record(Type.String(), Type.String(), {
+				description: "Headers sent with every request to this provider.",
+			}),
+		),
+		compat: Type.Optional(ProviderCompatSchema),
+		authHeader: Type.Optional(
+			Type.Boolean({
+				description: "Send the credential as an Authorization header (default true for most dialects).",
+			}),
+		),
+		models: Type.Optional(Type.Array(ModelDefinitionSchema, { description: "Models this provider serves." })),
+		modelOverrides: Type.Optional(
+			Type.Record(Type.String(), ModelOverrideSchema, {
+				description: "Edits to built-in models, keyed by model id.",
+			}),
+		),
+	},
+	{ description: "One provider entry, keyed by the id used in `/model` and `--model provider/id`." },
+);
+
+/**
+ * The validated `models.json` shape. Exported so the editor schema is rendered
+ * from the same object the loader compiles, instead of a copy that can drift.
+ *
+ * This is also what the loader compiles, so it stays permissive about unknown
+ * fields: a newer Step may add one and an older binary must still load the
+ * file. The editor schema adds the strictness; see `config-schema.ts`.
+ */
+export const ModelsConfigSchema = Type.Object({
+	providers: Type.Record(Type.String(), ProviderConfigSchema, { description: "Providers keyed by provider id." }),
 });
 const validateModelsConfig = Compile(ModelsConfigSchema);
 

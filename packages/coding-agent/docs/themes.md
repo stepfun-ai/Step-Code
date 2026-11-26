@@ -89,7 +89,7 @@ vim ~/.stepcode/agent/themes/my-theme.json
 
 ```json
 {
-  "$schema": "https://github.com/stepfun-ai/step-harness/raw/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "./theme-schema.json",
   "name": "my-theme",
   "vars": {
     "primary": "#00aaff",
@@ -163,7 +163,7 @@ vim ~/.stepcode/agent/themes/my-theme.json
 
 ```json
 {
-  "$schema": "https://github.com/stepfun-ai/step-harness/raw/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "./theme-schema.json",
   "name": "my-theme",
   "vars": {
     "blue": "#0066cc",
@@ -182,7 +182,11 @@ vim ~/.stepcode/agent/themes/my-theme.json
 - `vars` is optional. Define reusable colors here, then reference them in `colors`.
 - `colors` must define all 51 required tokens. `thinkingMax`, `scrollbarThumb`, and the two search highlight tokens are optional and use the fallbacks listed below.
 
-The `$schema` field enables editor auto-completion and validation.
+The `$schema` field enables editor auto-completion and validation. Copy
+`theme-schema.json` next to the theme file; the built-in themes ship with a copy
+in the installation's `theme/` directory, so `./theme-schema.json` resolves
+there too. Nothing is downloaded, so the schema matches the Step that loads the
+theme.
 
 ## Color Tokens
 
