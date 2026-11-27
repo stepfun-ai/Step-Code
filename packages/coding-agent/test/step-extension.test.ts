@@ -7,6 +7,7 @@ import type {
 } from "../src/core/extensions/types.ts";
 import { createStepExtension, stepExtension } from "../src/features/step.ts";
 import { STEP_INIT_PROMPT } from "../src/step/init-prompt.ts";
+import { STEPCODE_VERSION } from "../src/step/version.ts";
 
 function commandContext(
 	isIdle: boolean,
@@ -846,8 +847,11 @@ describe("Step extension", () => {
 		} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
 		// The native Step endpoint is a direct model API, not the cloud-trace
 		// collector. Keep session/workspace identifiers off custom or direct
-		// provider requests; only the low-sensitivity client marker is universal.
-		expect(headers).toEqual({ "x-step-client": "stepcode-cli" });
+		// provider requests; only the low-sensitivity client markers are universal.
+		expect(headers).toEqual({
+			"x-step-client": "stepcode-cli",
+			"x-step-client-version": STEPCODE_VERSION.value,
+		});
 
 		const originalOrigin = process.env.STEPCODE_CLOUD_TRACE_ORIGIN;
 		process.env.STEPCODE_CLOUD_TRACE_ORIGIN = "https://trace.example.test/v1";
@@ -864,6 +868,7 @@ describe("Step extension", () => {
 			} as unknown as Pick<ExtensionContext, "model" | "cwd" | "sessionManager">);
 			expect(otherHeaders).toMatchObject({
 				"x-step-client": "stepcode-cli",
+				"x-step-client-version": STEPCODE_VERSION.value,
 				"x-step-session-id": "session-2",
 				"x-step-workspace-id": "/workspace",
 				"x-step-provider-id": "stepfunModelProxy",

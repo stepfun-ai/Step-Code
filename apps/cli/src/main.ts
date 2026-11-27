@@ -324,10 +324,8 @@ const stepMainOptions: MainOptions = {
 	},
 	...(modelRequestObserver ? { modelRequestObserver } : {}),
 	// Every mode (interactive, print/json, rpc and the subagent children it
-	// starts) runs through here; the switch decides per request.
-	modelFetch: createStepModelQueueFactory({
-		settings: () => currentStepSettingsManager?.getStepSettings(),
-	}),
+	// starts) runs through here; whether a request waits is the server's decision.
+	modelFetch: createStepModelQueueFactory(),
 	systemPromptProduct: {
 		name: "StepCode",
 		role: "an interactive terminal coding agent developed by StepFun",

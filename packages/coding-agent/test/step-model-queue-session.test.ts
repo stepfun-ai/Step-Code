@@ -7,7 +7,6 @@ import type { AgentSessionEvent } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { resolveStepModelQueueEnabled } from "../src/step/model-queue.ts";
 import { createStepAgentSession } from "../src/step/sdk.ts";
 import { createStepSettingsManager } from "../src/step/settings-manager.ts";
 
@@ -47,52 +46,9 @@ function sse(text: string): Response {
 	);
 }
 
-describe("model_queue setting", () => {
-	it("reads model_queue globally, lets a trusted project override it, and ignores an untrusted one", () => {
-		const { cwd, paths } = fixture("model_queue = true\n", "model_queue = false\n");
-		const trusted = createStepSettingsManager(cwd, undefined, { paths, projectTrusted: true });
-		expect(trusted.getStepSettings().modelQueue).toBe(false);
-		expect(resolveStepModelQueueEnabled({ env: {}, settings: trusted.getStepSettings() })).toEqual({
-			enabled: false,
-			source: "settings",
-		});
-		const untrusted = createStepSettingsManager(cwd, undefined, { paths, projectTrusted: false });
-		expect(untrusted.getStepSettings().modelQueue).toBe(true);
-		// Unset everywhere: the queue is on.
-		const unset = fixture("");
-		const plain = createStepSettingsManager(unset.cwd, undefined, { paths: unset.paths, projectTrusted: true });
-		expect(plain.getStepSettings().modelQueue).toBeUndefined();
-		expect(resolveStepModelQueueEnabled({ env: {}, settings: plain.getStepSettings() })).toEqual({
-			enabled: true,
-			source: "default",
-		});
-		// The flat spelling is the same switch.
-		const flat = fixture("modelQueue = true\n");
-		const flatSettings = createStepSettingsManager(flat.cwd, undefined, { paths: flat.paths, projectTrusted: true });
-		expect(flatSettings.getStepSettings().modelQueue).toBe(true);
-	});
-
-	it("persists the switch and rejects a non-boolean value", () => {
-		const { cwd, paths } = fixture("");
-		const settings = createStepSettingsManager(cwd, undefined, { paths, projectTrusted: true });
-		settings.setStepSettings({ modelQueue: true });
-		const reread = createStepSettingsManager(cwd, undefined, { paths, projectTrusted: true });
-		expect(reread.getStepSettings().modelQueue).toBe(true);
-		expect(() => settings.setStepSettings({ modelQueue: "yes" as unknown as boolean })).toThrow(/modelQueue/);
-	});
-
-	it("ignores a non-boolean value with a settings warning", () => {
-		const { cwd, paths } = fixture('model_queue = "yes"\n');
-		const settings = createStepSettingsManager(cwd, undefined, { paths, projectTrusted: true });
-		expect(settings.getStepSettings().modelQueue).toBeUndefined();
-		const messages = settings.drainErrors().map((entry) => entry.error.message);
-		expect(messages).toContain('model_queue must be true or false; ignoring "yes"');
-	});
-});
-
 describe("Step sessions install the queue", () => {
-	async function prompt(globalToml: string, server: typeof globalThis.fetch) {
-		const { root, cwd, paths } = fixture(globalToml);
+	async function prompt(server: typeof globalThis.fetch) {
+		const { root, cwd, paths } = fixture("");
 		const agentDir = join(root, "agent");
 		mkdirSync(agentDir, { recursive: true });
 		vi.stubGlobal("fetch", server);
@@ -152,15 +108,14 @@ describe("Step sessions install the queue", () => {
 			},
 		});
 
-	it("queues a request to Step's host when the setting turns the queue on", async () => {
-		vi.stubEnv("STEPCODE_MODEL_QUEUE", "");
+	it("queues a request to Step's host when the server asks it to wait", async () => {
 		const calls: Array<{ method: string; url: string; id: string | null }> = [];
 		const replies = [
 			() => queuedAnswer(2),
 			() => Response.json({ state: "ready", position: 0, retry_after_ms: 20, reason: "" }),
 			() => sse("after the line"),
 		];
-		const { last, events } = await prompt("model_queue = true\n", async (input, init) => {
+		const { last, events } = await prompt(async (input, init) => {
 			const request = new Request(input, init);
 			calls.push({ method: request.method, url: request.url, id: request.headers.get("X-StepCode-Queue-ID") });
 			const reply = replies.shift();
@@ -179,44 +134,40 @@ describe("Step sessions install the queue", () => {
 		]);
 	});
 
-	it("queues by default, with no setting and no environment override", async () => {
-		vi.stubEnv("STEPCODE_MODEL_QUEUE", "");
+	it("a normal answer goes through with a queue id and no queue events", async () => {
+		const ids: Array<string | null> = [];
+		const { last, events } = await prompt(async (input, init) => {
+			ids.push(new Request(input, init).headers.get("X-StepCode-Queue-ID"));
+			return sse("direct");
+		});
+		expect(last.content).toEqual([{ type: "text", text: "direct" }]);
+		expect(ids).toHaveLength(1);
+		expect(ids[0]).toMatch(/^[0-9a-f-]{36}$/u);
+		expect(events.filter((event) => event.type === "model_queue")).toEqual([]);
+	});
+
+	it("an ordinary 429 goes to the existing retry policy, never into the queue", async () => {
 		const calls: string[] = [];
 		const replies = [
-			() => queuedAnswer(1),
-			() => Response.json({ state: "ready", position: 0, retry_after_ms: 20, reason: "" }),
-			() => sse("by default"),
+			() => new Response('{"error":{"message":"rate limited","type":"rate_limited"}}', { status: 429 }),
+			() => sse("after a retry"),
 		];
-		const { last } = await prompt("", async (input, init) => {
+		const { last, events } = await prompt(async (input, init) => {
 			const request = new Request(input, init);
 			calls.push(`${request.method} ${new URL(request.url).pathname}`);
 			const reply = replies.shift();
 			if (!reply) throw new Error(`unexpected ${request.method} ${request.url}`);
 			return reply();
 		});
-		expect(last.content).toEqual([{ type: "text", text: "by default" }]);
-		expect(calls).toEqual([
-			"POST /step_plan/v1/chat/completions",
-			"GET /stepcode/v1/queue",
-			"POST /step_plan/v1/chat/completions",
-		]);
-	});
-
-	it("leaves the request alone when the queue is off", async () => {
-		vi.stubEnv("STEPCODE_MODEL_QUEUE", "");
-		const ids: Array<string | null> = [];
-		const { last } = await prompt("model_queue = false\n", async (input, init) => {
-			ids.push(new Request(input, init).headers.get("X-StepCode-Queue-ID"));
-			return sse("direct");
-		});
-		expect(last.content).toEqual([{ type: "text", text: "direct" }]);
-		expect(ids).toEqual([null]);
+		expect(last.content).toEqual([{ type: "text", text: "after a retry" }]);
+		expect(calls.every((call) => call === "POST /step_plan/v1/chat/completions")).toBe(true);
+		expect(calls.length).toBeGreaterThanOrEqual(2);
+		expect(events.filter((event) => event.type === "model_queue")).toEqual([]);
 	});
 
 	it("ends a closed place with one readable error that neither the SDK nor the session retries", async () => {
-		vi.stubEnv("STEPCODE_MODEL_QUEUE", "");
 		const calls: string[] = [];
-		const { last, events } = await prompt("model_queue = true\n", async (input, init) => {
+		const { last, events } = await prompt(async (input, init) => {
 			const request = new Request(input, init);
 			calls.push(`${request.method} ${new URL(request.url).pathname}`);
 			if (request.method === "GET")

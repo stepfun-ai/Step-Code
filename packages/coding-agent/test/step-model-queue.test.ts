@@ -4,7 +4,6 @@ import type { ModelFetchRequest, ModelQueueExit, ModelQueueState } from "../src/
 import {
 	createStepModelQueueFactory,
 	createStepModelQueueFetch,
-	resolveStepModelQueueEnabled,
 	stepModelQueueClosedMessage,
 	stepModelQueueStatusText,
 } from "../src/step/model-queue.ts";
@@ -45,7 +44,7 @@ function status(state: string, extra: Record<string, unknown> = {}): Response {
 
 const ok = () => new Response("data: [DONE]\n\n", { status: 200, headers: { "content-type": "text/event-stream" } });
 
-function harness(replies: Reply[], options: { budgetMs?: number } = {}) {
+function harness(replies: Reply[], options: { budgetMs?: number; maxWaitMs?: number } = {}) {
 	const calls: Call[] = [];
 	const sleeps: number[] = [];
 	const states: Array<ModelQueueState | null> = [];
@@ -101,6 +100,7 @@ function harness(replies: Reply[], options: { budgetMs?: number } = {}) {
 				clock += ms;
 			},
 			...(options.budgetMs === undefined ? {} : { pollFailureBudgetMs: options.budgetMs }),
+			...(options.maxWaitMs === undefined ? {} : { maxWaitMs: options.maxWaitMs }),
 		},
 	);
 	const fetchRequest = (input: Request) => wrapped(input);
@@ -360,7 +360,7 @@ test("keeps polling when the resend is queued again", async () => {
 	assert.deepEqual(new Set(posts.map((call) => call.headers.get("X-StepCode-Queue-ID"))), new Set(["q-1"]));
 	assert.deepEqual(new Set(posts.map((call) => text(call.body))), new Set([BODY]));
 	assert.deepEqual(h.states, [{ position: 2 }, { position: 4 }, { position: 1 }, null]);
-	assert.deepEqual(h.sleeps, [2000, 500, 2000]);
+	assert.deepEqual(h.sleeps, [5000, 500, 2000]);
 	// Released before each resend, held again when the resend is queued.
 	assert.deepEqual(
 		h.calls.map((call) => `${call.method}:${call.held}`),
@@ -426,7 +426,7 @@ test("a throttled status endpoint is retried like a failing one", async () => {
 	const h = harness([queued(1), new Response("slow down", { status: 429 }), status("ready"), ok()]);
 	const response = await h.post();
 	assert.equal(response.status, 200);
-	assert.deepEqual(h.sleeps, [2000, 1000]);
+	assert.deepEqual(h.sleeps, [5000, 1000]);
 });
 
 test("reports only changes of place or of being in line", async () => {
@@ -562,7 +562,7 @@ test("backs off on poll failures without changing the id", async () => {
 	]);
 	const response = await h.post();
 	assert.equal(response.status, 200);
-	assert.deepEqual(h.sleeps, [2000, 1000, 2000, 2000]);
+	assert.deepEqual(h.sleeps, [5000, 1000, 2000, 2000]);
 	const polls = new Set(
 		h.calls
 			.filter((call) => call.method === "GET")
@@ -572,14 +572,16 @@ test("backs off on poll failures without changing the id", async () => {
 });
 
 test("gives up once polling has failed for the whole budget", async () => {
-	const failures: Reply[] = Array.from({ length: 20 }, () => new Response("down", { status: 502 }));
-	const h = harness([queued(1), ...failures], { budgetMs: 10_000 });
+	const failures: Reply[] = Array.from({ length: 4 }, () => new Response("down", { status: 502 }));
+	const h = harness([queued(1), ...failures, new Response("{}", { status: 200 })], { budgetMs: 10_000 });
 	const response = await h.post();
 	assert.equal(response.status, 410);
 	const body = (await response.json()) as { error: { message: string } };
 	assert.match(body.error.message, /HTTP 502/u);
-	// 2000 + 1000 + 2000 + 4000 + 8000 >= 10000 since the last success.
-	assert.deepEqual(h.sleeps, [2000, 1000, 2000, 4000, 8000]);
+	// 5000 + 1000 + 2000 + 4000 >= 10000 since the last success.
+	assert.deepEqual(h.sleeps, [5000, 1000, 2000, 4000]);
+	// This side stopped waiting, so it releases the place.
+	assertCancel(h.calls.at(-1));
 	assert.equal(h.states.at(-1), null);
 });
 
@@ -619,36 +621,6 @@ test("ignores the SDK's own attempt timeout while waiting in line", async () => 
 	);
 });
 
-test("switch: the environment wins, then settings, and the queue is on otherwise", () => {
-	const resolve = resolveStepModelQueueEnabled;
-	// Neither the environment nor a setting decides: on, whatever the host.
-	assert.deepEqual(resolve({ env: {} }), { enabled: true, source: "default" });
-	// An explicit setting turns it off, or on.
-	assert.deepEqual(resolve({ env: {}, settings: { modelQueue: false } }), {
-		enabled: false,
-		source: "settings",
-	});
-	assert.deepEqual(resolve({ env: {}, settings: { modelQueue: true } }), {
-		enabled: true,
-		source: "settings",
-	});
-	// The environment beats the setting.
-	assert.deepEqual(resolve({ env: { STEPCODE_MODEL_QUEUE: "1" }, settings: { modelQueue: false } }), {
-		enabled: true,
-		source: "env",
-	});
-	assert.deepEqual(resolve({ env: { STEPCODE_MODEL_QUEUE: "0" }, settings: { modelQueue: true } }), {
-		enabled: false,
-		source: "env",
-	});
-	// An unrecognized value is no override.
-	assert.deepEqual(resolve({ env: { STEPCODE_MODEL_QUEUE: "maybe" }, settings: { modelQueue: false } }), {
-		enabled: false,
-		source: "settings",
-	});
-	assert.deepEqual(resolve({ env: { STEPCODE_MODEL_QUEUE: "maybe" } }), { enabled: true, source: "default" });
-});
-
 function factoryRequest(provider: string, baseUrl = "https://api.stepfun.com/step_plan/v1"): ModelFetchRequest {
 	return {
 		model: { provider, baseUrl } as ModelFetchRequest["model"],
@@ -660,32 +632,14 @@ function factoryRequest(provider: string, baseUrl = "https://api.stepfun.com/ste
 	};
 }
 
-test("the factory wraps every model's requests only with the switch on", () => {
-	let settings: { modelQueue?: boolean } = { modelQueue: false };
-	const factory = createStepModelQueueFactory({ env: {}, settings: () => settings });
-	assert.equal(factory(factoryRequest("step")), undefined);
-	// Read per request: turning it on applies to the next one.
-	settings = { modelQueue: true };
+test("the factory wraps every model's requests: there is no client switch", () => {
+	const factory = createStepModelQueueFactory();
 	assert.equal(typeof factory(factoryRequest("step")), "function");
 	assert.equal(typeof factory(factoryRequest("my-gateway")), "function");
-	// Unset is on; the environment can still turn it off.
-	assert.equal(
-		typeof createStepModelQueueFactory({ env: {}, settings: () => undefined })(factoryRequest("step")),
-		"function",
-	);
-	assert.equal(
-		createStepModelQueueFactory({ env: { STEPCODE_MODEL_QUEUE: "0" }, settings: () => undefined })(
-			factoryRequest("step"),
-		),
-		undefined,
-	);
 });
 
 test("the request host decides, not the provider: a custom provider at Step's host queues, elsewhere it does not", async () => {
-	const factory = createStepModelQueueFactory(
-		{ env: {}, settings: () => ({ modelQueue: true }) },
-		{ queueId: () => "id", sleep: async () => {} },
-	);
+	const factory = createStepModelQueueFactory({ queueId: () => "id", sleep: async () => {} });
 	const seen: string[] = [];
 	const replies = [queued(4), status("ready"), ok(), queued(4)];
 	const wrapped = factory({
@@ -769,4 +723,74 @@ test("a hanging cancel ends within its own bound", async () => {
 	await assert.rejects(h.post(), { name: "AbortError" });
 	const elapsed = Date.now() - started;
 	assert.ok(elapsed >= 900 && elapsed < 3_000, `cancel bound: ${elapsed}ms`);
+});
+
+test("polls every 5s when the server names no interval, and at the server's interval when it does", async () => {
+	const h = harness([
+		queued(3),
+		status("waiting", { position: 2, retry_after_ms: 0 }),
+		status("waiting", { position: 1, retry_after_ms: 1200 }),
+		status("ready"),
+		ok(),
+	]);
+	const response = await h.post();
+	assert.equal(response.status, 200);
+	// No Retry-After-Ms on the queued answer, 0 on the next status (no interval named), then 1200; ready resends at once.
+	assert.deepEqual(h.sleeps, [5000, 5000, 1200]);
+});
+
+test("a server interval above the bound is capped", async () => {
+	const h = harness([queued(1, 600_000), status("ready"), ok()]);
+	await h.post();
+	assert.deepEqual(h.sleeps, [30_000]);
+});
+
+test("waits in line 20 minutes at most in all, then releases the place and ends with wait_timeout", async () => {
+	const waiting = () => status("waiting", { position: 9, retry_after_ms: 30_000 });
+	const polls: Reply[] = Array.from({ length: 40 }, waiting);
+	const h = harness([queued(9, 30_000), ...polls, new Response("{}", { status: 200 })]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	assert.equal(response.headers.get("x-should-retry"), "false");
+	const body = (await response.json()) as { error: { type: string; reason: string } };
+	assert.equal(body.error.type, "queue_closed");
+	assert.equal(body.error.reason, "wait_timeout");
+	assert.equal(
+		h.sleeps.reduce((sum, ms) => sum + ms, 0),
+		20 * 60_000,
+	);
+	assertCancel(h.calls.at(-1));
+	assert.deepEqual(h.exits.at(-1), { closedReason: "wait_timeout" });
+});
+
+test("the wait bound spans resends that are queued again", async () => {
+	const h = harness(
+		[queued(2, 400), status("ready"), queued(1, 400), status("ready"), queued(1, 400), new Response("{}")],
+		{
+			maxWaitMs: 1000,
+		},
+	);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	// 400 + 400 + 200: the bound counts from the first queued answer, not from each resend.
+	assert.deepEqual(h.sleeps, [400, 400, 200]);
+	assertCancel(h.calls.at(-1));
+});
+
+test("an unexpected status answer ends the wait and releases the place", async () => {
+	const h = harness([queued(1), new Response("teapot", { status: 418 }), new Response("{}")]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	assert.match(((await response.json()) as { error: { message: string } }).error.message, /HTTP 418/u);
+	assertCancel(h.calls.at(-1));
+});
+
+test("a place the server closed is not cancelled again", async () => {
+	const h = harness([queued(1), status("closed", { reason: "queue_full" })]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	assert.equal(
+		h.calls.some((call) => call.url.endsWith("/cancel")),
+		false,
+	);
 });

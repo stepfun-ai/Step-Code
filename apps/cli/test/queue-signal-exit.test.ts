@@ -200,7 +200,6 @@ describe.skipIf(process.platform === "win32")("-p in the model request queue", (
 					STEP_CODING_AGENT_DIR: agentDir,
 					STEP_NO_LOCAL_LLM: "1",
 					AWS_EC2_METADATA_DISABLED: "true",
-					STEPCODE_MODEL_QUEUE: "1",
 					HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
 					NODE_TLS_REJECT_UNAUTHORIZED: "0",
 				},

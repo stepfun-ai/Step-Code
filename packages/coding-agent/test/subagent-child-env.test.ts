@@ -21,7 +21,6 @@ import {
 	resolveSubagentTurnIdleTimeoutMs,
 } from "../src/features/subagent/rpc-adapter.ts";
 import { WORKFLOW_ACL_ENV } from "../src/features/workflow/acl-extension.ts";
-import { resolveStepModelQueueEnabled } from "../src/step/model-queue.ts";
 
 const agent: StepAgentConfig = {
 	name: "general",
@@ -266,22 +265,3 @@ test("the wall-clock limit ends a turn even while the child keeps streaming", as
 		process.argv[1] = originalArgv1;
 	}
 }, 20_000);
-
-// A child agent decides the model request queue from its own environment: the
-// queue is on unless the parent's environment says otherwise, and an override
-// reaches the child unchanged.
-test("an rpc child inherits the queue switch, and queues by default without one", () => {
-	vi.stubEnv("STEPCODE_MODEL_QUEUE", "");
-	const defaultChild = buildSubagentChildEnv(runInput());
-	expect(resolveStepModelQueueEnabled({ env: defaultChild })).toEqual({ enabled: true, source: "default" });
-	// A user setting the child reads from the same config still turns it off.
-	expect(resolveStepModelQueueEnabled({ env: defaultChild, settings: { modelQueue: false } }).enabled).toBe(false);
-
-	vi.stubEnv("STEPCODE_MODEL_QUEUE", "1");
-	const forcedChild = buildSubagentChildEnv(runInput());
-	expect(forcedChild.STEPCODE_MODEL_QUEUE).toBe("1");
-	expect(resolveStepModelQueueEnabled({ env: forcedChild, settings: { modelQueue: false } })).toEqual({
-		enabled: true,
-		source: "env",
-	});
-});

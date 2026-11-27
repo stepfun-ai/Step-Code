@@ -90,16 +90,6 @@ function ensureStepSettingsManager(
 	});
 }
 
-/**
- * The Step model request queue for sessions using these settings. A caller's
- * own `modelFetch` replaces it.
- */
-function stepModelQueueFactory(settingsManager: StepSettingsManager) {
-	return createStepModelQueueFactory({
-		settings: () => settingsManager.getStepSettings(),
-	});
-}
-
 /** Create a Pi AgentSession with Step's settings decorator installed. */
 export async function createStepAgentSession(
 	options: CreateStepAgentSessionOptions = {},
@@ -119,7 +109,8 @@ export async function createStepAgentSession(
 		configDirName: paths.configDirName,
 		settingsManager,
 		sessionManager,
-		modelFetch: options.modelFetch ?? stepModelQueueFactory(settingsManager),
+		// The Step model request queue; a caller's own `modelFetch` replaces it.
+		modelFetch: options.modelFetch ?? createStepModelQueueFactory(),
 	});
 }
 
@@ -135,6 +126,7 @@ export async function createStepAgentSessionServices(
 		agentDir: paths.agentDir,
 		configDirName: paths.configDirName,
 		settingsManager,
-		modelFetch: options.modelFetch ?? stepModelQueueFactory(settingsManager),
+		// The Step model request queue; a caller's own `modelFetch` replaces it.
+		modelFetch: options.modelFetch ?? createStepModelQueueFactory(),
 	}) as Promise<StepAgentSessionServices>;
 }

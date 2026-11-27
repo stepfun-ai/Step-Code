@@ -1,25 +1,26 @@
 import { randomUUID } from "node:crypto";
 import type { ModelFetch, ModelFetchFactory, ModelFetchRequest, ModelQueueState } from "../core/model-fetch.ts";
-import type { StepSettings } from "./settings-manager.ts";
 
 /**
  * Client side of the Step model request queue.
  *
- * With the queue enabled, every model request sent to Step's mainland or
- * overseas API host carries a fresh `X-StepCode-Queue-ID`, whichever provider
+ * Every model request sent to Step's mainland or overseas API host carries a
+ * fresh `X-StepCode-Queue-ID`, whichever provider
  * (the official one or a user's own) sent it: the host, not the provider id,
- * makes it a StepCode request. Whether a request waits is the server's
- * decision: when the pool is busy it answers HTTP 429 with
+ * makes it a StepCode request. There is no client switch: whether a request
+ * waits is the server's decision alone. When the pool is busy it answers HTTP 429 with
  * `X-StepCode-Queue-State: waiting` instead of running the request. That answer
  * is not a rate-limit failure: the request holds a place in line. The wrapper
  * then polls the queue of the request's region
  * (`GET https://api.stepfun.com/stepcode/v1/queue`, or `api.stepfun.ai`
  * overseas, naming the place in `X-StepCode-Queue-ID`), and once the place is
- * `ready` sends the original bytes again under the same id. A `closed` place
- * ends the call with an error; a stop after the server queued the call releases
- * the place with `POST <queue>/cancel` (the id in `X-StepCode-Queue-ID`, no
- * body). A stop before any queued answer sends nothing more: the server's lease
- * ends a place nobody saw.
+ * `ready` sends the original bytes again under the same id. The poll interval is
+ * the server's `retry_after_ms` (5 s when it names none). A `closed` place ends
+ * the call with an error. A call waits in line at most 20 minutes in all; when it
+ * stops waiting on its own side (the caller's stop, that bound, or a status
+ * endpoint that keeps failing) it releases the place with `POST <queue>/cancel`
+ * (the id in `X-StepCode-Queue-ID`, no body). A stop before any queued answer
+ * sends nothing more: the server's lease ends a place nobody saw.
  *
  *   POST .../chat/completions          -> 429 queued (position 3)
  *   GET  <queue>   (X-StepCode-Queue-ID) -> waiting (position 1)
@@ -48,11 +49,12 @@ const QUEUE_ENDPOINTS: Readonly<Record<string, string>> = {
 	"api.stepfun.com": "https://api.stepfun.com/stepcode/v1/queue",
 	"api.stepfun.ai": "https://api.stepfun.ai/stepcode/v1/queue",
 };
-/** `1` / `0` force the queue on or off, over every setting. */
-export const STEP_MODEL_QUEUE_ENV = "STEPCODE_MODEL_QUEUE";
-
-const DEFAULT_POLL_INTERVAL_MS = 2_000;
+/** Poll interval when the server names none. */
+const DEFAULT_POLL_INTERVAL_MS = 5_000;
+/** Upper bound of a server-named poll interval, so one bad value cannot stall a waiting call. */
 const MAX_POLL_INTERVAL_MS = 30_000;
+/** How long one call may wait in line in all, from the server's first queued answer. */
+const DEFAULT_MAX_WAIT_MS = 20 * 60_000;
 const POLL_TIMEOUT_MS = 10_000;
 const FIRST_POLL_BACKOFF_MS = 1_000;
 const MAX_POLL_BACKOFF_MS = 8_000;
@@ -68,6 +70,7 @@ const CLOSED_REASON_TEXT: Readonly<Record<string, string>> = {
 	user_limit: "You have too many requests waiting in line. Wait for them to finish and try again.",
 	lease_expired: "Your place in line expired. Send the request again.",
 	max_wait_exceeded: "The request waited in line too long. Try again later.",
+	wait_timeout: "The request waited in line too long. Try again later.",
 	not_found: "Your place in line no longer exists. Send the request again.",
 };
 const CLOSED_GENERIC_TEXT = "The request queue closed this request. Try again later.";
@@ -83,80 +86,28 @@ export function stepModelQueueStatusText(state: ModelQueueState): string {
 	return state.position !== undefined && state.position > 0 ? `Queued: position ${state.position}` : "Queued";
 }
 
-/** Where the effective queue switch came from. */
-export type StepModelQueueSource = "env" | "settings" | "default";
-
-export interface StepModelQueueSwitchInput {
-	readonly env?: NodeJS.ProcessEnv;
-	/** Effective Step settings (project over global); `modelQueue` is the configured value. */
-	readonly settings?: Pick<StepSettings, "modelQueue">;
-}
-
-function readSwitch(value: string | undefined): boolean | undefined {
-	switch (value?.trim().toLowerCase()) {
-		case "1":
-		case "true":
-			return true;
-		case "0":
-		case "false":
-			return false;
-		default:
-			return undefined;
-	}
-}
-
-/**
- * Whether Step model requests join the queue. `STEPCODE_MODEL_QUEUE` wins, then
- * `model_queue` (project over global); with neither, it is on, whatever the
- * host (CLI, desktop, web, subagent children).
- */
-export function resolveStepModelQueueEnabled(input: StepModelQueueSwitchInput): {
-	readonly enabled: boolean;
-	readonly source: StepModelQueueSource;
-} {
-	const env = input.env ?? process.env;
-	const forced = readSwitch(env[STEP_MODEL_QUEUE_ENV]);
-	if (forced !== undefined) return { enabled: forced, source: "env" };
-	const configured = input.settings?.modelQueue;
-	if (typeof configured === "boolean") return { enabled: configured, source: "settings" };
-	return { enabled: true, source: "default" };
-}
-
 /** Hooks for tests; not configuration. */
 export interface StepModelQueueOptions {
 	/** Replaces the fixed queue endpoints, by request host name. */
 	readonly queueEndpoints?: Readonly<Record<string, string>>;
 	/** How long polling may fail in a row before the call ends with an error. Default 30s. */
 	readonly pollFailureBudgetMs?: number;
+	/** How long one call may wait in line in all. Default 20 minutes. */
+	readonly maxWaitMs?: number;
 	readonly queueId?: () => string;
 	readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 	readonly now?: () => number;
-	readonly env?: NodeJS.ProcessEnv;
-}
-
-export interface StepModelQueueFactoryOptions {
-	readonly env?: NodeJS.ProcessEnv;
-	/** The effective Step settings, read on every request so a settings reload applies to the next one. */
-	readonly settings: () => Pick<StepSettings, "modelQueue"> | undefined;
 }
 
 /**
- * The model-fetch factory every Step entry point installs. With the queue off
- * the request is left alone (no wrapper); with it on, the wrapper tags and
+ * The model-fetch factory every Step entry point installs. The wrapper tags and
  * queues only requests to Step's API hosts and passes every other one on as it is.
  */
 export function createStepModelQueueFactory(
-	options: StepModelQueueFactoryOptions,
 	/** Test hooks; see {@link StepModelQueueOptions}. */
 	testing: StepModelQueueOptions = {},
 ): ModelFetchFactory {
-	return (request) => {
-		const { enabled } = resolveStepModelQueueEnabled({
-			env: options.env,
-			settings: options.settings(),
-		});
-		return enabled ? createStepModelQueueFetch(request, testing) : undefined;
-	};
+	return (request) => createStepModelQueueFetch(request, testing);
 }
 
 /**
@@ -259,6 +210,7 @@ export function createStepModelQueueFetch(
 	const sleep = options.sleep ?? defaultSleep;
 	const now = options.now ?? Date.now;
 	const failureBudgetMs = options.pollFailureBudgetMs ?? DEFAULT_POLL_FAILURE_BUDGET_MS;
+	const maxWaitMs = options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
 	return async (input, init) => {
 		// Decided from the URL alone, so a request that is not queued is passed on
 		// without copying its body.
@@ -301,9 +253,11 @@ export function createStepModelQueueFetch(
 		controlHeaders.set(QUEUE_ID_HEADER, queueId);
 		// Leave the line so the place is not held until its lease expires. Sent only
 		// once the server has queued this call, so a host without the queue never
-		// sees it. Awaited (within CANCEL_TIMEOUT_MS) so a process exiting on the
-		// stop sends it; its outcome changes nothing for the stopped call, so
-		// failures are dropped.
+		// sees it, and only when this side stops waiting (a stop, the wait bound, or
+		// a status endpoint that keeps failing); a place the server closed is gone
+		// already. Awaited (within CANCEL_TIMEOUT_MS) so a process exiting on the
+		// stop sends it; its outcome changes nothing for the call, so failures are
+		// dropped.
 		const leave = async (): Promise<void> => {
 			try {
 				const response = await base(`${queueBase}/cancel`, {
@@ -364,14 +318,25 @@ export function createStepModelQueueFetch(
 		};
 		publish(true);
 		let closedReason: string | undefined;
+		// This side stops waiting: release the place, then end the call like a closed one.
+		const giveUp = async (message: string, reason?: string): Promise<Response> => {
+			closedReason = reason;
+			await leave();
+			return queueEnded(message, reason);
+		};
+		// One bound for the whole wait, across every resend that is queued again.
+		const deadline = now() + maxWaitMs;
 		try {
 			let lastSuccess = now();
 			let failures = 0;
 			let lastFailure = "";
 			for (;;) {
+				const remaining = deadline - now();
+				if (remaining <= 0) return await giveUp(stepModelQueueClosedMessage("wait_timeout"), "wait_timeout");
 				// The SDK's per-attempt signal also carries its request timeout, which
 				// must not end a wait in line: only the caller's cancellation does.
-				await sleep(delay, caller);
+				await sleep(Math.min(delay, remaining), caller);
+				if (deadline - now() <= 0) continue;
 				let status: QueueStatus | undefined;
 				try {
 					const response = await base(queueBase, {
@@ -392,7 +357,7 @@ export function createStepModelQueueFetch(
 						// A throttled or failing status endpoint is retried; other answers
 						// cannot improve by asking again.
 						else if (response.status !== 429 && response.status < 500)
-							return queueEnded(`Queue status request failed with HTTP ${response.status}`);
+							return await giveUp(`Queue status request failed with HTTP ${response.status}`);
 						else lastFailure = `HTTP ${response.status}`;
 					}
 				} catch (error) {
@@ -401,7 +366,7 @@ export function createStepModelQueueFetch(
 				}
 				if (!status) {
 					if (now() - lastSuccess >= failureBudgetMs)
-						return queueEnded(`Queue status unavailable: ${lastFailure}`);
+						return await giveUp(`Queue status unavailable: ${lastFailure}`);
 					delay = Math.min(FIRST_POLL_BACKOFF_MS * 2 ** failures, MAX_POLL_BACKOFF_MS);
 					failures++;
 					continue;

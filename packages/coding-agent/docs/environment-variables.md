@@ -16,7 +16,6 @@ Step reads the variables below. Configuration shared across launches belongs in
 | `STEP_BASE_URL` | Override the StepFun API endpoint |
 | `STEP_CLIENT` | The product every Step request names in `x-step-client`: `stepcode-cli` (the default), `stepcode-desktop`, `stepcode-web`; a host that sets it keeps its value |
 | `STEP_PROVIDER`, `STEP_MODEL` | Default provider and model selection |
-| `STEPCODE_MODEL_QUEUE` | Model request queue: `1` on, `0` off, over `model_queue`; on by default. See [Step integration](step-integration.md#model-request-queue) |
 | `VISUAL`, `EDITOR` | External editor fallback when `externalEditor` is unset |
 | `HTTP_PROXY`, `HTTPS_PROXY` | Proxy outbound HTTP requests |
 

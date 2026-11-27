@@ -53,6 +53,10 @@ saved settings, then the Step product default.
 Every Step request names the product it came from in `x-step-client`:
 `stepcode-cli` (this build's default, `STEP_CLIENT`), or whatever a host sets —
 `stepcode-desktop` for the desktop app, `stepcode-web` for its web server.
+It also sends that product's release version in `x-step-client-version`: the
+version embedded by the release build, or `STEPCODE_VERSION_OVERRIDE` when set.
+Source runs report the fallback development version. The server reads the two
+headers together, so each product's minimum version is configured separately.
 
 Set `STEP_PROVIDER`, `STEP_MODEL`, `STEP_API_KEY`, or the provider endpoint
 variables to override the defaults. The Step launcher also disables upstream
@@ -223,19 +227,20 @@ API in a first-come line instead of rejecting it, and the client waits its
 turn (`src/step/model-queue.ts`, installed through the generic
 [`modelFetch`](sdk.md#model-request-fetch) hook).
 
-**Switch.** `STEPCODE_MODEL_QUEUE` (`1` / `0`) wins; then `model_queue` (a
-trusted project's `.stepcode/config.toml` over `~/.stepcode/config.toml`; a
-value that is not a boolean is ignored with a settings warning); with neither,
-the queue is on, for every host alike (the CLI, the desktop app, the web app and
-subagent children). The switch is read for every request, so a settings reload
-applies to the next one.
+**Switch.** There is no client switch. The client always speaks the protocol
+on Step's API hosts, and whether a request waits is the server's decision alone,
+for every host alike (the CLI, the desktop app, the web app and subagent
+children). The server tells StepCode clients apart by `x-step-client` and
+`x-step-client-version`.
 
 **Mount points.** The CLI composition root passes the queue factory to every
 mode (interactive, `-p`, `--mode json`, `--mode rpc`, and the subagent children
 that run those modes). `createStepAgentSession()` and
 `createStepAgentSessionServices()` install it by default for embedded hosts.
 
-**Which requests.** Every model request sent to one of Step's two API hosts,
+**Which requests.** Every model request sent to one of Step's two API hosts
+(conversation turns, compaction and branch summaries, subagent children, and
+`/btw` side questions),
 whatever the provider (the official `step` provider or a user's own provider
 pointed at Step), login profile or route: the request host makes it a StepCode
 request. The host also picks the queue:
@@ -253,14 +258,16 @@ The endpoints are fixed, not configurable. A request to any other host (for
 example an endpoint override through `STEP_BASE_URL`) is sent as it is, with no
 header and no queue.
 
-**Protocol.** With the switch on, every such request carries a fresh
+**Protocol.** Every such request carries a fresh
 `X-StepCode-Queue-ID`; whether it waits is the server's decision:
 
 - HTTP 429 with `X-StepCode-Queue-State: waiting` means the request holds a
   place in line (`X-StepCode-Queue-Position`). The client polls its region's
-  status endpoint every `Retry-After-Ms` (default 2s) and on `ready` sends the
-  original bytes again under the same id; a queued answer to the resend keeps
-  polling.
+  status endpoint every `Retry-After-Ms` (status `retry_after_ms`; 5s when the
+  server names none, at most 30s) and on `ready` sends the original bytes again
+  under the same id; a queued answer to the resend keeps polling. One call waits
+  in line at most 20 minutes in all, across resends; past that it ends with the
+  410 below, reason `wait_timeout`.
   The stream idle watchdog is held only while polling.
 - `closed`, or a status answer of 404 (`not_found`), ends the request with a
   synthesized HTTP 410 `queue_closed` error carrying `x-should-retry: false`, so
@@ -271,9 +278,12 @@ header and no queue.
   caller as it is. A 429 or 5xx status answer, or a network error, is retried
   with backoff from 1s to 8s; after 30s without a good answer the request ends
   with the same 410. Any other status answer ends it too.
-- A stop after the server queued the call (it answered `429` with
-  `X-StepCode-Queue-State: waiting`) releases the place with the region's cancel
-  endpoint (queue id header, no body; 200 on success). A stop before any such
+- Once the server queued the call (it answered `429` with
+  `X-StepCode-Queue-State: waiting`), every way this side stops waiting releases
+  the place with the region's cancel endpoint (queue id header, no body; 200 on
+  success): a stop, the 20-minute bound, or a status endpoint that keeps failing
+  or answers an unexpected status. A place the server closed is not cancelled
+  again. A stop before any such
   answer sends nothing more; the server's lease ends a place the client never
   saw, so a host without the queue never gets a cancel. The stopped call awaits
   the cancel for at most 1s, and a queued call is a registered request teardown

@@ -739,15 +739,7 @@ export {
 export { ambiguousPluginServerNames, resolveStepMcpServer } from "./step/mcp.ts";
 export { describeStepMcpImportOutcome, runStepMcpImportPrompt } from "./step/mcp-import-prompt.ts";
 export { hasStoredMcpOAuthCredential, loginMcpServer, logoutMcpServer } from "./step/mcp-oauth.ts";
-export {
-	createStepModelQueueFactory,
-	resolveStepModelQueueEnabled,
-	STEP_MODEL_QUEUE_ENV,
-	type StepModelQueueFactoryOptions,
-	type StepModelQueueSource,
-	type StepModelQueueSwitchInput,
-	stepModelQueueStatusText,
-} from "./step/model-queue.ts";
+export { createStepModelQueueFactory, stepModelQueueStatusText } from "./step/model-queue.ts";
 export { resolveStepLoginProfiles } from "./step/onboarding.ts";
 export {
 	AUTO_RESUME_PROMPT,

@@ -35,9 +35,11 @@ import {
 } from "./feedback/types.ts";
 import { normalizeFeedbackCategory } from "./feedback/validate.ts";
 import { formatStepMcpStatuses } from "./mcp.ts";
+import { createStepModelQueueFetch } from "./model-queue.ts";
 import { registerStepPluginCommand } from "./plugins.ts";
 import { resolveStepStorageRoot } from "./storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
+import { applyStepTraceHeaders } from "./trace-headers.ts";
 import { registerStepUsageCommands, type StepUsageHost } from "./usage/commands.ts";
 
 /**
@@ -172,6 +174,26 @@ const BTW_SYSTEM_REMINDER = [
 ].join("\n");
 
 /**
+ * What a model request outside the agent loop needs to reach Step's API like a
+ * conversation turn does: the client identity headers and the model request
+ * queue. A side request has no session to report its place in line to or to
+ * own a teardown; it waits silently, and closing it stops the wait (which
+ * releases its place).
+ */
+function stepSideRequestOptions(signal: AbortSignal): { headers: Record<string, string | null>; fetch: typeof fetch } {
+	const headers: Record<string, string | null> = {};
+	applyStepTraceHeaders(headers, {}, { clientType: process.env.STEP_CLIENT });
+	const fetch = createStepModelQueueFetch({
+		signal,
+		fetch: (input, init) => globalThis.fetch(input, init),
+		holdIdleWatchdog: () => () => {},
+		reportQueue: () => {},
+		registerTeardown: () => {},
+	});
+	return { headers, fetch };
+}
+
+/**
  * `/btw <question>`: one side question that leaves the conversation untouched.
  *
  * Claude Code forks the message list, runs a single turn with `skipTranscript`,
@@ -214,7 +236,11 @@ async function handleStepBtwCommand(args: string, ctx: ExtensionCommandContext):
 
 	let panel: BtwPanel | undefined;
 	const answer = ctx.modelRegistry
-		.complete(model, context, { signal: controller.signal, maxTokens: 2048 })
+		.complete(model, context, {
+			signal: controller.signal,
+			maxTokens: 2048,
+			...stepSideRequestOptions(controller.signal),
+		})
 		.then((message) => {
 			btwHistory.append(question, message);
 			panel?.setAnswer(assistantText(message));

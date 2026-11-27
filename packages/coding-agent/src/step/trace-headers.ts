@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import process from "node:process";
 import { STEP_CLIENT_DEFAULT } from "./environment.ts";
+import { STEPCODE_VERSION } from "./version.ts";
 
 /** Values copied from the request context into Step's attribution headers. */
 export interface StepTraceContext {
@@ -21,6 +22,8 @@ export interface StepTraceHeaderOptions {
 	readonly allowedBaseUrls?: readonly string[];
 	/** Low-sensitivity client label sent to the provider. */
 	readonly clientType?: string;
+	/** Low-sensitivity client release version sent to the provider; defaults to the Step product version. */
+	readonly clientVersion?: string;
 	/** High-sensitivity fields permitted by the host observability policy. */
 	readonly highSensitivityFields?: readonly string[];
 }
@@ -50,8 +53,11 @@ const STEP_TRACE_PRODUCT_PROVIDERS = new Set(["stepfunModelProxy", "neocodex"]);
 /**
  * Add Step attribution headers in place.
  *
- * `x-step-client` is sent on every request (`STEP_CLIENT_DEFAULT`, or the
- * caller's `clientType` when it names the product).
+ * `x-step-client` and `x-step-client-version` are sent on every request
+ * (`STEP_CLIENT_DEFAULT`, or the caller's `clientType` when it names the
+ * product; the Step product version, or the caller's `clientVersion`). The
+ * server reads the pair to decide which client releases may use Step-specific
+ * capacity.
  * The high-sensitivity fields
  * (session/workspace/goal/...) are sent only when the request URL matches
  * `options.allowedBaseUrls` AND the field appears in
@@ -66,6 +72,7 @@ export function applyStepTraceHeaders(
 	options: StepTraceHeaderOptions = {},
 ): void {
 	setHeader(headers, "x-step-client", options.clientType ?? STEP_CLIENT_DEFAULT);
+	setHeader(headers, "x-step-client-version", options.clientVersion ?? STEPCODE_VERSION.value);
 
 	const traceAllowed =
 		options.requestUrl === undefined ||
