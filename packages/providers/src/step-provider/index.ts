@@ -112,6 +112,8 @@ const STEP_MODEL_DEFAULTS = {
 interface StepModelMeta {
 	/** `max_input_tokens` -> context window. */
 	contextWindow?: number;
+	/** `max_output_tokens` -> output limit (only models configured with one report it). */
+	maxTokens?: number;
 	/** `enable_reason` -> extended-thinking support. */
 	reasoning?: boolean;
 	/** `enable_vision_input` -> image input support. */
@@ -135,8 +137,9 @@ function stepModelConfig(id: string, name: string, baseUrl?: string, meta?: Step
 		input: meta?.vision ? ["text", "image"] : ["text"],
 		cost: { ...STEP_MODEL_DEFAULTS.cost },
 		contextWindow,
-		// The endpoint reports no max-output; default it to the input window.
-		maxTokens: contextWindow,
+		// Models without a configured output limit omit `max_output_tokens`;
+		// the input window is then the only known bound.
+		maxTokens: meta?.maxTokens ?? contextWindow,
 		// When the list endpoint reports supported efforts (e.g. step_plan), carry
 		// them so `/effort` is correct without a per-model lookup.
 		...(hasEfforts ? { thinkingLevelMap: stepThinkingLevelMap(meta!.efforts!) } : {}),
@@ -445,9 +448,10 @@ export function stepModelsDetailBaseUrl(baseUrl: string): string {
  * Discover the chat-capable models the current credential can use from
  * `{base}/v1/models`, filtered by the endpoint's `model_type` (see
  * {@link STEP_USABLE_MODEL_TYPES}). Per-model capabilities are taken from the
- * response where present: `max_input_tokens` -> context window, `enable_reason`
- * -> thinking support, `enable_vision_input` -> image input; missing fields use
- * the metadata defaults.
+ * response where present: `max_input_tokens` -> context window,
+ * `max_output_tokens` -> output limit, `enable_reason` -> thinking support,
+ * `enable_vision_input` -> image input; missing fields use the metadata
+ * defaults.
  *
  * When discovery is unavailable — offline, unauthenticated, on any
  * transport/parse failure, or when the endpoint returns no usable models — it
@@ -488,6 +492,7 @@ export async function fetchStepModels(
 			modelType: readString(record, "model_type"),
 			meta: {
 				contextWindow: readPositiveNumber(record, "max_input_tokens"),
+				maxTokens: readPositiveNumber(record, "max_output_tokens"),
 				reasoning: readBoolean(record, "enable_reason"),
 				vision: readBoolean(record, "enable_vision_input"),
 				efforts: readStringArray(record, "reasoning_effort_support_list"),
