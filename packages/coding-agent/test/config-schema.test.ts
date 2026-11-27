@@ -370,3 +370,128 @@ describe("the models.json editor schema only adds strictness", () => {
 		expect(model.properties.headers?.additionalProperties).not.toBe(false);
 	});
 });
+
+describe("the accepted configuration surface is pinned", () => {
+	/**
+	 * The schema is generated from the TypeBox definitions, so deleting a field
+	 * there removes it from the schema in the same commit and
+	 * `check:config-schema` still passes. That makes an accidental removal look
+	 * like an intentional one: replacing `model-config.ts` during a branch sync
+	 * once dropped a desktop-only field, and nothing failed until the generated
+	 * schema was compared by hand.
+	 *
+	 * These lists are the independent record. Removing a field from the product
+	 * means removing it here too, on purpose.
+	 */
+	const MODELS_SURFACE = {
+		provider: ["api", "apiKey", "authHeader", "baseUrl", "compat", "headers", "modelOverrides", "models", "name"],
+		model: [
+			"api",
+			"baseUrl",
+			"compat",
+			"contextWindow",
+			"cost",
+			"headers",
+			"id",
+			"input",
+			"maxTokens",
+			"name",
+			"reasoning",
+			"samplingParams",
+			"thinkingLevelMap",
+		],
+		modelOverride: [
+			"compat",
+			"contextWindow",
+			"cost",
+			"headers",
+			"input",
+			"maxTokens",
+			"name",
+			"reasoning",
+			"samplingParams",
+			"thinkingLevelMap",
+		],
+	};
+
+	/** The same lists, read back out of the committed schema. */
+	function modelsSurface(): typeof MODELS_SURFACE {
+		const schema = ClosedModelsJsonSchema as unknown as {
+			properties: {
+				providers: {
+					patternProperties: Record<
+						string,
+						{
+							properties: {
+								models: { items: { properties: Record<string, unknown> } };
+								modelOverrides: { patternProperties: Record<string, { properties: Record<string, unknown> }> };
+								[key: string]: unknown;
+							};
+						}
+					>;
+				};
+			};
+		};
+		const provider = Object.values(schema.properties.providers.patternProperties)[0]!;
+		const override = Object.values(provider.properties.modelOverrides.patternProperties)[0]!;
+		return {
+			provider: Object.keys(provider.properties).sort(),
+			model: Object.keys(provider.properties.models.items.properties).sort(),
+			modelOverride: Object.keys(override.properties).sort(),
+		};
+	}
+
+	test("models.json keeps every provider, model and override field", () => {
+		const actual = modelsSurface();
+		expect(actual.provider).toEqual([...MODELS_SURFACE.provider].sort());
+		expect(actual.model).toEqual([...MODELS_SURFACE.model].sort());
+		expect(actual.modelOverride).toEqual([...MODELS_SURFACE.modelOverride].sort());
+	});
+
+	test("the telemetry table keeps every field a host reads", () => {
+		// `readGlobalStepDefaults` reads these three out of `[telemetry]`.
+		const telemetry = (
+			ConfigTomlSchema as unknown as {
+				properties: { telemetry: { properties: Record<string, unknown> } };
+			}
+		).properties.telemetry;
+		expect(Object.keys(telemetry.properties).sort()).toEqual(["enabled", "endpoint", "spool"]);
+	});
+});
+
+describe("hand-written declarations agree with the schema", () => {
+	// `StepMcpServerConfig` is written by hand next to the loader. A field can be
+	// declared, documented and read while the schema does not know it, which is
+	// what happened to `transport`, `shared` and `stepcode_source`: the docs
+	// showed `shared = false` and `config check` rejected it.
+	test("StepMcpServerConfig declares nothing the schema lacks", () => {
+		const source = readFileSync(join(import.meta.dirname, "..", "src", "step", "config-toml.ts"), "utf8");
+		const start = source.indexOf("export interface StepMcpServerConfig {");
+		expect(start).toBeGreaterThan(0);
+		const body = source.slice(start, source.indexOf("\n}", start));
+		const declared = [...body.matchAll(/^\t([a-z_]+)\??:/gm)].map((match) => match[1]!);
+		expect(declared.length).toBeGreaterThan(10);
+
+		const mcp = (
+			ConfigTomlSchema as unknown as {
+				properties: { mcp_servers: { patternProperties: Record<string, { properties: Record<string, unknown> }> } };
+			}
+		).properties.mcp_servers;
+		const server = Object.values(mcp.patternProperties)[0]!;
+		expect(declared.filter((field) => !(field in server.properties))).toEqual([]);
+	});
+
+	test("every top-level key a loader reads is in the schema", () => {
+		// `readGlobalStepDefaults`, the search tool and MCP discovery read the
+		// document by name instead of through the settings schema, so a key they
+		// read has to be listed for the editor to accept it.
+		const dir = join(import.meta.dirname, "..", "src", "step");
+		const read = new Set<string>();
+		for (const file of readdirSync(dir).filter((name) => name.endsWith(".ts") && !name.includes(".test."))) {
+			const source = readFileSync(join(dir, file), "utf8");
+			for (const match of source.matchAll(/\bdocument\.([a-zA-Z_][a-zA-Z0-9_]*)/g)) read.add(match[1]!);
+		}
+		expect(read.size).toBeGreaterThan(2);
+		expect([...read].filter((key) => !(key in configProperties))).toEqual([]);
+	});
+});
