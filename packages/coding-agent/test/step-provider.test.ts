@@ -480,6 +480,7 @@ describe("Step dynamic model discovery", () => {
 								id: "step-vision",
 								model_type: "大语言模型",
 								max_input_tokens: 131072,
+								max_output_tokens: 8192,
 								enable_reason: false,
 								enable_vision_input: true,
 							},
@@ -506,7 +507,7 @@ describe("Step dynamic model discovery", () => {
 			expect.objectContaining({
 				id: "step-vision",
 				contextWindow: 131072,
-				maxTokens: 131072,
+				maxTokens: 8192,
 				reasoning: false,
 				input: ["text", "image"],
 			}),
