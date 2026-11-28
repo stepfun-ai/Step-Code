@@ -264,8 +264,9 @@ header and no queue.
 - HTTP 429 with `X-StepCode-Queue-State: waiting` means the request holds a
   place in line (`X-StepCode-Queue-Position`). The client polls its region's
   status endpoint every `Retry-After-Ms` (status `retry_after_ms`; 5s when the
-  server names none, at most 30s) and on `ready` sends the original bytes again
-  under the same id; a queued answer to the resend keeps polling. One call waits
+  server names none, at most 30s) and on `ready` reports the new phase and sends
+  the original bytes again under the same id; a queued answer to the resend
+  keeps polling. One call waits
   in line at most 20 minutes in all, across resends; past that it ends with the
   410 below, reason `max_wait_exceeded`.
   The stream idle watchdog is held only while polling.
@@ -301,14 +302,17 @@ header and no queue.
   `user_quota` (the user's own usage limit) or `upstream_capacity` (Step's
   capacity).
 
-**Presentation.** Each change of place in line (and entering or leaving it) is
-a `model_queue` session event (`{ queueId, queue: { position? } | null,
-closedReason? }`), a live frame like `message_update`. The TUI covers the status
-row with "Queued: position N" while any request waits and restores the covered
-row (working, retry or compaction) when the last one leaves; `-p` writes each
-change to stderr; `--mode json` / `--mode rpc` write the event with
-`--include-live-events`, which subagent parents always pass. The status shows
-the place in line only, never a wait estimate.
+**Presentation.** Each change of place in line, and each change of phase
+(waiting → ready), is a `model_queue` session event (`{ queueId, queue:
+{ state: "waiting" | "ready", position? } | null, closedReason? }`), a live
+frame like `message_update`. A `ready` place has no position left: the server
+admitted the request and it is about to be sent again. The TUI covers the status
+row with "Queued: position N" while any request waits, "Starting..." while one
+waits for its resend, and restores the covered row (working, retry or
+compaction) when the last one leaves; `-p` writes each change to stderr;
+`--mode json` / `--mode rpc` write the event with `--include-live-events`, which
+subagent parents always pass. The status shows the place in line only, never a
+wait estimate.
 
 ## Shell command execution
 

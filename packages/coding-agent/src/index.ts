@@ -264,6 +264,7 @@ export {
 	ModelQueueChannel,
 	type ModelQueueExit,
 	type ModelQueueListener,
+	type ModelQueuePhase,
 	type ModelQueueState,
 } from "./core/model-fetch.ts";
 export { ModelRegistry } from "./core/model-registry.ts";

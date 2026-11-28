@@ -226,9 +226,10 @@ export type AgentSessionEvent =
 	| { type: "bash_execution_update"; id?: string; delta: string }
 	| {
 			/**
-			 * A model request waits in a server-side line (`queue`), or left it
-			 * (`queue: null`, with `closedReason` when the server closed its place).
-			 * Reported by the host's model-fetch wrapper. A live frame (see
+			 * A model request is in a server-side line (`queue`: waiting with its
+			 * place, or ready once admitted), or left it (`queue: null`, with
+			 * `closedReason` when the server closed its place). Reported by the
+			 * host's model-fetch wrapper. A live frame (see
 			 * `session-event-durability.ts`): records skip it, live consumers and
 			 * `--include-live-events` streams (a subagent's parent) receive it.
 			 */

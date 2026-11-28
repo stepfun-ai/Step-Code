@@ -92,6 +92,7 @@ export {
 	ModelQueueChannel,
 	type ModelQueueExit,
 	type ModelQueueListener,
+	type ModelQueuePhase,
 	type ModelQueueState,
 } from "./model-fetch.ts";
 export {

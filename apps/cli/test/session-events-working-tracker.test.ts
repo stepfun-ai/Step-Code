@@ -251,10 +251,10 @@ test("the queue row covers the current row and gives the same one back when the 
 	const compaction = new CompactionStatusIndicator(host.ui(), "threshold", "step");
 	state.active = compaction;
 
-	slot.update("r1", { position: 3 });
+	slot.update("r1", { state: "waiting", position: 3 });
 	expect(state.active).toBeInstanceOf(ModelQueueStatusIndicator);
-	slot.update("r1", { position: 1 });
-	expect(state.active?.render(80).join("\n")).toContain(stepModelQueueStatusText({ position: 1 }));
+	slot.update("r1", { state: "waiting", position: 1 });
+	expect(state.active?.render(80).join("\n")).toContain(stepModelQueueStatusText({ state: "waiting", position: 1 }));
 
 	slot.update("r1", null);
 	// Not a working row: the compaction row it covered.
@@ -262,14 +262,27 @@ test("the queue row covers the current row and gives the same one back when the 
 	compaction.dispose();
 });
 
+test("an admitted place reads as starting until the request settles", () => {
+	initTheme("dark");
+	const { state, host } = queueSlotHost();
+	const slot = new ModelQueueStatusSlot(host);
+
+	slot.update("r1", { state: "waiting", position: 1 });
+	slot.update("r1", { state: "ready" });
+	// The place is gone; the request itself is about to run, so the row says so instead of vanishing.
+	expect(state.active?.render(80).join("\n")).toContain("Starting...");
+	slot.update("r1", null);
+	expect(state.active).toBeUndefined();
+});
+
 test("one request leaving the line keeps another's queue row", () => {
 	initTheme("dark");
 	const { state, host } = queueSlotHost();
 	const slot = new ModelQueueStatusSlot(host);
-	slot.update("a", { position: 2 });
-	slot.update("b", { position: 5 });
+	slot.update("a", { state: "waiting", position: 2 });
+	slot.update("b", { state: "waiting", position: 5 });
 	slot.update("a", null);
-	expect(state.active?.render(80).join("\n")).toContain(stepModelQueueStatusText({ position: 5 }));
+	expect(state.active?.render(80).join("\n")).toContain(stepModelQueueStatusText({ state: "waiting", position: 5 }));
 	slot.update("b", null);
 	expect(state.active).toBeUndefined();
 });
@@ -289,8 +302,8 @@ test("model_queue events reach the queue slot, and agent_end clears it", async (
 		turnEndedAbnormally: true,
 		redraw: { requestRender: vi.fn() },
 	} as unknown as RuntimeContext;
-	await handleSessionEvent(ctx, { type: "model_queue", queueId: "r1", queue: { position: 2 } });
-	expect(updateModelQueue).toHaveBeenCalledWith("r1", { position: 2 });
+	await handleSessionEvent(ctx, { type: "model_queue", queueId: "r1", queue: { state: "waiting", position: 2 } });
+	expect(updateModelQueue).toHaveBeenCalledWith("r1", { state: "waiting", position: 2 });
 	await handleSessionEvent(ctx, { type: "agent_end", messages: [], willRetry: false });
 	expect(clearModelQueue).toHaveBeenCalledOnce();
 });

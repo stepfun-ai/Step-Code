@@ -3,9 +3,14 @@ import type { Api, Model } from "@step-harness/providers/compat";
 /** The HTTP fetch a provider adapter uses for one model request. */
 export type ModelFetch = typeof globalThis.fetch;
 
-/** A model request waiting in a server-side line before it runs. */
+/** What a place in a server-side line is doing: waiting for its turn, or admitted and about to run. */
+export type ModelQueuePhase = "waiting" | "ready";
+
+/** A model request in a server-side line before it runs. */
 export interface ModelQueueState {
-	/** Place in line, when the server reported one. */
+	/** `waiting` for its turn in line, or `ready`: the server admitted the place and the request is about to run. */
+	readonly state: ModelQueuePhase;
+	/** Place in line, when the server reported one. A place that is `ready` has none left. */
 	readonly position?: number;
 }
 
@@ -35,11 +40,12 @@ export interface ModelFetchRequest {
 	 */
 	readonly holdIdleWatchdog: () => () => void;
 	/**
-	 * Report that the request waits in a server-side line (`state`), or left it
-	 * (`null`, with `exit.closedReason` when the server closed the place). The
-	 * session publishes each report as a `model_queue` event. `queueId` is the
-	 * wrapper's id for one place in line (an HTTP call it wraps); one model
-	 * request may make several.
+	 * Report that the request waits in a server-side line (`state`: waiting, with
+	 * its place; or ready, once admitted and about to run), or left it (`null`,
+	 * with `exit.closedReason` when the server closed the place). The session
+	 * publishes each report as a `model_queue` event. `queueId` is the wrapper's
+	 * id for one place in line (an HTTP call it wraps); one model request may
+	 * make several.
 	 */
 	readonly reportQueue: ModelQueueListener;
 	/**

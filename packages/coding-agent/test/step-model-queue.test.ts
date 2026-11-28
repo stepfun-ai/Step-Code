@@ -411,7 +411,14 @@ test("waits in line, then resends the same bytes under the same id", async () =>
 	assert.deepEqual(resend?.body, first?.body);
 	assert.equal(text(resend?.body), BODY);
 	assert.deepEqual(h.sleeps, [1500, 1000, 2000]);
-	assert.deepEqual(h.states, [{ position: 3 }, { position: 2 }, { position: 1 }, null]);
+	assert.deepEqual(h.states, [
+		{ state: "waiting", position: 3 },
+		{ state: "waiting", position: 2 },
+		{ state: "waiting", position: 1 },
+		// The place stopped waiting and the request is about to run: a phase of its own, not a vanished row.
+		{ state: "ready" },
+		null,
+	]);
 	assert.deepEqual(h.exits, [undefined]);
 	assert.deepEqual([h.holds(), h.released()], [1, 1]);
 	// Held only while polling; the resend is back under the idle bound.
@@ -457,7 +464,15 @@ test("keeps polling when the resend is queued again", async () => {
 	assert.equal(posts.length, 3);
 	assert.deepEqual(new Set(posts.map((call) => call.headers.get("X-StepCode-Queue-ID"))), new Set(["q-1"]));
 	assert.deepEqual(new Set(posts.map((call) => text(call.body))), new Set([BODY]));
-	assert.deepEqual(h.states, [{ position: 2 }, { position: 4 }, { position: 1 }, null]);
+	assert.deepEqual(h.states, [
+		{ state: "waiting", position: 2 },
+		{ state: "ready" },
+		// Queued again by the resend: back in line with its new place.
+		{ state: "waiting", position: 4 },
+		{ state: "waiting", position: 1 },
+		{ state: "ready" },
+		null,
+	]);
 	assert.deepEqual(h.sleeps, [5000, 500, 2000]);
 	// Released before each resend, held again when the resend is queued.
 	assert.deepEqual(
@@ -546,7 +561,12 @@ test("reports only changes of place or of being in line", async () => {
 		ok(),
 	]);
 	await h.post();
-	assert.deepEqual(h.states, [{ position: 2 }, { position: 1 }, null]);
+	assert.deepEqual(h.states, [
+		{ state: "waiting", position: 2 },
+		{ state: "waiting", position: 1 },
+		{ state: "ready" },
+		null,
+	]);
 });
 
 test("names every reason the server names in readable text, generic without one", () => {
@@ -783,10 +803,12 @@ test("the request host decides, not the provider: a custom provider at Step's ho
 	]);
 });
 
-test("status text names the position, never a wait estimate", () => {
-	assert.equal(stepModelQueueStatusText({ position: 3 }), "Queued: position 3");
-	assert.equal(stepModelQueueStatusText({}), "Queued");
-	assert.equal(stepModelQueueStatusText({ position: 0 }), "Queued");
+test("status text names the position while waiting, and the admitted place as starting", () => {
+	assert.equal(stepModelQueueStatusText({ state: "waiting", position: 3 }), "Queued: position 3");
+	assert.equal(stepModelQueueStatusText({ state: "waiting" }), "Queued");
+	assert.equal(stepModelQueueStatusText({ state: "waiting", position: 0 }), "Queued");
+	// The server admitted the place: the request is about to run, so the line no longer has a place to name.
+	assert.equal(stepModelQueueStatusText({ state: "ready" }), "Starting...");
 });
 
 test("a stop waits for the cancel request, and the call stays a registered teardown until it settles", async () => {

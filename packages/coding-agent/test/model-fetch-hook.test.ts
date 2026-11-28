@@ -197,8 +197,9 @@ describe("model fetch hook", () => {
 		const events: AgentSessionEvent[] = [];
 		const last = await runPrompt(
 			(request) => async () => {
-				request.reportQueue("call-1", { position: 2 });
-				request.reportQueue("call-1", {});
+				request.reportQueue("call-1", { state: "waiting", position: 2 });
+				request.reportQueue("call-1", { state: "waiting" });
+				request.reportQueue("call-1", { state: "ready" });
 				request.reportQueue("call-1", null);
 				return sse("reported");
 			},
@@ -206,8 +207,9 @@ describe("model fetch hook", () => {
 		);
 		expect(last.stopReason).toBe("stop");
 		expect(events.filter((event) => event.type === "model_queue")).toEqual([
-			{ type: "model_queue", queueId: "call-1", queue: { position: 2 } },
-			{ type: "model_queue", queueId: "call-1", queue: {} },
+			{ type: "model_queue", queueId: "call-1", queue: { state: "waiting", position: 2 } },
+			{ type: "model_queue", queueId: "call-1", queue: { state: "waiting" } },
+			{ type: "model_queue", queueId: "call-1", queue: { state: "ready" } },
 			{ type: "model_queue", queueId: "call-1", queue: null },
 		]);
 	});

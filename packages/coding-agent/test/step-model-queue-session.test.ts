@@ -129,7 +129,8 @@ describe("Step sessions install the queue", () => {
 		expect(calls[1]?.id).toBe(calls[0]?.id);
 		expect(calls[2]?.id).toBe(calls[0]?.id);
 		expect(events.filter((event) => event.type === "model_queue").map((event) => event.queue)).toEqual([
-			{ position: 2 },
+			{ state: "waiting", position: 2 },
+			{ state: "ready" },
 			null,
 		]);
 	});

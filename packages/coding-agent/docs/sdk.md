@@ -610,8 +610,9 @@ const { session } = await createAgentSession({ modelFetch });
   answer still ends as a stall. Releasing the last hold starts a full idle
   window. The release function is idempotent.
 - `reportQueue(queueId, state, exit?)` tells the session that the request
-  waits in a server-side line (`state`, optionally with `position`) or left it
-  (`null`, with `exit.closedReason` when the server closed the place). The
+  waits in a server-side line (`state`, with its `position` while waiting, or
+  `state: "ready"` once the server admitted it and it is about to run) or left
+  it (`null`, with `exit.closedReason` when the server closed the place). The
   session publishes each report as a `model_queue` event: a live frame the TUI
   presents and `--mode json` / `--mode rpc` write with `--include-live-events`.
 - `registerTeardown(task)` registers work the request still owes after its

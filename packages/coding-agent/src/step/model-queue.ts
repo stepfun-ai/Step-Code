@@ -25,7 +25,7 @@ import type { ModelFetch, ModelFetchFactory, ModelFetchRequest, ModelQueueState 
  *
  *   POST .../chat/completions          -> 429 queued (position 3)
  *   GET  <queue>   (X-StepCode-Queue-ID) -> waiting (position 1)
- *   GET  <queue>   (X-StepCode-Queue-ID) -> ready
+ *   GET  <queue>   (X-StepCode-Queue-ID) -> ready     (reported as `ready`: admitted)
  *   POST .../chat/completions          -> 200 stream (same id, same body)
  *
  * A request to any other host (an endpoint override) is sent as it is, without
@@ -109,8 +109,9 @@ export function stepModelQueueClosedMessage(reason?: StepQueueClosedReason): str
 	return reason ? `${CLOSED_REASON_TEXT[reason]} (${reason})` : CLOSED_GENERIC_TEXT;
 }
 
-/** The status line for a request waiting in line: its position, never a wait estimate. */
+/** The status line for a request in line: its place while it waits, never a wait estimate; a request the server admitted is starting. */
 export function stepModelQueueStatusText(state: ModelQueueState): string {
+	if (state.state === "ready") return "Starting...";
 	return state.position !== undefined && state.position > 0 ? `Queued: position ${state.position}` : "Queued";
 }
 
@@ -369,25 +370,27 @@ export function createStepModelQueueFetch(
 		let position = nonNegativeInteger(first.headers.get(POSITION_HEADER));
 		let delay = pollInterval(first.headers.get(RETRY_AFTER_HEADER));
 		await first.body?.cancel().catch(() => {});
-		// Reports go out only when the place in line or being in line changes.
-		let reported: { readonly queued: boolean; readonly position?: number } = { queued: false };
-		const publish = (queued: boolean, closedReason?: StepQueueClosedReason) => {
-			const next: { readonly queued: boolean; readonly position?: number } = queued
-				? { queued, ...(position === undefined ? {} : { position }) }
-				: { queued };
-			if (next.queued === reported.queued && next.position === reported.position) return;
+		// Reports go out only when what a reader sees changes: being in line, the
+		// phase (waiting or admitted), and the place in line.
+		let reported: ModelQueueState | null = null;
+		const publish = (next: ModelQueueState | null, closedReason?: StepQueueClosedReason) => {
+			if (next?.state === reported?.state && next?.position === reported?.position) return;
 			reported = next;
 			try {
-				request.reportQueue(
-					queueId,
-					queued ? (position === undefined ? {} : { position }) : null,
-					...(closedReason === undefined ? [] : [{ closedReason }]),
-				);
+				request.reportQueue(queueId, next, ...(closedReason === undefined ? [] : [{ closedReason }]));
 			} catch {
 				// Presentation must not change the request.
 			}
 		};
-		publish(true);
+		// Still in line: its place, when the server named one.
+		const publishWaiting = () =>
+			publish(position === undefined ? { state: "waiting" } : { state: "waiting", position });
+		// Admitted: the place in line is gone and the request is about to run.
+		const publishReady = () => {
+			position = undefined;
+			publish({ state: "ready" });
+		};
+		publishWaiting();
 		let closedReason: StepQueueClosedReason | undefined;
 		// This side stops waiting: release the place, then end the call like a closed one.
 		const giveUp = async (reason?: StepQueueClosedReason, message?: string): Promise<Response> => {
@@ -451,9 +454,12 @@ export function createStepModelQueueFetch(
 				}
 				if (status.state === "waiting") {
 					position = status.position ?? position;
-					publish(true);
+					publishWaiting();
 					continue;
 				}
+				// Admitted: say so before the resend goes out, so a reader sees the
+				// place turn into a starting request instead of vanishing.
+				publishReady();
 				// The SDK's per-attempt signal joins the resend only while it is live: an
 				// abort it already carries is its request timeout expiring in line.
 				unhold();
@@ -468,7 +474,7 @@ export function createStepModelQueueFetch(
 				position = nonNegativeInteger(response.headers.get(POSITION_HEADER)) ?? position;
 				delay = pollInterval(response.headers.get(RETRY_AFTER_HEADER));
 				void response.body?.cancel().catch(() => {});
-				publish(true);
+				publishWaiting();
 			}
 		} catch (error) {
 			if (caller.aborted) {
@@ -477,7 +483,7 @@ export function createStepModelQueueFetch(
 			}
 			throw error;
 		} finally {
-			publish(false, closedReason);
+			publish(null, closedReason);
 			unhold();
 			settled();
 		}

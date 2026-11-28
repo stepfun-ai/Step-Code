@@ -160,14 +160,19 @@ describe("runPrintMode", () => {
 	});
 
 	it("reports each queue report on stderr in text mode in the host's wording, keeping stdout for the answer", async () => {
-		const run = async (formatModelQueue?: (queue: { position?: number }) => string) => {
+		const run = async (formatModelQueue?: (queue: { state: "waiting" | "ready"; position?: number }) => string) => {
 			const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));
 			const { session } = runtimeHost;
 			const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
 			const stdout = vi.spyOn(process.stdout, "write").mockImplementation(capturedWrite);
 			session.prompt.mockImplementation(async () => {
 				// The wrapper reports changes only, so every report is a line.
-				for (const queue of [{ position: 2 }, { position: 1 }, null]) {
+				for (const queue of [
+					{ state: "waiting" as const, position: 2 },
+					{ state: "waiting" as const, position: 1 },
+					{ state: "ready" as const },
+					null,
+				]) {
 					session.emitToListeners({ type: "model_queue", queueId: "q1", queue });
 				}
 			});
@@ -186,9 +191,10 @@ describe("runPrintMode", () => {
 			return lines;
 		};
 
-		const formatted = await run((queue) => `waiting at ${queue.position}`);
+		const formatted = await run((queue) => (queue.state === "ready" ? "starting" : `waiting at ${queue.position}`));
 		expect(formatted.exitCode).toBe(0);
-		expect(formatted.stderr).toEqual([["waiting at 2"], ["waiting at 1"]]);
+		// Each phase is a line: the admitted place starts instead of naming a place it no longer has.
+		expect(formatted.stderr).toEqual([["waiting at 2"], ["waiting at 1"], ["starting"]]);
 		expect(formatted.stdout).not.toContain("waiting at");
 		// A host that supplies no wording gets no queue lines.
 		expect((await run()).stderr).toEqual([]);
@@ -200,7 +206,8 @@ describe("runPrintMode", () => {
 			const { session } = runtimeHost;
 			const stdout = vi.spyOn(process.stdout, "write").mockImplementation(capturedWrite);
 			session.prompt.mockImplementation(async () => {
-				session.emitToListeners({ type: "model_queue", queueId: "r1", queue: { position: 3 } });
+				session.emitToListeners({ type: "model_queue", queueId: "r1", queue: { state: "waiting", position: 3 } });
+				session.emitToListeners({ type: "model_queue", queueId: "r1", queue: { state: "ready" } });
 				session.emitToListeners({ type: "model_queue", queueId: "r1", queue: null });
 			});
 			await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
@@ -219,7 +226,8 @@ describe("runPrintMode", () => {
 		};
 		expect(await run(false)).toEqual([]);
 		expect(await run(true)).toEqual([
-			{ type: "model_queue", queueId: "r1", queue: { position: 3 } },
+			{ type: "model_queue", queueId: "r1", queue: { state: "waiting", position: 3 } },
+			{ type: "model_queue", queueId: "r1", queue: { state: "ready" } },
 			{ type: "model_queue", queueId: "r1", queue: null },
 		]);
 	});
