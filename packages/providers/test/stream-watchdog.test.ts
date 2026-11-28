@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../src/types.ts";
 import { createAssistantMessageEventStream } from "../src/utils/event-stream.ts";
 import { isRetryableAssistantError } from "../src/utils/retry.ts";
-import { withStreamIdleWatchdog } from "../src/utils/stream-watchdog.ts";
+import { StreamIdleHold, withStreamIdleWatchdog } from "../src/utils/stream-watchdog.ts";
 
 function shell(): AssistantMessage {
 	return {
@@ -93,5 +93,48 @@ describe("stream idle watchdog", () => {
 	it("returns the source unchanged when disabled", () => {
 		const source = createAssistantMessageEventStream();
 		expect(withStreamIdleWatchdog(source, { idleTimeoutMs: 0, onTimeout: () => {}, fallback: shell })).toBe(source);
+	});
+
+	it("does not fire while held and restarts a full window on release", async () => {
+		const source = createAssistantMessageEventStream();
+		const hold = new StreamIdleHold();
+		let cancelled = 0;
+		const watched = withStreamIdleWatchdog(source, {
+			idleTimeoutMs: 40,
+			onTimeout: () => cancelled++,
+			fallback: shell,
+			hold,
+		});
+		const release = hold.acquire();
+		await sleep(120);
+		expect(cancelled).toBe(0);
+		release();
+		release();
+		expect(hold.held).toBe(false);
+		// Released just now: the next window is a full one, not the tail of a held one.
+		await sleep(25);
+		expect(cancelled).toBe(0);
+		const partial = shell();
+		source.push({ type: "start", partial });
+		source.push({ type: "done", reason: "stop", message: partial });
+		expect((await watched.result()).stopReason).toBe("stop");
+		expect(cancelled).toBe(0);
+	});
+
+	it("fires once the hold is released and the stream stays silent", async () => {
+		const hold = new StreamIdleHold();
+		let cancelled = 0;
+		const watched = withStreamIdleWatchdog(createAssistantMessageEventStream(), {
+			idleTimeoutMs: 30,
+			onTimeout: () => cancelled++,
+			fallback: shell,
+			hold,
+		});
+		const release = hold.acquire();
+		await sleep(70);
+		release();
+		const result = await watched.result();
+		expect(cancelled).toBe(1);
+		expect(result.errorMessage).toMatch(/stream idle timeout/);
 	});
 });

@@ -349,6 +349,8 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 
 		case "agent_end":
 			ctx.ui.terminal.setProgress(false);
+			// A run that ends while a request waits (a stop) leaves no queue row behind.
+			ctx.clearModelQueue();
 			ctx.clearStatusIndicator("working");
 			// Turn-done marker: only for normally-ended turns (aborted/error
 			// turns already show an error line in the transcript); stays
@@ -456,6 +458,12 @@ export async function handleSessionEvent(ctx: RuntimeContext, event: AgentSessio
 				}
 			}
 			void ctx.flushCompactionQueue({ willRetry: event.willRetry });
+			ctx.redraw.requestRender();
+			break;
+		}
+
+		case "model_queue": {
+			ctx.updateModelQueue(event.queueId, event.queue);
 			ctx.redraw.requestRender();
 			break;
 		}

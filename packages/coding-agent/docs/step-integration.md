@@ -50,6 +50,14 @@ separate blue variants. `step-violet-light/step-violet` remains available for
 automatic violet light/dark switching. Non-interactive
 `step --export` uses the same precedence as startup: explicit `--use-theme`,
 saved settings, then the Step product default.
+Every Step request names the product it came from in `x-step-client`:
+`stepcode-cli` (this build's default, `STEP_CLIENT`), or whatever a host sets —
+`stepcode-desktop` for the desktop app, `stepcode-web` for its web server.
+It also sends that product's release version in `x-step-client-version`: the
+version embedded by the release build, or `STEPCODE_VERSION_OVERRIDE` when set.
+Source runs report the fallback development version. The server reads the two
+headers together, so each product's minimum version is configured separately.
+
 Set `STEP_PROVIDER`, `STEP_MODEL`, `STEP_API_KEY`, or the provider endpoint
 variables to override the defaults. The Step launcher also disables upstream
 release and install checks so the product does not contact those services.
@@ -211,6 +219,100 @@ they need to control where the Step sidecar is stored.
 normal user-message path. The model inspects the project and uses the native
 write and approval flow; the prompt explicitly preserves an existing
 `AGENTS.md` instead of replacing it.
+
+## Model request queue
+
+When Step's model pool is busy, the server keeps a model request sent to Step's
+API in a first-come line instead of rejecting it, and the client waits its
+turn (`src/step/model-queue.ts`, installed through the generic
+[`modelFetch`](sdk.md#model-request-fetch) hook).
+
+**Switch.** There is no client switch. The client always speaks the protocol
+on Step's API hosts, and whether a request waits is the server's decision alone,
+for every host alike (the CLI, the desktop app, the web app and subagent
+children). The server tells StepCode clients apart by `x-step-client` and
+`x-step-client-version`.
+
+**Mount points.** The CLI composition root passes the queue factory to every
+mode (interactive, `-p`, `--mode json`, `--mode rpc`, and the subagent children
+that run those modes). `createStepAgentSession()` and
+`createStepAgentSessionServices()` install it by default for embedded hosts.
+
+**Which requests.** Every model request sent to one of Step's two API hosts
+(conversation turns, compaction and branch summaries, subagent children, and
+`/btw` side questions),
+whatever the provider (the official `step` provider or a user's own provider
+pointed at Step), login profile or route: the request host makes it a StepCode
+request. The host also picks the queue:
+
+| Request host | Status | Cancel |
+| --- | --- | --- |
+| `api.stepfun.com` | `GET https://api.stepfun.com/stepcode/v1/queue` | `POST https://api.stepfun.com/stepcode/v1/queue/cancel` |
+| `api.stepfun.ai` | `GET https://api.stepfun.ai/stepcode/v1/queue` | `POST https://api.stepfun.ai/stepcode/v1/queue/cancel` |
+
+Both control requests name the place by the `X-StepCode-Queue-ID` header (no
+query parameter, no body) and carry the model request's own headers minus those
+describing its body, so its credentials authorize them.
+
+The endpoints are fixed, not configurable. A request to any other host (for
+example an endpoint override through `STEP_BASE_URL`) is sent as it is, with no
+header and no queue.
+
+**Protocol.** Every such request carries a fresh
+`X-StepCode-Queue-ID`; whether it waits is the server's decision:
+
+- HTTP 429 with `X-StepCode-Queue-State: waiting` means the request holds a
+  place in line (`X-StepCode-Queue-Position`). The client polls its region's
+  status endpoint every `Retry-After-Ms` (status `retry_after_ms`; 5s when the
+  server names none, at most 30s) and on `ready` reports the new phase and sends
+  the original bytes again under the same id; a queued answer to the resend
+  keeps polling. One call waits
+  in line at most 20 minutes in all, across resends; past that it ends with the
+  410 below, reason `max_wait_exceeded`.
+  The stream idle watchdog is held only while polling.
+- `closed` (a status answer, or a 429 with `X-StepCode-Queue-State: closed` and
+  the code in `X-StepCode-Queue-Reason` on the first send or a resend), or a
+  status answer of 404, ends the request with a
+  synthesized HTTP 410 `queue_closed` error carrying `x-should-retry: false`, so
+  no retry re-enters the line under a new id. Its message is readable English
+  followed by the reason code. The server names only reasons a user can act on,
+  a fixed list shared with it (`StepQueueClosedReason`): `queue_full`,
+  `user_limit`, `max_wait_exceeded`; a place closed for any other reason, or with
+  a code this client does not know, gets the generic text and no code.
+  `error.reason` keeps a named code. A 401 or 403 status answer is returned to the
+  caller as it is. A 429 or 5xx status answer, or a network error, is retried
+  with backoff from 1s to 8s; after 30s without a good answer the request ends
+  with the same 410. Any other status answer ends it too.
+- Once the server queued the call (it answered `429` with
+  `X-StepCode-Queue-State: waiting`), every way this side stops waiting releases
+  the place with the region's cancel endpoint (queue id header, no body; 200 on
+  success): a stop, the 20-minute bound, or a status endpoint that keeps failing
+  or answers an unexpected status. A place the server closed is not cancelled
+  again. A stop before any such
+  answer sends nothing more; the server's lease ends a place the client never
+  saw, so a host without the queue never gets a cancel. The stopped call awaits
+  the cancel for at most 1s, and a queued call is a registered request teardown
+  until it settles, so disposing the session (every exit path: `-p`/json
+  signals, rpc shutdown, the TUI, a desktop session closing) waits for it before
+  the process exits. A request to a control endpoint is never wrapped or
+  queued, and keeps the queue id it names.
+- Any other response, including an ordinary 429, goes back to the existing retry
+  policy with its status, error codes and headers unchanged. A 429 carrying
+  `X-StepCode-Limit-Scope` gains a leading sentence on whose limit it hit:
+  `user_quota` (the user's own usage limit) or `upstream_capacity` (Step's
+  capacity).
+
+**Presentation.** Each change of place in line, and each change of phase
+(waiting → ready), is a `model_queue` session event (`{ queueId, queue:
+{ state: "waiting" | "ready", position? } | null, closedReason? }`), a live
+frame like `message_update`. A `ready` place has no position left: the server
+admitted the request and it is about to be sent again. The TUI covers the status
+row with "Queued: position N" while any request waits, "Starting..." while one
+waits for its resend, and restores the covered row (working, retry or
+compaction) when the last one leaves; `-p` writes each change to stderr;
+`--mode json` / `--mode rpc` write the event with `--include-live-events`, which
+subagent parents always pass. The status shows the place in line only, never a
+wait estimate.
 
 ## Shell command execution
 

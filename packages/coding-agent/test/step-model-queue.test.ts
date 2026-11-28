@@ -1,0 +1,937 @@
+import assert from "node:assert/strict";
+import { test } from "vitest";
+import type { ModelFetchRequest, ModelQueueExit, ModelQueueState } from "../src/core/model-fetch.ts";
+import {
+	createStepModelQueueFactory,
+	createStepModelQueueFetch,
+	type StepQueueClosedReason,
+	stepModelQueueClosedMessage,
+	stepModelQueueStatusText,
+} from "../src/step/model-queue.ts";
+
+const PLAN = "https://api.example.test/step_plan/v1";
+const CHAT = `${PLAN}/chat/completions`;
+/** Stand-ins for the fixed endpoints, injected through the test hook: mainland on `.test`, overseas on `.ai`. */
+const QUEUE = "https://api.example.test/stepcode/v1/queue";
+const QUEUE_OVERSEAS = "https://api.example.ai/stepcode/v1/queue";
+const QUEUE_ENDPOINTS = { "api.example.test": QUEUE, "api.example.ai": QUEUE_OVERSEAS };
+const BODY = JSON.stringify({ model: "step", messages: [{ role: "user", content: "你好 🌏" }], stream: true });
+
+interface Call {
+	readonly url: string;
+	readonly method: string;
+	readonly headers: Headers;
+	readonly body?: Uint8Array;
+	readonly signal?: AbortSignal;
+	/** Whether the idle watchdog was held when the request went out. */
+	readonly held: boolean;
+}
+
+type Reply = Response | Error | ((call: Call) => Response | Promise<Response>);
+
+function queued(position?: number, retryAfterMs?: number): Response {
+	const headers = new Headers({ "X-StepCode-Queue-State": "waiting", "content-type": "application/json" });
+	if (position !== undefined) headers.set("X-StepCode-Queue-Position", String(position));
+	if (retryAfterMs !== undefined) headers.set("Retry-After-Ms", String(retryAfterMs));
+	return new Response(JSON.stringify({ error: { type: "queued", code: "queued" } }), { status: 429, headers });
+}
+
+function status(state: string, extra: Record<string, unknown> = {}): Response {
+	return new Response(JSON.stringify({ state, position: 0, retry_after_ms: 2000, reason: "", ...extra }), {
+		status: 200,
+		headers: { "content-type": "application/json" },
+	});
+}
+
+const ok = () => new Response("data: [DONE]\n\n", { status: 200, headers: { "content-type": "text/event-stream" } });
+
+function harness(replies: Reply[], options: { budgetMs?: number; maxWaitMs?: number } = {}) {
+	const calls: Call[] = [];
+	const sleeps: number[] = [];
+	const states: Array<ModelQueueState | null> = [];
+	const exits: Array<ModelQueueExit | undefined> = [];
+	const teardowns: Array<Promise<unknown>> = [];
+	const caller = new AbortController();
+	let holds = 0;
+	let released = 0;
+	let clock = 0;
+	const fetch: typeof globalThis.fetch = async (input, init) => {
+		const request = new Request(input, init);
+		const call: Call = {
+			url: request.url,
+			method: request.method,
+			headers: new Headers(request.headers),
+			...(request.body ? { body: new Uint8Array(await request.arrayBuffer()) } : {}),
+			...(init?.signal ? { signal: init.signal } : {}),
+			held: holds > released,
+		};
+		calls.push(call);
+		const reply = replies.shift();
+		if (!reply) throw new Error(`unexpected request ${call.method} ${call.url}`);
+		if (reply instanceof Error) throw reply;
+		return typeof reply === "function" ? reply(call) : reply;
+	};
+	const wrapped = createStepModelQueueFetch(
+		{
+			signal: caller.signal,
+			fetch,
+			reportQueue: (queueId, state, exit) => {
+				assert.equal(queueId, "q-1");
+				states.push(state);
+				if (state === null) exits.push(exit);
+			},
+			registerTeardown: (task) => teardowns.push(task),
+			holdIdleWatchdog: () => {
+				holds++;
+				let done = false;
+				return () => {
+					if (done) throw new Error("released twice");
+					done = true;
+					released++;
+				};
+			},
+		},
+		{
+			queueId: () => "q-1",
+			queueEndpoints: QUEUE_ENDPOINTS,
+			now: () => clock,
+			sleep: async (ms, signal) => {
+				signal.throwIfAborted();
+				sleeps.push(ms);
+				clock += ms;
+			},
+			...(options.budgetMs === undefined ? {} : { pollFailureBudgetMs: options.budgetMs }),
+			...(options.maxWaitMs === undefined ? {} : { maxWaitMs: options.maxWaitMs }),
+		},
+	);
+	const fetchRequest = (input: Request) => wrapped(input);
+	const post = (url = CHAT, init: RequestInit = {}) =>
+		wrapped(url, {
+			method: "POST",
+			headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+			body: BODY,
+			...init,
+		});
+	return {
+		calls,
+		sleeps,
+		states,
+		exits,
+		teardowns,
+		caller,
+		post,
+		fetchRequest,
+		holds: () => holds,
+		released: () => released,
+	};
+}
+
+const text = (bytes: Uint8Array | undefined) => new TextDecoder().decode(bytes);
+
+/** The cancel: `POST <queue>/cancel` with the request's credentials, naming the place by its queue id header, no body. */
+function assertCancel(call: Call | undefined): void {
+	assert.equal(call?.method, "POST");
+	assert.equal(call?.url, `${QUEUE}/cancel`);
+	assert.equal(call?.headers.get("authorization"), "Bearer sk-test");
+	assert.equal(call?.headers.get("X-StepCode-Queue-ID"), "q-1");
+	assert.equal(call?.headers.has("content-type"), false);
+	assert.equal(call?.body, undefined);
+}
+
+test("tags each Step model call with a queue id and passes the answer through", async () => {
+	const h = harness([ok()]);
+	const response = await h.post();
+	assert.equal(response.status, 200);
+	assert.equal(h.calls.length, 1);
+	assert.equal(h.calls[0]?.headers.get("X-StepCode-Queue-ID"), "q-1");
+	assert.equal(text(h.calls[0]?.body), BODY);
+	assert.deepEqual(h.states, []);
+	assert.equal(h.holds(), 0);
+});
+
+test("generates a fresh id per call", async () => {
+	const ids: string[] = [];
+	const fetch: typeof globalThis.fetch = async (input, init) => {
+		ids.push(new Request(input, init).headers.get("X-StepCode-Queue-ID") ?? "");
+		return ok();
+	};
+	const wrapped = createStepModelQueueFetch(
+		{
+			signal: new AbortController().signal,
+			fetch,
+			holdIdleWatchdog: () => () => {},
+			reportQueue: () => {},
+			registerTeardown: () => {},
+		},
+		{ queueEndpoints: QUEUE_ENDPOINTS },
+	);
+	await wrapped(CHAT, { method: "POST", body: BODY });
+	await wrapped(CHAT, { method: "POST", body: BODY });
+	assert.equal(ids.length, 2);
+	assert.match(ids[0], /^[0-9a-f-]{36}$/u);
+	assert.notEqual(ids[0], ids[1]);
+});
+
+test("tags every request to a Step API host, whatever its route; the server decides whether it waits", async () => {
+	const h = harness([ok(), ok(), ok()]);
+	await h.post("https://api.example.test/v1/chat/completions");
+	await h.post(`${PLAN}/messages`);
+	await h.post(`${PLAN}/models`, { method: "GET", body: null });
+	assert.deepEqual(
+		h.calls.map((call) => call.headers.has("X-StepCode-Queue-ID")),
+		[true, true, true],
+	);
+});
+
+test("picks the queue of the request's region", async () => {
+	const mainland = harness([queued(1), status("ready"), ok()]);
+	await mainland.post("https://api.example.test/v1/chat/completions");
+	assert.equal(mainland.calls[1]?.url, QUEUE);
+	const overseas = harness([queued(1), status("ready"), ok()]);
+	await overseas.post("https://api.example.ai/step_plan/v1/chat/completions");
+	assert.equal(overseas.calls[1]?.url, QUEUE_OVERSEAS);
+});
+
+test("sends a request to any other host as it is: no header, no queue", async () => {
+	const h = harness([queued(1)]);
+	// An endpoint override, or a gateway: even a queued-looking answer is the caller's.
+	const response = await h.post("https://gateway.example.test/step_plan/v1/chat/completions");
+	assert.equal(response.status, 429);
+	assert.equal(h.calls.length, 1);
+	assert.equal(h.calls[0]?.headers.has("X-StepCode-Queue-ID"), false);
+	assert.deepEqual(h.states, []);
+});
+
+test("knows Step's own two API hosts by default", async () => {
+	const seen: string[] = [];
+	const replies = [queued(1), status("ready"), ok(), queued(1), status("ready"), ok(), ok()];
+	const wrapped = createStepModelQueueFetch(
+		{
+			signal: new AbortController().signal,
+			fetch: async (input, init) => {
+				const request = new Request(input, init);
+				seen.push(`${request.headers.get("X-StepCode-Queue-ID") ?? "plain"} ${request.method} ${request.url}`);
+				return replies.shift() ?? ok();
+			},
+			holdIdleWatchdog: () => () => {},
+			reportQueue: () => {},
+			registerTeardown: () => {},
+		},
+		{ queueId: () => "id", sleep: async () => {} },
+	);
+	await wrapped("https://api.stepfun.com/step_plan/v1/chat/completions", { method: "POST", body: BODY });
+	await wrapped("https://api.stepfun.ai/v1/chat/completions", { method: "POST", body: BODY });
+	await wrapped("https://staging.example.test/step_plan/v1/chat/completions", { method: "POST", body: BODY });
+	assert.deepEqual(seen, [
+		"id POST https://api.stepfun.com/step_plan/v1/chat/completions",
+		"id GET https://api.stepfun.com/stepcode/v1/queue",
+		"id POST https://api.stepfun.com/step_plan/v1/chat/completions",
+		"id POST https://api.stepfun.ai/v1/chat/completions",
+		"id GET https://api.stepfun.ai/stepcode/v1/queue",
+		"id POST https://api.stepfun.ai/v1/chat/completions",
+		"plain POST https://staging.example.test/step_plan/v1/chat/completions",
+	]);
+});
+
+test("never wraps the queue control endpoints: they go out as they are", async () => {
+	const h = harness([ok(), queued(1)]);
+	await h.post(QUEUE, { method: "GET", body: null, headers: { "X-StepCode-Queue-ID": "other" } });
+	const response = await h.post(`${QUEUE}/cancel`, { body: null, headers: { "X-StepCode-Queue-ID": "other" } });
+	// Not wrapped: a queued-looking answer to a control request is not a place in line.
+	assert.equal(response.status, 429);
+	// The id they name is their own, never replaced by a fresh one.
+	assert.deepEqual(
+		h.calls.map((call) => call.headers.get("X-StepCode-Queue-ID")),
+		["other", "other"],
+	);
+	assert.deepEqual(h.states, []);
+	assert.equal(h.holds(), 0);
+});
+
+test("forwards the request's own headers to the control requests, except those describing its body", async () => {
+	const h = harness([queued(1), status("ready"), ok()]);
+	await h.post(CHAT, {
+		headers: {
+			authorization: "Bearer sk-test",
+			"x-api-key": "k",
+			"x-step-session-id": "s1",
+			"content-type": "application/json",
+			"content-length": String(BODY.length),
+		},
+	});
+	const poll = h.calls[1];
+	assert.equal(poll?.headers.get("authorization"), "Bearer sk-test");
+	assert.equal(poll?.headers.get("x-api-key"), "k");
+	assert.equal(poll?.headers.get("x-step-session-id"), "s1");
+	assert.equal(poll?.headers.get("accept"), "application/json");
+	assert.equal(poll?.headers.has("content-type"), false);
+	assert.equal(poll?.headers.has("content-length"), false);
+	// The control requests name the place they ask about.
+	assert.equal(poll?.headers.get("X-StepCode-Queue-ID"), "q-1");
+});
+
+test("passes a non-queued answer through unchanged", async () => {
+	const answer = new Response('{"error":"bad"}', { status: 400, headers: { "content-type": "application/json" } });
+	const h = harness([answer]);
+	const response = await h.post();
+	assert.equal(response, answer);
+	assert.equal(h.holds(), 0);
+	assert.deepEqual(h.states, []);
+});
+
+test("passes an ordinary 429 through to the existing retry policy", async () => {
+	const h = harness([new Response("{}", { status: 429, headers: { "retry-after": "1" } })]);
+	const response = await h.post();
+	assert.equal(response.status, 429);
+	assert.equal(h.calls.length, 1);
+	assert.deepEqual(h.states, []);
+});
+
+function closed(reason?: string): Response {
+	const headers = new Headers({ "X-StepCode-Queue-State": "closed", "content-type": "application/json" });
+	if (reason !== undefined) headers.set("X-StepCode-Queue-Reason", reason);
+	const message = `Rate limit reached, please try again later.${reason ? ` (${reason})` : ""}`;
+	return new Response(JSON.stringify({ error: { message, type: "rate_limited" } }), { status: 429, headers });
+}
+
+function limited(scope: string, message = "Rate limit reached, please try again later."): Response {
+	return new Response(JSON.stringify({ error: { message, type: "rate_limited" } }), {
+		status: 429,
+		headers: { "content-type": "application/json", "retry-after": "3", "X-StepCode-Limit-Scope": scope },
+	});
+}
+
+test("a place the server closes on the first send ends the call, without polling or a cancel", async () => {
+	const h = harness([closed("queue_full")]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	assert.equal(response.headers.get("x-should-retry"), "false");
+	const body = (await response.json()) as { error: { message: string; code: string; reason: string } };
+	assert.equal(body.error.code, "queue_closed");
+	assert.equal(body.error.reason, "queue_full");
+	assert.equal(body.error.message, "The request queue is full. Try again later. (queue_full)");
+	assert.equal(h.calls.length, 1);
+	// Never in line: no queue events, no watchdog hold.
+	assert.deepEqual(h.states, []);
+	assert.equal(h.holds(), 0);
+});
+
+test("a closed first send without a reason still ends the call with the generic text", async () => {
+	const h = harness([closed()]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	const body = (await response.json()) as { error: { message: string; reason?: string } };
+	assert.equal(body.error.message, stepModelQueueClosedMessage());
+	assert.equal(body.error.reason, undefined);
+});
+
+test("a place closed on the resend ends the call instead of re-entering the line under a new id", async () => {
+	const h = harness([queued(1), status("ready"), closed("max_wait_exceeded")]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	const body = (await response.json()) as { error: { reason: string } };
+	assert.equal(body.error.reason, "max_wait_exceeded");
+	assert.deepEqual(h.exits, [{ closedReason: "max_wait_exceeded" }]);
+	// The server closed the place itself: no cancel goes out.
+	assert.deepEqual(
+		h.calls.map((call) => `${call.method} ${new URL(call.url).pathname}`),
+		["POST /step_plan/v1/chat/completions", "GET /stepcode/v1/queue", "POST /step_plan/v1/chat/completions"],
+	);
+	assert.equal(h.released(), 1);
+});
+
+for (const [scope, lead] of [
+	["user_quota", "Your Step usage limit was reached."],
+	["upstream_capacity", "Step is at capacity right now."],
+] as const) {
+	test(`a ${scope} 429 keeps its status, codes and headers and names whose limit it hit`, async () => {
+		const h = harness([limited(scope, "rpm exceeded")]);
+		const response = await h.post();
+		assert.equal(response.status, 429);
+		assert.equal(response.headers.get("retry-after"), "3");
+		assert.equal(response.headers.get("x-stepcode-limit-scope"), scope);
+		const body = (await response.json()) as { error: { message: string; type: string } };
+		assert.equal(body.error.type, "rate_limited");
+		assert.equal(body.error.message, `${lead} rpm exceeded`);
+		assert.deepEqual(h.states, []);
+	});
+}
+
+test("a limit scope on a resend names whose limit it hit as well", async () => {
+	const h = harness([queued(1), status("ready"), limited("upstream_capacity")]);
+	const response = await h.post();
+	assert.equal(response.status, 429);
+	const body = (await response.json()) as { error: { message: string } };
+	assert.match(body.error.message, /^Step is at capacity right now\. /u);
+	assert.deepEqual(h.exits, [undefined]);
+});
+
+test("an unknown limit scope or a body without a message passes through as it is", async () => {
+	const unknown = harness([limited("something_new")]);
+	assert.equal(
+		((await (await unknown.post()).json()) as { error: { message: string } }).error.message,
+		"Rate limit reached, please try again later.",
+	);
+	const plain = harness([
+		new Response("busy", {
+			status: 429,
+			headers: { "X-StepCode-Limit-Scope": "upstream_capacity", "retry-after": "1" },
+		}),
+	]);
+	const response = await plain.post();
+	assert.equal(response.status, 429);
+	assert.equal(response.headers.get("retry-after"), "1");
+	assert.equal(await response.text(), "busy");
+});
+
+test("waits in line, then resends the same bytes under the same id", async () => {
+	const h = harness([
+		queued(3, 1500),
+		status("waiting", { position: 2, retry_after_ms: 1000 }),
+		status("waiting", { position: 1 }),
+		status("ready"),
+		ok(),
+	]);
+	const response = await h.post();
+	assert.equal(response.status, 200);
+	assert.deepEqual(
+		h.calls.map((call) => call.method),
+		["POST", "GET", "GET", "GET", "POST"],
+	);
+	for (const poll of h.calls.slice(1, 4)) {
+		// No query: the place is named by its queue id header.
+		assert.equal(poll.url, QUEUE);
+		assert.equal(poll.headers.get("X-StepCode-Queue-ID"), "q-1");
+		assert.equal(poll.headers.get("authorization"), "Bearer sk-test");
+		assert.equal(poll.body, undefined);
+	}
+	const [first, resend] = [h.calls[0], h.calls[4]];
+	assert.equal(resend?.headers.get("X-StepCode-Queue-ID"), "q-1");
+	assert.equal(resend?.url, CHAT);
+	assert.deepEqual(resend?.body, first?.body);
+	assert.equal(text(resend?.body), BODY);
+	assert.deepEqual(h.sleeps, [1500, 1000, 2000]);
+	assert.deepEqual(h.states, [
+		{ state: "waiting", position: 3 },
+		{ state: "waiting", position: 2 },
+		{ state: "waiting", position: 1 },
+		// The place stopped waiting and the request is about to run: a phase of its own, not a vanished row.
+		{ state: "ready" },
+		null,
+	]);
+	assert.deepEqual(h.exits, [undefined]);
+	assert.deepEqual([h.holds(), h.released()], [1, 1]);
+	// Held only while polling; the resend is back under the idle bound.
+	assert.deepEqual(
+		h.calls.map((call) => call.held),
+		[false, true, true, true, false],
+	);
+});
+
+test("sends the queue id as it is, in a header, never in the URL", async () => {
+	const calls: Array<{ url: string; id: string | null }> = [];
+	const replies = [queued(1), status("ready"), ok()];
+	const wrapped = createStepModelQueueFetch(
+		{
+			signal: new AbortController().signal,
+			fetch: async (input, init) => {
+				const request = new Request(input, init);
+				calls.push({ url: request.url, id: request.headers.get("X-StepCode-Queue-ID") });
+				return replies.shift() ?? ok();
+			},
+			holdIdleWatchdog: () => () => {},
+			reportQueue: () => {},
+			registerTeardown: () => {},
+		},
+		{ queueId: () => "a b&c", sleep: async () => {}, queueEndpoints: QUEUE_ENDPOINTS },
+	);
+	await wrapped(CHAT, { method: "POST", body: BODY });
+	assert.deepEqual(calls[1], { url: QUEUE, id: "a b&c" });
+});
+
+test("keeps polling when the resend is queued again", async () => {
+	const h = harness([
+		queued(2),
+		status("ready"),
+		queued(4, 500),
+		status("waiting", { position: 1 }),
+		status("ready"),
+		ok(),
+	]);
+	const response = await h.post();
+	assert.equal(response.status, 200);
+	const posts = h.calls.filter((call) => call.method === "POST");
+	assert.equal(posts.length, 3);
+	assert.deepEqual(new Set(posts.map((call) => call.headers.get("X-StepCode-Queue-ID"))), new Set(["q-1"]));
+	assert.deepEqual(new Set(posts.map((call) => text(call.body))), new Set([BODY]));
+	assert.deepEqual(h.states, [
+		{ state: "waiting", position: 2 },
+		{ state: "ready" },
+		// Queued again by the resend: back in line with its new place.
+		{ state: "waiting", position: 4 },
+		{ state: "waiting", position: 1 },
+		{ state: "ready" },
+		null,
+	]);
+	assert.deepEqual(h.sleeps, [5000, 500, 2000]);
+	// Released before each resend, held again when the resend is queued.
+	assert.deepEqual(
+		h.calls.map((call) => `${call.method}:${call.held}`),
+		["POST:false", "GET:true", "POST:false", "GET:true", "GET:true", "POST:false"],
+	);
+	assert.deepEqual([h.holds(), h.released()], [2, 2]);
+});
+
+test("releases the hold once when the caller stops during a resend", async () => {
+	const h = harness([
+		queued(1),
+		status("ready"),
+		(call) =>
+			new Promise<Response>((_resolve, reject) => {
+				assert.equal(call.held, false);
+				call.signal?.addEventListener("abort", () => reject(call.signal?.reason), { once: true });
+				h.caller.abort(new DOMException("stop", "AbortError"));
+			}),
+		new Response(null, { status: 204 }),
+	]);
+	await assert.rejects(h.post(), { name: "AbortError" });
+	assertCancel(h.calls.at(-1));
+	assert.deepEqual([h.holds(), h.released()], [1, 1]);
+	assert.equal(h.states.at(-1), null);
+});
+
+test("ends with a non-retryable, readable error that keeps the reason code when the place is closed", async () => {
+	const h = harness([queued(5), status("closed", { reason: "max_wait_exceeded" })]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	assert.equal(response.headers.get("x-should-retry"), "false");
+	const body = (await response.json()) as { error: { message: string; code: string; reason: string } };
+	assert.equal(body.error.message, "The request waited in line too long. Try again later. (max_wait_exceeded)");
+	assert.equal(body.error.code, "queue_closed");
+	assert.equal(body.error.reason, "max_wait_exceeded");
+	assert.equal(h.states.at(-1), null);
+	// The reason code reaches the host, for its own wording.
+	assert.deepEqual(h.exits, [{ closedReason: "max_wait_exceeded" }]);
+	assert.equal(h.released(), 1);
+});
+
+test("a status answer of 404 closes the place, with no reason to name", async () => {
+	const h = harness([queued(1), new Response("gone", { status: 404 })]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	const body = (await response.json()) as { error: { message: string; reason?: string } };
+	assert.equal(body.error.reason, undefined);
+	assert.equal(body.error.message, stepModelQueueClosedMessage());
+	assert.deepEqual(h.exits, [undefined]);
+});
+
+test("a closed status answer with a reason the client does not know reads as the generic text", async () => {
+	const h = harness([queued(1), status("closed", { reason: "lease_expired" })]);
+	const response = await h.post();
+	const body = (await response.json()) as { error: { message: string; reason?: string } };
+	assert.equal(body.error.reason, undefined);
+	assert.equal(body.error.message, stepModelQueueClosedMessage());
+});
+
+test("a status answer of 401 or 403 goes back to the caller as it is", async () => {
+	for (const status of [401, 403]) {
+		const denied = new Response('{"error":"unauthorized"}', { status });
+		const h = harness([queued(1), denied]);
+		const response = await h.post();
+		assert.equal(response, denied);
+		assert.equal(h.states.at(-1), null);
+		assert.equal(h.released(), 1);
+	}
+});
+
+test("a throttled status endpoint is retried like a failing one", async () => {
+	const h = harness([queued(1), new Response("slow down", { status: 429 }), status("ready"), ok()]);
+	const response = await h.post();
+	assert.equal(response.status, 200);
+	assert.deepEqual(h.sleeps, [5000, 1000]);
+});
+
+test("reports only changes of place or of being in line", async () => {
+	const h = harness([
+		queued(2),
+		status("waiting", { position: 2 }),
+		status("waiting", { position: 2 }),
+		status("waiting", { position: 1 }),
+		status("ready"),
+		ok(),
+	]);
+	await h.post();
+	assert.deepEqual(h.states, [
+		{ state: "waiting", position: 2 },
+		{ state: "waiting", position: 1 },
+		{ state: "ready" },
+		null,
+	]);
+});
+
+test("names every reason the server names in readable text, generic without one", () => {
+	// The wire values are a contract shared with the server: this list is pinned word for word.
+	const codes: StepQueueClosedReason[] = ["queue_full", "user_limit", "max_wait_exceeded"];
+	const generic = stepModelQueueClosedMessage();
+	const texts = codes.map((code) => stepModelQueueClosedMessage(code));
+	for (const [index, text] of texts.entries()) {
+		assert.equal(text.endsWith(` (${codes[index]})`), true);
+		assert.notEqual(text, generic);
+	}
+	assert.equal(new Set(texts).size, codes.length);
+	assert.equal(stepModelQueueClosedMessage("queue_full"), "The request queue is full. Try again later. (queue_full)");
+});
+
+test("a closed first send with a reason the client does not know, or a prototype key, reads as the generic text", async () => {
+	for (const reason of ["brand_new_reason", "toString", "QUEUE_FULL "]) {
+		const h = harness([closed(reason)]);
+		const body = (await (await h.post()).json()) as { error: { message: string; reason?: string } };
+		if (reason === "QUEUE_FULL ") {
+			assert.equal(body.error.reason, "queue_full");
+			continue;
+		}
+		assert.equal(body.error.reason, undefined);
+		assert.equal(body.error.message, stepModelQueueClosedMessage());
+	}
+});
+
+test("a stop always surfaces as an Error", async () => {
+	const h = harness([
+		queued(1),
+		() => {
+			h.caller.abort("user pressed stop");
+			return status("waiting", { position: 1 });
+		},
+		new Response(null, { status: 204 }),
+	]);
+	const error = await h.post().then(
+		() => undefined,
+		(caught: unknown) => caught,
+	);
+	assert.ok(error instanceof Error);
+	assert.equal((error as Error).name, "AbortError");
+});
+
+test("sends no cancel when the caller stops during the first send: nothing said the call was queued", async () => {
+	const h = harness([
+		(call) =>
+			new Promise<Response>((_resolve, reject) => {
+				call.signal?.addEventListener("abort", () => reject(call.signal?.reason), { once: true });
+				h.caller.abort(new DOMException("stop", "AbortError"));
+			}),
+	]);
+	const attempt = new AbortController();
+	h.caller.signal.addEventListener("abort", () => attempt.abort(h.caller.signal.reason), { once: true });
+	await assert.rejects(h.post(CHAT, { signal: attempt.signal }), { name: "AbortError" });
+	// The model request alone: no cancel, no teardown for a disposing session to wait on.
+	assert.deepEqual(
+		h.calls.map((call) => `${call.method} ${call.url}`),
+		[`POST ${CHAT}`],
+	);
+	assert.deepEqual(h.teardowns, []);
+	assert.equal(h.holds(), 0);
+	assert.deepEqual(h.states, []);
+});
+
+test("a Request input's own signal stops the first send", async () => {
+	const stop = new AbortController();
+	const h = harness([
+		(call) =>
+			new Promise<Response>((_resolve, reject) => {
+				assert.ok(call.signal);
+				call.signal.addEventListener("abort", () => reject(call.signal?.reason), { once: true });
+				stop.abort(new DOMException("stop", "AbortError"));
+			}),
+	]);
+	const input = new Request(CHAT, {
+		method: "POST",
+		headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+		body: BODY,
+		signal: stop.signal,
+	});
+	await assert.rejects(h.fetchRequest(input), { name: "AbortError" });
+	assert.equal(h.calls.length, 1);
+	assert.deepEqual(h.teardowns, []);
+});
+
+test("a Request input's own signal also reaches the resend", async () => {
+	const stop = new AbortController();
+	const h = harness([
+		queued(1),
+		status("ready"),
+		(call) =>
+			new Promise<Response>((_resolve, reject) => {
+				assert.ok(call.signal);
+				call.signal.addEventListener("abort", () => reject(call.signal?.reason), { once: true });
+				stop.abort(new DOMException("stop", "AbortError"));
+			}),
+	]);
+	const input = new Request(CHAT, {
+		method: "POST",
+		headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+		body: BODY,
+		signal: stop.signal,
+	});
+	await assert.rejects(h.fetchRequest(input), { name: "AbortError" });
+	assert.deepEqual(
+		h.calls.map((call) => call.method),
+		["POST", "GET", "POST"],
+	);
+	assert.equal(h.released(), 1);
+	assert.equal(h.states.at(-1), null);
+});
+
+test("does not leave the line when the first send fails without a stop", async () => {
+	const h = harness([new TypeError("fetch failed")]);
+	await assert.rejects(h.post(), { message: "fetch failed" });
+	assert.deepEqual(
+		h.calls.map((call) => call.method),
+		["POST"],
+	);
+});
+
+test("backs off on poll failures without changing the id", async () => {
+	const h = harness([
+		queued(1),
+		new TypeError("fetch failed"),
+		new Response("busy", { status: 503 }),
+		status("waiting", { position: 1 }),
+		status("ready"),
+		ok(),
+	]);
+	const response = await h.post();
+	assert.equal(response.status, 200);
+	assert.deepEqual(h.sleeps, [5000, 1000, 2000, 2000]);
+	const polls = new Set(
+		h.calls
+			.filter((call) => call.method === "GET")
+			.map((call) => `${call.url} ${call.headers.get("X-StepCode-Queue-ID")}`),
+	);
+	assert.deepEqual(polls, new Set([`${QUEUE} q-1`]));
+});
+
+test("gives up once polling has failed for the whole budget", async () => {
+	const failures: Reply[] = Array.from({ length: 4 }, () => new Response("down", { status: 502 }));
+	const h = harness([queued(1), ...failures, new Response("{}", { status: 200 })], { budgetMs: 10_000 });
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	const body = (await response.json()) as { error: { message: string } };
+	assert.match(body.error.message, /HTTP 502/u);
+	// 5000 + 1000 + 2000 + 4000 >= 10000 since the last success.
+	assert.deepEqual(h.sleeps, [5000, 1000, 2000, 4000]);
+	// This side stopped waiting, so it releases the place.
+	assertCancel(h.calls.at(-1));
+	assert.equal(h.states.at(-1), null);
+});
+
+test("leaves the line with a cancel request when the caller aborts while waiting", async () => {
+	const h = harness([
+		queued(2),
+		() => {
+			h.caller.abort(new DOMException("stop", "AbortError"));
+			return status("waiting", { position: 1 });
+		},
+		new Response(null, { status: 204 }),
+	]);
+	await assert.rejects(h.post(), { name: "AbortError" });
+	assertCancel(h.calls.at(-1));
+	assert.equal(h.states.at(-1), null);
+	assert.equal(h.released(), 1);
+});
+
+test("ignores the SDK's own attempt timeout while waiting in line", async () => {
+	const attempt = new AbortController();
+	const h = harness([
+		queued(1),
+		() => {
+			attempt.abort(new Error("Request timed out."));
+			return status("ready");
+		},
+		(call) => {
+			assert.equal(call.signal?.aborted, false);
+			return ok();
+		},
+	]);
+	const response = await h.post(CHAT, { signal: attempt.signal });
+	assert.equal(response.status, 200);
+	assert.deepEqual(
+		h.calls.map((call) => call.method),
+		["POST", "GET", "POST"],
+	);
+});
+
+function factoryRequest(provider: string, baseUrl = "https://api.stepfun.com/step_plan/v1"): ModelFetchRequest {
+	return {
+		model: { provider, baseUrl } as ModelFetchRequest["model"],
+		signal: new AbortController().signal,
+		fetch: globalThis.fetch,
+		holdIdleWatchdog: () => () => {},
+		reportQueue: () => {},
+		registerTeardown: () => {},
+	};
+}
+
+test("the factory wraps every model's requests: there is no client switch", () => {
+	const factory = createStepModelQueueFactory();
+	assert.equal(typeof factory(factoryRequest("step")), "function");
+	assert.equal(typeof factory(factoryRequest("my-gateway")), "function");
+});
+
+test("the request host decides, not the provider: a custom provider at Step's host queues, elsewhere it does not", async () => {
+	const factory = createStepModelQueueFactory({ queueId: () => "id", sleep: async () => {} });
+	const seen: string[] = [];
+	const replies = [queued(4), status("ready"), ok(), queued(4)];
+	const wrapped = factory({
+		...factoryRequest("my-gateway"),
+		fetch: async (input, init) => {
+			const request = new Request(input, init);
+			seen.push(`${request.headers.get("X-StepCode-Queue-ID") ?? "plain"} ${request.method} ${request.url}`);
+			return replies.shift() ?? ok();
+		},
+	});
+	assert.ok(wrapped);
+	const atStep = await wrapped("https://api.stepfun.com/v1/chat/completions", { method: "POST", body: BODY });
+	assert.equal(atStep.status, 200);
+	// Elsewhere, even a queued-looking answer is the caller's.
+	const elsewhere = await wrapped("https://gateway.example.test/v1/chat/completions", { method: "POST", body: BODY });
+	assert.equal(elsewhere.status, 429);
+	assert.deepEqual(seen, [
+		"id POST https://api.stepfun.com/v1/chat/completions",
+		"id GET https://api.stepfun.com/stepcode/v1/queue",
+		"id POST https://api.stepfun.com/v1/chat/completions",
+		"plain POST https://gateway.example.test/v1/chat/completions",
+	]);
+});
+
+test("status text names the position while waiting, and the admitted place as starting", () => {
+	assert.equal(stepModelQueueStatusText({ state: "waiting", position: 3 }), "Queued: position 3");
+	assert.equal(stepModelQueueStatusText({ state: "waiting" }), "Queued");
+	assert.equal(stepModelQueueStatusText({ state: "waiting", position: 0 }), "Queued");
+	// The server admitted the place: the request is about to run, so the line no longer has a place to name.
+	assert.equal(stepModelQueueStatusText({ state: "ready" }), "Starting...");
+});
+
+test("a stop waits for the cancel request, and the call stays a registered teardown until it settles", async () => {
+	let cancelReceived = false;
+	const h = harness([
+		queued(1),
+		() => {
+			h.caller.abort(new DOMException("stop", "AbortError"));
+			return status("waiting", { position: 1 });
+		},
+		async () => {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			cancelReceived = true;
+			return new Response(null, { status: 200 });
+		},
+	]);
+	await assert.rejects(h.post(), { name: "AbortError" });
+	// The stopped call returned only after its cancel answered.
+	assert.equal(cancelReceived, true);
+	assert.equal(h.teardowns.length, 1);
+	await h.teardowns[0];
+});
+
+test("a call becomes a teardown only once the server queues it, and stops being one when it settles", async () => {
+	const h = harness([ok(), queued(1), status("ready"), ok()]);
+	await h.post();
+	// Answered on the first send: nothing to release, nothing registered.
+	assert.deepEqual(h.teardowns, []);
+	await h.post();
+	assert.equal(h.teardowns.length, 1);
+	await h.teardowns[0];
+});
+
+test("requests to other hosts register no teardown", async () => {
+	const h = harness([ok()]);
+	await h.post("https://gateway.example.test/v1/chat/completions");
+	assert.deepEqual(h.teardowns, []);
+});
+
+test("a hanging cancel ends within its own bound", async () => {
+	const h = harness([
+		queued(1),
+		() => {
+			h.caller.abort(new DOMException("stop", "AbortError"));
+			return status("waiting", { position: 1 });
+		},
+		(call) =>
+			new Promise<Response>((_resolve, reject) => {
+				call.signal?.addEventListener("abort", () => reject(call.signal?.reason), { once: true });
+			}),
+	]);
+	const started = Date.now();
+	await assert.rejects(h.post(), { name: "AbortError" });
+	const elapsed = Date.now() - started;
+	assert.ok(elapsed >= 900 && elapsed < 3_000, `cancel bound: ${elapsed}ms`);
+});
+
+test("polls every 5s when the server names no interval, and at the server's interval when it does", async () => {
+	const h = harness([
+		queued(3),
+		status("waiting", { position: 2, retry_after_ms: 0 }),
+		status("waiting", { position: 1, retry_after_ms: 1200 }),
+		status("ready"),
+		ok(),
+	]);
+	const response = await h.post();
+	assert.equal(response.status, 200);
+	// No Retry-After-Ms on the queued answer, 0 on the next status (no interval named), then 1200; ready resends at once.
+	assert.deepEqual(h.sleeps, [5000, 5000, 1200]);
+});
+
+test("a server interval above the bound is capped", async () => {
+	const h = harness([queued(1, 600_000), status("ready"), ok()]);
+	await h.post();
+	assert.deepEqual(h.sleeps, [30_000]);
+});
+
+test("waits in line 20 minutes at most in all, then releases the place and ends as max_wait_exceeded", async () => {
+	const waiting = () => status("waiting", { position: 9, retry_after_ms: 30_000 });
+	const polls: Reply[] = Array.from({ length: 40 }, waiting);
+	const h = harness([queued(9, 30_000), ...polls, new Response("{}", { status: 200 })]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	assert.equal(response.headers.get("x-should-retry"), "false");
+	const body = (await response.json()) as { error: { type: string; reason: string } };
+	assert.equal(body.error.type, "queue_closed");
+	assert.equal(body.error.reason, "max_wait_exceeded");
+	assert.equal(
+		h.sleeps.reduce((sum, ms) => sum + ms, 0),
+		20 * 60_000,
+	);
+	assertCancel(h.calls.at(-1));
+	assert.deepEqual(h.exits.at(-1), { closedReason: "max_wait_exceeded" });
+});
+
+test("the wait bound spans resends that are queued again", async () => {
+	const h = harness(
+		[queued(2, 400), status("ready"), queued(1, 400), status("ready"), queued(1, 400), new Response("{}")],
+		{
+			maxWaitMs: 1000,
+		},
+	);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	// 400 + 400 + 200: the bound counts from the first queued answer, not from each resend.
+	assert.deepEqual(h.sleeps, [400, 400, 200]);
+	assertCancel(h.calls.at(-1));
+});
+
+test("an unexpected status answer ends the wait and releases the place", async () => {
+	const h = harness([queued(1), new Response("teapot", { status: 418 }), new Response("{}")]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	assert.match(((await response.json()) as { error: { message: string } }).error.message, /HTTP 418/u);
+	assertCancel(h.calls.at(-1));
+});
+
+test("a place the server closed is not cancelled again", async () => {
+	const h = harness([queued(1), status("closed", { reason: "queue_full" })]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	assert.equal(
+		h.calls.some((call) => call.url.endsWith("/cancel")),
+		false,
+	);
+});

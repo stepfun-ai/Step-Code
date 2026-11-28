@@ -191,8 +191,16 @@ describe("Step Pi slash command adapters", () => {
 		// Nothing is appended to the session: no custom message, no agent turn.
 		expect(sendMessage).not.toHaveBeenCalled();
 		expect(complete).toHaveBeenCalledOnce();
-		const [, sent] = complete.mock.calls[0] as [unknown, { systemPrompt: string; messages: unknown[] }];
+		const [, sent, sentOptions] = complete.mock.calls[0] as [
+			unknown,
+			{ systemPrompt: string; messages: unknown[] },
+			{ headers?: Record<string, string | null>; fetch?: unknown },
+		];
 		expect(sent.systemPrompt).toBe("SYSTEM");
+		// A side question reaches Step's API like a conversation turn: client identity and the request queue.
+		expect(sentOptions.headers?.["x-step-client"]).toBeTruthy();
+		expect(sentOptions.headers?.["x-step-client-version"]).toMatch(/^\d+\.\d+\.\d+/u);
+		expect(typeof sentOptions.fetch).toBe("function");
 		// The dangling tool call is gone; the question is the last message.
 		expect(sent.messages).toHaveLength(2);
 		expect(JSON.stringify(sent.messages.at(-1))).toContain("eta on the deploy?");

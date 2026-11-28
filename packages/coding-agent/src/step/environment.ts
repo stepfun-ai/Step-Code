@@ -5,6 +5,13 @@ import { STEP_DEFAULT_MODEL, STEP_DEFAULT_PROVIDER, STEP_DEFAULT_THEME } from ".
 /** Canonical project directory for StepCode state and resources. */
 export const STEPCODE_CONFIG_DIR = ".stepcode";
 
+/**
+ * The product StepCode's own CLI names in `x-step-client`. Every Step request
+ * carries it unless `STEP_CLIENT` names another product (`stepcode-desktop`,
+ * `stepcode-web`, or an embedding host's own).
+ */
+export const STEP_CLIENT_DEFAULT = "stepcode-cli";
+
 /** Directory used by releases before the product rename. */
 export const LEGACY_RENAMED_CONFIG_DIR = ".step-harness";
 
@@ -137,9 +144,8 @@ export function applyStepEnvironment(env: NodeJS.ProcessEnv = process.env, optio
 		env.STEPCODE_DEFAULT_MODEL = env.STEP_MODEL?.trim() || STEP_DEFAULT_MODEL;
 	}
 	// Downstream attribution marker sent as `x-step-client`. Keep it overridable
-	// so an embedding host can identify itself, but default shipped StepCode
-	// requests to `stepcode`.
-	if (!env.STEP_CLIENT?.trim()) env.STEP_CLIENT = "stepcode";
+	// so an embedding host can identify itself; the CLI is the default product.
+	if (!env.STEP_CLIENT?.trim()) env.STEP_CLIENT = STEP_CLIENT_DEFAULT;
 	// Step should not contact Pi's release/install services unless explicitly
 	// opted in by setting STEPCODE_DISABLE_PI_SERVICES to a false value.
 	if (!env.STEPCODE_DISABLE_PI_SERVICES?.trim()) env.STEPCODE_DISABLE_PI_SERVICES = "1";

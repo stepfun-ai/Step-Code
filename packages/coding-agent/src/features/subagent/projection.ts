@@ -143,6 +143,15 @@ export function liveRecord(record: StepSubagentResultRecord): StepSubagentResult
 		...(record.sessionId === undefined ? {} : { sessionId: clipMiddle(record.sessionId, LIVE_IDENTIFIER_CHARS) }),
 		...(record.sessionFile === undefined ? {} : { sessionFile: clipMiddle(record.sessionFile, LIVE_PATH_CHARS) }),
 		...(record.pendingReply === undefined ? {} : { pendingReply: record.pendingReply }),
+		// Only the known fields cross: the queue is a live frame, copied field by field like the rest.
+		...(record.queue === undefined
+			? {}
+			: {
+					queue: {
+						state: record.queue.state,
+						...(record.queue.position === undefined ? {} : { position: record.queue.position }),
+					},
+				}),
 		...(prompts === undefined ? {} : { cancelledPrompts: prompts }),
 	};
 }

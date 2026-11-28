@@ -14,6 +14,7 @@ Step reads the variables below. Configuration shared across launches belongs in
 | `STEP_AUTOPILOT` | Retired tier selector; resets to Ask. Select a new tier instead |
 | `STEP_API_KEY` | StepFun API credential |
 | `STEP_BASE_URL` | Override the StepFun API endpoint |
+| `STEP_CLIENT` | The product every Step request names in `x-step-client`: `stepcode-cli` (the default), `stepcode-desktop`, `stepcode-web`; a host that sets it keeps its value |
 | `STEP_PROVIDER`, `STEP_MODEL` | Default provider and model selection |
 | `VISUAL`, `EDITOR` | External editor fallback when `externalEditor` is unset |
 | `HTTP_PROXY`, `HTTPS_PROXY` | Proxy outbound HTTP requests |

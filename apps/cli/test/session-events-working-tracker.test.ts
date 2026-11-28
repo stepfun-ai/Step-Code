@@ -1,9 +1,17 @@
 import { describe, expect, test, vi } from "vitest";
 import type { AssistantMessage } from "@step-harness/providers";
-import { WorkingOutputTracker } from "../src/ui/view/chrome/status-indicator.ts";
+import type { TUI } from "@step-harness/pi-tui";
+import {
+	CompactionStatusIndicator,
+	ModelQueueStatusIndicator,
+	ModelQueueStatusSlot,
+	type StatusIndicator,
+	WorkingOutputTracker,
+} from "../src/ui/view/chrome/status-indicator.ts";
 import type { RuntimeContext } from "../src/ui/runtime/context.ts";
 import { handleSessionEvent } from "../src/ui/runtime/session-events.ts";
-import { INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE } from "@step-harness/coding-agent";
+import { INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE, stepModelQueueStatusText } from "@step-harness/coding-agent";
+import { initTheme } from "../../../packages/coding-agent/src/theme/theme.ts";
 
 test("announces only a recovery that actually starts and uses its attempt metadata", async () => {
 	const showStatus = vi.fn();
@@ -64,6 +72,7 @@ test.each(["agent_end", "auto_clm_end", "compaction_end"] as const)(
 			settingsManager: { getShowTerminalProgress: () => false },
 			ui: { terminal: { setProgress } },
 			clearStatusIndicator: vi.fn(),
+			clearModelQueue: vi.fn(),
 			pendingTools: new Map(),
 			redraw: { requestRender: vi.fn() },
 			flushCompactionQueue: vi.fn(),
@@ -218,4 +227,83 @@ describe("session-events agent_start working-tracker reset", () => {
 			vi.useRealTimers();
 		}
 	});
+});
+
+function queueSlotHost() {
+	const state: { active: StatusIndicator | undefined } = { active: undefined };
+	const host = {
+		ui: () => ({ requestRender: vi.fn() }) as unknown as TUI,
+		presentation: () => "step" as const,
+		active: () => state.active,
+		swap: (next: StatusIndicator | undefined) => {
+			const previous = state.active;
+			state.active = next;
+			return previous;
+		},
+	};
+	return { state, host };
+}
+
+test("the queue row covers the current row and gives the same one back when the request leaves", () => {
+	initTheme("dark");
+	const { state, host } = queueSlotHost();
+	const slot = new ModelQueueStatusSlot(host);
+	const compaction = new CompactionStatusIndicator(host.ui(), "threshold", "step");
+	state.active = compaction;
+
+	slot.update("r1", { state: "waiting", position: 3 });
+	expect(state.active).toBeInstanceOf(ModelQueueStatusIndicator);
+	slot.update("r1", { state: "waiting", position: 1 });
+	expect(state.active?.render(80).join("\n")).toContain(stepModelQueueStatusText({ state: "waiting", position: 1 }));
+
+	slot.update("r1", null);
+	// Not a working row: the compaction row it covered.
+	expect(state.active).toBe(compaction);
+	compaction.dispose();
+});
+
+test("an admitted place reads as starting until the request settles", () => {
+	initTheme("dark");
+	const { state, host } = queueSlotHost();
+	const slot = new ModelQueueStatusSlot(host);
+
+	slot.update("r1", { state: "waiting", position: 1 });
+	slot.update("r1", { state: "ready" });
+	// The place is gone; the request itself is about to run, so the row says so instead of vanishing.
+	expect(state.active?.render(80).join("\n")).toContain("Starting...");
+	slot.update("r1", null);
+	expect(state.active).toBeUndefined();
+});
+
+test("one request leaving the line keeps another's queue row", () => {
+	initTheme("dark");
+	const { state, host } = queueSlotHost();
+	const slot = new ModelQueueStatusSlot(host);
+	slot.update("a", { state: "waiting", position: 2 });
+	slot.update("b", { state: "waiting", position: 5 });
+	slot.update("a", null);
+	expect(state.active?.render(80).join("\n")).toContain(stepModelQueueStatusText({ state: "waiting", position: 5 }));
+	slot.update("b", null);
+	expect(state.active).toBeUndefined();
+});
+
+test("model_queue events reach the queue slot, and agent_end clears it", async () => {
+	const updateModelQueue = vi.fn();
+	const clearModelQueue = vi.fn();
+	const ctx = {
+		isInitialized: true,
+		footer: { invalidate: vi.fn() },
+		ui: { terminal: { setProgress: vi.fn() } },
+		settingsManager: { getShowTerminalProgress: () => false },
+		updateModelQueue,
+		clearModelQueue,
+		clearStatusIndicator: vi.fn(),
+		pendingTools: new Map(),
+		turnEndedAbnormally: true,
+		redraw: { requestRender: vi.fn() },
+	} as unknown as RuntimeContext;
+	await handleSessionEvent(ctx, { type: "model_queue", queueId: "r1", queue: { state: "waiting", position: 2 } });
+	expect(updateModelQueue).toHaveBeenCalledWith("r1", { state: "waiting", position: 2 });
+	await handleSessionEvent(ctx, { type: "agent_end", messages: [], willRetry: false });
+	expect(clearModelQueue).toHaveBeenCalledOnce();
 });

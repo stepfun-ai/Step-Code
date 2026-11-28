@@ -123,6 +123,10 @@ function validLaneSnapshot(value: unknown): value is SubagentLaneSnapshot {
 					(field) => field === undefined || nonnegativeNumber(field),
 				) &&
 				(record.pendingReply === undefined || typeof record.pendingReply === "boolean") &&
+				(record.queue === undefined ||
+					(isRecordValue(record.queue) &&
+						(record.queue.state === "waiting" || record.queue.state === "ready") &&
+						(record.queue.position === undefined || nonnegativeNumber(record.queue.position)))) &&
 				(record.cancelledPrompts === undefined ||
 					(Array.isArray(record.cancelledPrompts) &&
 						record.cancelledPrompts.every((field) => typeof field === "string")))

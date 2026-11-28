@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@step-harness/agent-core";
 import type { AssistantMessageEventStream, ModelsSimpleStreamOptions } from "@step-harness/providers";
-import { withStreamIdleWatchdog } from "@step-harness/providers";
+import { StreamIdleHold, withStreamIdleWatchdog } from "@step-harness/providers";
 import { type Api, clampThinkingLevel, type Message, type Model, streamSimple } from "@step-harness/providers/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -11,6 +11,7 @@ import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { convertToLlm } from "./messages.ts";
+import { type ModelFetchFactory, ModelQueueChannel } from "./model-fetch.ts";
 import {
 	type ModelRequestObserver,
 	observeModelRequestFailure,
@@ -20,6 +21,7 @@ import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import { RequestLedger, type RequestUsageProvenance, rememberRequestUsage } from "./request-provenance.ts";
+import { RequestTeardowns } from "./request-teardowns.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
@@ -113,6 +115,8 @@ export interface CreateAgentSessionOptions {
 	sessionStartEvent?: SessionStartEvent;
 	/** Optional best-effort observer for provider request lifecycle metrics. */
 	modelRequestObserver?: ModelRequestObserver;
+	/** Optional host wrapper around each model request's HTTP fetch. */
+	modelFetch?: ModelFetchFactory;
 	/** Optional product identity used by the default system prompt. */
 	systemPromptProduct?: SystemPromptProduct;
 }
@@ -338,6 +342,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 	const modelRequestObserver = options.modelRequestObserver;
+	const modelFetch = options.modelFetch;
+	const modelQueue = new ModelQueueChannel();
+	const requestTeardowns = new RequestTeardowns();
 	const requestLedger = new RequestLedger();
 
 	agent = new Agent({
@@ -386,9 +393,23 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// The stream watchdog cancels a stalled request through this controller; a caller
 			// abort still wins and reaches the provider unchanged.
 			const watchdogAbort = new AbortController();
+			const requestSignal = options?.signal
+				? AbortSignal.any([options.signal, watchdogAbort.signal])
+				: watchdogAbort.signal;
+			const idleHold = new StreamIdleHold();
+			const baseFetch = options?.fetch ?? ((input, init) => globalThis.fetch(input, init));
+			const fetch = modelFetch?.({
+				model,
+				signal: requestSignal,
+				fetch: baseFetch,
+				holdIdleWatchdog: () => idleHold.acquire(),
+				reportQueue: (queueId, state, exit) => modelQueue.report(queueId, state, exit),
+				registerTeardown: (task) => requestTeardowns.register(task),
+			});
 			const requestOptions: ModelsSimpleStreamOptions = {
 				...options,
-				signal: options?.signal ? AbortSignal.any([options.signal, watchdogAbort.signal]) : watchdogAbort.signal,
+				signal: requestSignal,
+				...(fetch ? { fetch } : {}),
 				timeoutMs,
 				websocketConnectTimeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
@@ -413,6 +434,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			try {
 				stream = withStreamIdleWatchdog(modelRuntime.streamSimple(model, context, requestOptions), {
 					idleTimeoutMs: providerRetrySettings.streamIdleTimeoutMs,
+					hold: idleHold,
 					onTimeout: () => watchdogAbort.abort(new Error("Provider stream idle timeout")),
 					fallback: () => ({
 						role: "assistant",
@@ -540,6 +562,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		sessionStartEvent: options.sessionStartEvent,
 		systemPromptProduct: options.systemPromptProduct,
 		requestLedger,
+		modelQueue,
+		requestTeardowns,
 	});
 	const extensionsResult = resourceLoader.getExtensions();
 

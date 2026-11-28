@@ -575,6 +575,61 @@ A failed or timed-out network refresh does not undo a successful credential oper
 
 > See [examples/sdk/09-api-keys-and-oauth.ts](../examples/sdk/09-api-keys-and-oauth.ts)
 
+### Model Request Fetch
+
+`modelFetch` lets a host wrap the HTTP fetch of every model request the session
+sends. Nothing installs one by default. The factory runs once per model request
+and returns the fetch to use, or `undefined` to leave that request unchanged:
+
+```typescript
+import { createAgentSession, type ModelFetchFactory } from "@step-harness/coding-agent";
+
+const modelFetch: ModelFetchFactory = ({ model, signal, fetch, holdIdleWatchdog }) => async (input, init) => {
+  // Example: wait until the host lets this request go, without tripping the stream idle bound.
+  const release = holdIdleWatchdog();
+  try {
+    await waitForTurn(model, signal);
+  } finally {
+    release();
+  }
+  return fetch(input, init);
+};
+
+const { session } = await createAgentSession({ modelFetch });
+```
+
+- `fetch` is the fetch the request would use without the wrapper.
+- `signal` cancels the logical request: a user stop or the stream idle
+  watchdog. The provider SDK passes its own per-attempt signal on
+  `init.signal`, which also carries the SDK's request timeout and may already be
+  aborted after a long wait; a wrapper that holds a request listens to `signal`
+  while waiting.
+- `holdIdleWatchdog()` suspends the stream idle bound
+  (`retry.provider.streamIdleTimeoutMs`) until the returned function is called.
+  Release it before sending to the provider, so a request that then gets no
+  answer still ends as a stall. Releasing the last hold starts a full idle
+  window. The release function is idempotent.
+- `reportQueue(queueId, state, exit?)` tells the session that the request
+  waits in a server-side line (`state`, with its `position` while waiting, or
+  `state: "ready"` once the server admitted it and it is about to run) or left
+  it (`null`, with `exit.closedReason` when the server closed the place). The
+  session publishes each report as a `model_queue` event: a live frame the TUI
+  presents and `--mode json` / `--mode rpc` write with `--include-live-events`.
+- `registerTeardown(task)` registers work the request still owes after its
+  caller stopped waiting (for example releasing a server-side reservation).
+  Disposing the session (runtime dispose, session replacement) awaits the
+  registered work for at most 2s, so a host that exits right after dispose
+  still sends it; with nothing registered, dispose does not wait.
+- The wrapper sees only HTTP transports; WebSocket transports bypass it.
+  One-off calls made directly on `ModelRuntime` (outside the session's agent
+  loop) do not pass through it.
+
+`createAgentSessionServices({ modelFetch })` sets a default for every session
+created from those services; a session's own `modelFetch` replaces it.
+`createStepAgentSession()` and `createStepAgentSessionServices()` install the
+model request queue this way unless you pass your own `modelFetch`; see
+[Step integration](step-integration.md#model-request-queue).
+
 ### System Prompt
 
 Use a `ResourceLoader` to override the system prompt:

@@ -225,6 +225,15 @@ confirms the child's actual route after it starts, rejecting CLI fuzzy matches o
 falls back to a different model. A background lane keeps the route it was launched with
 when a reply respawns its child.
 
+### Model request queue
+
+When Step's model pool is busy, the server can keep a model request sent to
+Step's API in a first-come line instead of rejecting it. Every model request sent
+to `api.stepfun.com` or `api.stepfun.ai` takes part, whichever provider sends it.
+There is no client setting: whether a request waits is decided by the server. See
+[Step integration](../packages/coding-agent/docs/step-integration.md#model-request-queue)
+for the protocol.
+
 ### Plan file storage
 
 Native Markdown plans default to

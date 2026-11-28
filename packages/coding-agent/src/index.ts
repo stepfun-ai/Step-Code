@@ -257,6 +257,16 @@ export {
 	convertToLlm,
 	createCompactionSummaryMessage,
 } from "./core/messages.ts";
+export {
+	type ModelFetch,
+	type ModelFetchFactory,
+	type ModelFetchRequest,
+	ModelQueueChannel,
+	type ModelQueueExit,
+	type ModelQueueListener,
+	type ModelQueuePhase,
+	type ModelQueueState,
+} from "./core/model-fetch.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
 export {
 	type ModelRequestCompleted,
@@ -550,7 +560,7 @@ export {
 	type StepCronRuntimeOptions,
 	stepCronExtensionInline,
 } from "./features/step-cron.ts";
-export { createStepProviderConfig, STEP_PROVIDER_ID } from "./features/step-provider/index.ts";
+export { createStepProviderConfig, isStepProvider, STEP_PROVIDER_ID } from "./features/step-provider/index.ts";
 export {
 	createStepRuntimeContextExtension,
 	type StepRuntimeContextExtensionOptions,
@@ -730,6 +740,12 @@ export {
 export { ambiguousPluginServerNames, resolveStepMcpServer } from "./step/mcp.ts";
 export { describeStepMcpImportOutcome, runStepMcpImportPrompt } from "./step/mcp-import-prompt.ts";
 export { hasStoredMcpOAuthCredential, loginMcpServer, logoutMcpServer } from "./step/mcp-oauth.ts";
+export {
+	createStepModelQueueFactory,
+	type StepLimitScope,
+	type StepQueueClosedReason,
+	stepModelQueueStatusText,
+} from "./step/model-queue.ts";
 export { resolveStepLoginProfiles } from "./step/onboarding.ts";
 export {
 	AUTO_RESUME_PROMPT,

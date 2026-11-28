@@ -7,6 +7,7 @@ import {
 	resolveStepTraceAllowlist,
 	resolveStepTraceHeaderBaseUrls,
 } from "../src/step/trace-headers.ts";
+import { STEPCODE_VERSION } from "../src/step/version.ts";
 
 function decode(value: string): string {
 	const mode = value.slice(0, 3);
@@ -64,17 +65,20 @@ describe("Step trace headers", () => {
 	it("replaces client case variants without adding trace fields for untrusted URLs", () => {
 		const headers: Record<string, string | null> = {
 			"X-Step-Client": "stale",
+			"X-Step-Client-Version": "0.0.1",
 			"x-step-session-id": "stale-session",
 			accept: "application/json",
 		};
 		applyStepTraceHeaders(headers, trace, {
-			clientType: " cli ",
+			clientType: " stepcode-desktop ",
+			clientVersion: " 1.4.0 ",
 			requestUrl: "https://other.example/v1/messages",
 			allowedBaseUrls: ["https://allowed.example/v1"],
 		});
 
 		expect(headers).toEqual({
-			"x-step-client": "cli",
+			"x-step-client": "stepcode-desktop",
+			"x-step-client-version": "1.4.0",
 			"x-step-session-id": "stale-session",
 			accept: "application/json",
 		});
@@ -86,7 +90,14 @@ describe("Step trace headers", () => {
 			requestUrl: "https://collector.example/v1/messages",
 			allowedBaseUrls: [],
 		});
-		expect(headers).toEqual({ "x-step-client": "cli" });
+		expect(headers).toEqual({ "x-step-client": "stepcode-cli", "x-step-client-version": STEPCODE_VERSION.value });
+	});
+
+	it("names the Step product version by default", () => {
+		const headers: Record<string, string | null> = {};
+		applyStepTraceHeaders(headers, trace);
+		expect(headers["x-step-client-version"]).toBe(STEPCODE_VERSION.value);
+		expect(headers["x-step-client-version"]).toMatch(/^\d+\.\d+\.\d+/u);
 	});
 
 	it("matches only a complete URL prefix", () => {

@@ -913,6 +913,7 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 | `queue_update` | Pending steering/follow-up queue changed |
 | `compaction_start` | Compaction begins |
 | `compaction_end` | Compaction completes |
+| `model_queue` | **Opt-in frame** (`--include-live-events`): a model request waits in the model request queue (`queue.state`, `queue.position`) or is admitted and about to run (`queue.state: "ready"`), or left it (`queue: null`, with `closedReason` when the server closed its place); carries the call's `queueId`. Subagent parents start their children with this flag, so they receive it |
 | `auto_retry_start` | Auto-retry begins (after transient error) |
 | `auto_retry_end` | Auto-retry completes (success or final failure) |
 | `summarization_retry_scheduled` | Retry scheduled for a transient compaction or branch-summary summarization error |

@@ -1,5 +1,5 @@
 import type { WorkingIndicatorOptions } from "@step-harness/coding-agent";
-import { keyText, theme } from "@step-harness/coding-agent";
+import { keyText, type ModelQueueState, stepModelQueueStatusText, theme } from "@step-harness/coding-agent";
 import { type Component, Loader, type TUI, truncateToWidth, visibleWidth } from "@step-harness/pi-tui";
 import type { AssistantMessage, AssistantMessageEvent } from "@step-harness/providers";
 import { CountdownTimer } from "../dialogs/countdown-timer.ts";
@@ -8,7 +8,7 @@ import { estimateTokens, formatElapsedTime, formatTokens } from "./footer.ts";
 /** Refresh cadence for the compact Step working indicator. */
 export const STEP_WORKING_INDICATOR_INTERVAL_MS = 200;
 
-export type StatusIndicatorKind = "working" | "retry" | "compaction" | "branchSummary";
+export type StatusIndicatorKind = "working" | "retry" | "compaction" | "branchSummary" | "queue";
 
 export interface WorkingOutputSnapshot {
 	elapsedSeconds: number;
@@ -352,6 +352,102 @@ export class RetryStatusIndicator extends StatusIndicator {
 		this.countdown?.dispose();
 		this.countdown = undefined;
 		super.dispose();
+	}
+}
+
+/**
+ * Stands in for the working row while the running model request waits in the
+ * Step Plan queue: the request has not reached the model yet. Shows the place
+ * in line, never a wait estimate.
+ */
+export class ModelQueueStatusIndicator extends StatusIndicator {
+	constructor(ui: TUI, state: ModelQueueState, presentation: "native" | "step" = "native") {
+		super(
+			"queue",
+			ui,
+			(spinner) => theme.fg("warning", spinner),
+			(text) => theme.fg("muted", text),
+			ModelQueueStatusIndicator.label(state),
+			undefined,
+			presentation,
+		);
+	}
+
+	update(state: ModelQueueState): void {
+		this.setMessage(ModelQueueStatusIndicator.label(state));
+	}
+
+	private static label(state: ModelQueueState): string {
+		return `${stepModelQueueStatusText(state)} (${keyText("app.interrupt")} to cancel)`;
+	}
+}
+
+/** Where a {@link ModelQueueStatusSlot} shows its row: the host's single status position. */
+export interface ModelQueueStatusHost {
+	ui(): TUI;
+	presentation(): "native" | "step";
+	/** The indicator in the status position now. */
+	active(): StatusIndicator | undefined;
+	/** Put `next` (or nothing) in the status position and hand back what was there, neither disposed nor stopped. */
+	swap(next: StatusIndicator | undefined): StatusIndicator | undefined;
+}
+
+/**
+ * The queue row of every model request that waits in line, by queue id. While
+ * any waits, the row shows the newest one; the indicator it covered (working,
+ * retry, compaction) is paused, not disposed, and comes back when the last
+ * request leaves. One request leaving never clears another's place.
+ */
+export class ModelQueueStatusSlot {
+	private readonly host: ModelQueueStatusHost;
+	private readonly waiting = new Map<string, ModelQueueState>();
+	private indicator: ModelQueueStatusIndicator | undefined;
+	private covered: StatusIndicator | undefined;
+
+	constructor(host: ModelQueueStatusHost) {
+		this.host = host;
+	}
+
+	update(queueId: string, state: ModelQueueState | null): void {
+		this.waiting.delete(queueId);
+		if (state) this.waiting.set(queueId, state);
+		const newest = [...this.waiting.values()].at(-1);
+		if (!newest) {
+			this.leave();
+			return;
+		}
+		if (this.indicator && this.host.active() === this.indicator) {
+			this.indicator.update(newest);
+			return;
+		}
+		// First report, or another row took the position meanwhile: cover what is there now.
+		this.indicator = new ModelQueueStatusIndicator(this.host.ui(), newest, this.host.presentation());
+		const previous = this.host.swap(this.indicator);
+		this.covered?.dispose();
+		this.covered = previous;
+		previous?.stop();
+	}
+
+	/** Every request left the line (or the run ended): restore the covered row. */
+	leave(): void {
+		this.waiting.clear();
+		const indicator = this.indicator;
+		const covered = this.covered;
+		this.indicator = undefined;
+		this.covered = undefined;
+		if (indicator && this.host.active() === indicator) {
+			this.host.swap(covered);
+			covered?.start();
+		} else covered?.dispose();
+		indicator?.dispose();
+	}
+
+	/** The host cleared rows of `kind` (all rows when undefined): a covered one of that kind is not restored. */
+	forget(kind: StatusIndicatorKind | undefined): void {
+		if (this.covered && (kind === undefined || this.covered.kind === kind)) {
+			this.covered.dispose();
+			this.covered = undefined;
+		}
 	}
 }
 

@@ -13,6 +13,7 @@ import { createAgentSession } from "../core/sdk.ts";
 import type { SettingsManager } from "../core/settings-manager.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "./environment.ts";
+import { createStepModelQueueFactory } from "./model-queue.ts";
 import { createStepSessionManager, wrapStepSessionManager } from "./session.ts";
 import {
 	createStepSettingsManager,
@@ -108,6 +109,8 @@ export async function createStepAgentSession(
 		configDirName: paths.configDirName,
 		settingsManager,
 		sessionManager,
+		// The Step model request queue; a caller's own `modelFetch` replaces it.
+		modelFetch: options.modelFetch ?? createStepModelQueueFactory(),
 	});
 }
 
@@ -123,5 +126,7 @@ export async function createStepAgentSessionServices(
 		agentDir: paths.agentDir,
 		configDirName: paths.configDirName,
 		settingsManager,
+		// The Step model request queue; a caller's own `modelFetch` replaces it.
+		modelFetch: options.modelFetch ?? createStepModelQueueFactory(),
 	}) as Promise<StepAgentSessionServices>;
 }

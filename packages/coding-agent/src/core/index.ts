@@ -86,6 +86,16 @@ export {
 	INCOMPLETE_TURN_RECOVERY_CUSTOM_TYPE,
 } from "./incomplete-turn-recovery.ts";
 export {
+	type ModelFetch,
+	type ModelFetchFactory,
+	type ModelFetchRequest,
+	ModelQueueChannel,
+	type ModelQueueExit,
+	type ModelQueueListener,
+	type ModelQueuePhase,
+	type ModelQueueState,
+} from "./model-fetch.ts";
+export {
 	type ModelRequestCompleted,
 	type ModelRequestObserver,
 	type ModelRequestOutcome,

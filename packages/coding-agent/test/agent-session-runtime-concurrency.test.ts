@@ -13,7 +13,10 @@ import {
 import { createExtensionRuntime } from "../src/core/extensions/index.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 
-type SessionStub = AgentSession & { readonly dispose: ReturnType<typeof vi.fn> };
+type SessionStub = AgentSession & {
+	readonly dispose: ReturnType<typeof vi.fn>;
+	readonly settleRequestTeardowns: ReturnType<typeof vi.fn>;
+};
 type RuntimeResultStub = Omit<CreateAgentSessionRuntimeResult, "session"> & { session: SessionStub };
 
 function createSession(cwd: string, sessionId: string): SessionStub {
@@ -28,6 +31,7 @@ function createSession(cwd: string, sessionId: string): SessionStub {
 		},
 		abort: vi.fn(async () => {}),
 		dispose: vi.fn(),
+		settleRequestTeardowns: vi.fn(async () => {}),
 		createReplacedSessionContext: vi.fn(() => ({})),
 	} as unknown as SessionStub;
 }
@@ -100,6 +104,10 @@ describe("AgentSessionRuntime replacement coordination", () => {
 		await runtime.dispose();
 		expect(initial.dispose).toHaveBeenCalledTimes(1);
 		expect(created[1]?.dispose).toHaveBeenCalledTimes(1);
+		// Every disposed session, replaced or current, gets its request teardowns awaited.
+		for (const session of [initial, created[0], created[1]]) {
+			expect(session?.settleRequestTeardowns).toHaveBeenCalledTimes(1);
+		}
 	});
 
 	test("does not rebind or leak a replacement when dispose races its factory", async () => {

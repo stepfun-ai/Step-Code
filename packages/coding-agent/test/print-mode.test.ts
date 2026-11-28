@@ -102,6 +102,13 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
+/** A stream `write` stand-in that completes like a real one, so flushes settle. */
+function capturedWrite(...args: unknown[]): boolean {
+	const done = args.find((arg): arg is (error?: Error | null) => void => typeof arg === "function");
+	done?.(null);
+	return true;
+}
+
 describe("runPrintMode", () => {
 	it("emits session_shutdown in text mode", async () => {
 		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));
@@ -150,6 +157,79 @@ describe("runPrintMode", () => {
 		expect(session.prompt).toHaveBeenCalledWith("hello");
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
+	});
+
+	it("reports each queue report on stderr in text mode in the host's wording, keeping stdout for the answer", async () => {
+		const run = async (formatModelQueue?: (queue: { state: "waiting" | "ready"; position?: number }) => string) => {
+			const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));
+			const { session } = runtimeHost;
+			const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+			const stdout = vi.spyOn(process.stdout, "write").mockImplementation(capturedWrite);
+			session.prompt.mockImplementation(async () => {
+				// The wrapper reports changes only, so every report is a line.
+				for (const queue of [
+					{ state: "waiting" as const, position: 2 },
+					{ state: "waiting" as const, position: 1 },
+					{ state: "ready" as const },
+					null,
+				]) {
+					session.emitToListeners({ type: "model_queue", queueId: "q1", queue });
+				}
+			});
+			const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+				mode: "text",
+				initialMessage: "hello",
+				...(formatModelQueue ? { formatModelQueue } : {}),
+			});
+			const lines = {
+				exitCode,
+				stderr: stderr.mock.calls,
+				stdout: stdout.mock.calls.map(([chunk]) => String(chunk)).join(""),
+			};
+			stderr.mockRestore();
+			stdout.mockRestore();
+			return lines;
+		};
+
+		const formatted = await run((queue) => (queue.state === "ready" ? "starting" : `waiting at ${queue.position}`));
+		expect(formatted.exitCode).toBe(0);
+		// Each phase is a line: the admitted place starts instead of naming a place it no longer has.
+		expect(formatted.stderr).toEqual([["waiting at 2"], ["waiting at 1"], ["starting"]]);
+		expect(formatted.stdout).not.toContain("waiting at");
+		// A host that supplies no wording gets no queue lines.
+		expect((await run()).stderr).toEqual([]);
+	});
+
+	it("writes queue reports to the JSON stream only with live events", async () => {
+		const run = async (includeLiveEvents: boolean) => {
+			const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));
+			const { session } = runtimeHost;
+			const stdout = vi.spyOn(process.stdout, "write").mockImplementation(capturedWrite);
+			session.prompt.mockImplementation(async () => {
+				session.emitToListeners({ type: "model_queue", queueId: "r1", queue: { state: "waiting", position: 3 } });
+				session.emitToListeners({ type: "model_queue", queueId: "r1", queue: { state: "ready" } });
+				session.emitToListeners({ type: "model_queue", queueId: "r1", queue: null });
+			});
+			await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+				mode: "json",
+				initialMessage: "hello",
+				includeLiveEvents,
+			});
+			const lines = stdout.mock.calls
+				.map(([chunk]) => String(chunk))
+				.join("")
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line) as { type: string });
+			stdout.mockRestore();
+			return lines.filter((line) => line.type === "model_queue");
+		};
+		expect(await run(false)).toEqual([]);
+		expect(await run(true)).toEqual([
+			{ type: "model_queue", queueId: "r1", queue: { state: "waiting", position: 3 } },
+			{ type: "model_queue", queueId: "r1", queue: { state: "ready" } },
+			{ type: "model_queue", queueId: "r1", queue: null },
+		]);
 	});
 
 	// Feedback issue-d8b499026f19831c: with no UI, a denied tool call only reached

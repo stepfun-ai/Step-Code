@@ -7,6 +7,8 @@ export { FooterComponent } from "./chrome/footer.ts";
 export {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
+	ModelQueueStatusIndicator,
+	ModelQueueStatusSlot,
 	RetryStatusIndicator,
 	StatusIndicator,
 	TurnDoneIndicator,
