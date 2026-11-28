@@ -468,6 +468,8 @@ export async function createSubagentRpcSession(
 		clearRouteCheck();
 		active.cleanup?.();
 		finalize(active.current, active.aborted);
+		// A turn that ended is out of every line, whatever its last report said; a final result never carries it.
+		delete active.current.queue;
 		active.current.updatedAt = Date.now();
 		if (sessionFile) active.current.sessionFile = sessionFile;
 		active.current.sessionId = sessionId;

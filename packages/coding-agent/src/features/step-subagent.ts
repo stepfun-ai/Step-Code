@@ -16,6 +16,7 @@ import { type Static, Type } from "typebox";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { CHILD_SESSION_ORIGIN } from "../core/child-session.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory, InlineExtension } from "../core/extensions/types.ts";
+import type { ModelQueueState } from "../core/model-fetch.ts";
 import type { NewSessionOptions } from "../core/session-manager.ts";
 import { resolveStepAgentDir, resolveStepConfigDir } from "../step/environment.ts";
 import {
@@ -136,6 +137,11 @@ export interface StepSubagentRunResult {
 	activeToolArgs?: string;
 	activeToolOutput?: string;
 	lastEvent?: string;
+	/**
+	 * Where the child's model request stands in the server-side queue: the call updated last when the child
+	 * has several in flight, absent once none waits. Live only; never part of a final result.
+	 */
+	queue?: import("../core/model-fetch.ts").ModelQueueState;
 	startedAt?: number;
 	updatedAt?: number;
 	/** True when a keep-alive rpc child is still running and can accept replies. */
@@ -541,6 +547,36 @@ function appendMessage(messages: Message[], message: Message): void {
 	if (messages.length > MAX_MESSAGES) messages.splice(0, messages.length - MAX_MESSAGES);
 }
 
+/**
+ * A child may have several model calls in line at once (its own parallel tools, compaction beside a turn), each
+ * reported by queue id. They are folded here, off the result: a live frame is copied whole on every event, so the
+ * per-call map must not ride along. The result shows the call updated last, like the host does for its own session.
+ */
+const childQueueCalls = new WeakMap<StepSubagentRunResult, Map<string, ModelQueueState>>();
+
+function foldModelQueue(current: StepSubagentRunResult, event: Record<string, unknown>): void {
+	const queueId = typeof event.queueId === "string" ? event.queueId : "";
+	if (!queueId) return;
+	let calls = childQueueCalls.get(current);
+	if (!calls) {
+		calls = new Map();
+		childQueueCalls.set(current, calls);
+	}
+	// Re-inserted so the map's last entry is the call updated last.
+	calls.delete(queueId);
+	const queue = event.queue;
+	if (isRecordValue(queue) && (queue.state === "waiting" || queue.state === "ready")) {
+		const position = queue.position;
+		calls.set(queueId, {
+			state: queue.state,
+			...(typeof position === "number" && Number.isSafeInteger(position) && position >= 0 ? { position } : {}),
+		});
+	}
+	const newest = [...calls.values()].at(-1);
+	if (newest) current.queue = newest;
+	else delete current.queue;
+}
+
 export function parseJsonEvent(
 	line: string,
 	current: StepSubagentRunResult,
@@ -562,7 +598,9 @@ export function parseJsonEvent(
 	// JSON mode emits deltas without the cumulative assistant snapshot. Keep a
 	// small live projection for the parent renderer while retaining final
 	// messages as the authoritative result.
-	if (type === "message_start") {
+	if (type === "model_queue") {
+		foldModelQueue(current, candidate);
+	} else if (type === "message_start") {
 		current.activeText = "";
 		current.activeTool = undefined;
 		current.activeToolArgs = undefined;
