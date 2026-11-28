@@ -15,8 +15,9 @@ import type { ModelFetch, ModelFetchFactory, ModelFetchRequest, ModelQueueState 
  * (`GET https://api.stepfun.com/stepcode/v1/queue`, or `api.stepfun.ai`
  * overseas, naming the place in `X-StepCode-Queue-ID`), and once the place is
  * `ready` sends the original bytes again under the same id. The poll interval is
- * the server's `retry_after_ms` (5 s when it names none). A `closed` place ends
- * the call with an error. A call waits in line at most 20 minutes in all; when it
+ * the server's `retry_after_ms` (5 s when it names none). A `closed` place (a
+ * poll, or a 429 with `X-StepCode-Queue-State: closed` on the first send or a
+ * resend) ends the call with an error naming the reason. A call waits in line at most 20 minutes in all; when it
  * stops waiting on its own side (the caller's stop, that bound, or a status
  * endpoint that keeps failing) it releases the place with `POST <queue>/cancel`
  * (the id in `X-StepCode-Queue-ID`, no body). A stop before any queued answer
@@ -28,13 +29,17 @@ import type { ModelFetch, ModelFetchFactory, ModelFetchRequest, ModelQueueState 
  *   POST .../chat/completions          -> 200 stream (same id, same body)
  *
  * A request to any other host (an endpoint override) is sent as it is, without
- * the header. Any other response, including an ordinary 429, is returned
- * unchanged so the existing retry policy handles it.
+ * the header. Any other response, including an ordinary 429, keeps its status,
+ * codes and headers so the existing retry policy handles it; a 429 carrying
+ * `X-StepCode-Limit-Scope` only gains a leading sentence on whose limit it hit
+ * (the user's own quota, or Step's capacity).
  */
 
 const QUEUE_ID_HEADER = "x-stepcode-queue-id";
 const STATE_HEADER = "x-stepcode-queue-state";
 const POSITION_HEADER = "x-stepcode-queue-position";
+const REASON_HEADER = "x-stepcode-queue-reason";
+const LIMIT_SCOPE_HEADER = "x-stepcode-limit-scope";
 const RETRY_AFTER_HEADER = "retry-after-ms";
 /** Request headers that describe the model request's body; the control requests carry their own. */
 const BODY_HEADERS = new Set(["content-length", "content-type", "content-encoding", "transfer-encoding", "accept"]);
@@ -64,21 +69,44 @@ const CANCEL_TIMEOUT_MS = 1_000;
 /** Status of the synthesized response that ends a queued call: no SDK or session retry re-enters the queue. */
 const QUEUE_ENDED_STATUS = 410;
 
-/** Readable text for the server's stable `closed` reason codes; unknown codes read as the generic text. */
-const CLOSED_REASON_TEXT: Readonly<Record<string, string>> = {
+/**
+ * Why a place in line ended, as Step names it (`X-StepCode-Queue-Reason` on a generation answer, `reason` in a
+ * status answer). A fixed list shared with the server: only reasons a user can act on are named; any other
+ * closed place carries no reason and reads as the generic text. A wait this side gives up after 20 minutes is
+ * `max_wait_exceeded` as well.
+ */
+export type StepQueueClosedReason = "queue_full" | "user_limit" | "max_wait_exceeded";
+
+/** Whose limit a throttled Step request hit (`X-StepCode-Limit-Scope`). A fixed list shared with the server. */
+export type StepLimitScope = "user_quota" | "upstream_capacity";
+
+/** Readable text for every reason the server names; a new reason fails to compile until it has its text. */
+const CLOSED_REASON_TEXT: Readonly<Record<StepQueueClosedReason, string>> = {
 	queue_full: "The request queue is full. Try again later.",
 	user_limit: "You have too many requests waiting in line. Wait for them to finish and try again.",
-	lease_expired: "Your place in line expired. Send the request again.",
 	max_wait_exceeded: "The request waited in line too long. Try again later.",
-	wait_timeout: "The request waited in line too long. Try again later.",
-	not_found: "Your place in line no longer exists. Send the request again.",
 };
-const CLOSED_GENERIC_TEXT = "The request queue closed this request. Try again later.";
+/** What a throttled Step request ran into, by the server's limit scope; leads the server's own message. */
+const LIMIT_SCOPE_TEXT: Readonly<Record<StepLimitScope, string>> = {
+	user_quota: "Your Step usage limit was reached.",
+	upstream_capacity: "Step is at capacity right now.",
+};
+const CLOSED_GENERIC_TEXT = "The request left the queue. Send it again.";
 
-/** The message for a `closed` reason code, keeping the code itself for diagnosis. */
-export function stepModelQueueClosedMessage(reason: string): string {
-	const text = Object.hasOwn(CLOSED_REASON_TEXT, reason) ? CLOSED_REASON_TEXT[reason] : CLOSED_GENERIC_TEXT;
-	return reason ? `${text} (${reason})` : text;
+/** A reason off the wire, or undefined for an absent or unknown one (read as the generic text). */
+function closedReasonFrom(value: unknown): StepQueueClosedReason | undefined {
+	const code = typeof value === "string" ? value.trim().toLowerCase() : "";
+	return Object.hasOwn(CLOSED_REASON_TEXT, code) ? (code as StepQueueClosedReason) : undefined;
+}
+
+function limitScopeFrom(value: unknown): StepLimitScope | undefined {
+	const scope = typeof value === "string" ? value.trim().toLowerCase() : "";
+	return Object.hasOwn(LIMIT_SCOPE_TEXT, scope) ? (scope as StepLimitScope) : undefined;
+}
+
+/** The message for a closed place, keeping the reason code itself for diagnosis. */
+export function stepModelQueueClosedMessage(reason?: StepQueueClosedReason): string {
+	return reason ? `${CLOSED_REASON_TEXT[reason]} (${reason})` : CLOSED_GENERIC_TEXT;
 }
 
 /** The status line for a request waiting in line: its position, never a wait estimate. */
@@ -138,8 +166,50 @@ function pollInterval(value: unknown): number {
 	return ms === undefined || ms === 0 ? DEFAULT_POLL_INTERVAL_MS : Math.min(ms, MAX_POLL_INTERVAL_MS);
 }
 
+function queueState(response: Response): string | undefined {
+	return response.status === 429 ? response.headers.get(STATE_HEADER)?.trim().toLowerCase() : undefined;
+}
+
 function isQueued(response: Response): boolean {
-	return response.status === 429 && response.headers.get(STATE_HEADER)?.trim().toLowerCase() === "waiting";
+	return queueState(response) === "waiting";
+}
+
+function isClosed(response: Response): boolean {
+	return queueState(response) === "closed";
+}
+
+/**
+ * A Step answer that is not a queued one. A place the server closed ends the call like a closed poll; any
+ * other throttled answer keeps its status, codes and headers (so the retry policy sees what it always saw)
+ * and only gains a leading sentence on whose limit it hit.
+ */
+async function settle(response: Response): Promise<Response> {
+	if (isClosed(response)) {
+		await response.body?.cancel().catch(() => {});
+		return queueEnded(closedReasonFrom(response.headers.get(REASON_HEADER)));
+	}
+	return await withLimitScope(response);
+}
+
+async function withLimitScope(response: Response): Promise<Response> {
+	const scope = response.status === 429 ? limitScopeFrom(response.headers.get(LIMIT_SCOPE_HEADER)) : undefined;
+	if (!scope) return response;
+	const text = await response.text();
+	let body: unknown;
+	try {
+		body = JSON.parse(text);
+	} catch {
+		body = undefined;
+	}
+	const error = body && typeof body === "object" ? Reflect.get(body, "error") : undefined;
+	const message = error && typeof error === "object" ? Reflect.get(error, "message") : undefined;
+	const headers = new Headers(response.headers);
+	headers.delete("content-length");
+	headers.delete("content-encoding");
+	if (typeof message !== "string")
+		return new Response(text, { status: response.status, statusText: response.statusText, headers });
+	Reflect.set(error as object, "message", `${LIMIT_SCOPE_TEXT[scope]} ${message}`);
+	return new Response(JSON.stringify(body), { status: response.status, statusText: response.statusText, headers });
 }
 
 /** The cancellation to throw: always an Error, as callers and SDKs test `instanceof Error`. */
@@ -167,7 +237,8 @@ function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
 	});
 }
 
-function queueEnded(message: string, reason?: string): Response {
+/** The 410 that ends a call; the message is the closed text unless this side names its own failure. */
+function queueEnded(reason?: StepQueueClosedReason, message = stepModelQueueClosedMessage(reason)): Response {
 	return new Response(
 		JSON.stringify({ error: { message, type: "queue_closed", code: "queue_closed", ...(reason ? { reason } : {}) } }),
 		{
@@ -181,7 +252,7 @@ interface QueueStatus {
 	readonly state: "waiting" | "ready" | "closed";
 	readonly position?: number;
 	readonly retryAfterMs: number;
-	readonly reason: string;
+	readonly reason?: StepQueueClosedReason;
 }
 
 function readQueueStatus(value: unknown): QueueStatus | undefined {
@@ -193,7 +264,7 @@ function readQueueStatus(value: unknown): QueueStatus | undefined {
 		state,
 		position: nonNegativeInteger(Reflect.get(value, "position")),
 		retryAfterMs: pollInterval(Reflect.get(value, "retry_after_ms")),
-		reason: typeof reason === "string" ? reason : "",
+		reason: closedReasonFrom(reason),
 	};
 }
 
@@ -274,7 +345,7 @@ export function createStepModelQueueFetch(
 		// A stop during the first send is the caller's alone: nothing says the server
 		// queued the call, and if it did, its lease ends the place.
 		const first = await send(attempt);
-		if (!isQueued(first)) return first;
+		if (!isQueued(first)) return await settle(first);
 		// From here the call holds a place in line until it settles, and a stop must
 		// release it: the settlement is a teardown the disposing session awaits.
 		let settled = () => {};
@@ -300,7 +371,7 @@ export function createStepModelQueueFetch(
 		await first.body?.cancel().catch(() => {});
 		// Reports go out only when the place in line or being in line changes.
 		let reported: { readonly queued: boolean; readonly position?: number } = { queued: false };
-		const publish = (queued: boolean, closedReason?: string) => {
+		const publish = (queued: boolean, closedReason?: StepQueueClosedReason) => {
 			const next: { readonly queued: boolean; readonly position?: number } = queued
 				? { queued, ...(position === undefined ? {} : { position }) }
 				: { queued };
@@ -317,12 +388,12 @@ export function createStepModelQueueFetch(
 			}
 		};
 		publish(true);
-		let closedReason: string | undefined;
+		let closedReason: StepQueueClosedReason | undefined;
 		// This side stops waiting: release the place, then end the call like a closed one.
-		const giveUp = async (message: string, reason?: string): Promise<Response> => {
+		const giveUp = async (reason?: StepQueueClosedReason, message?: string): Promise<Response> => {
 			closedReason = reason;
 			await leave();
-			return queueEnded(message, reason);
+			return queueEnded(reason, message);
 		};
 		// One bound for the whole wait, across every resend that is queued again.
 		const deadline = now() + maxWaitMs;
@@ -332,7 +403,7 @@ export function createStepModelQueueFetch(
 			let lastFailure = "";
 			for (;;) {
 				const remaining = deadline - now();
-				if (remaining <= 0) return await giveUp(stepModelQueueClosedMessage("wait_timeout"), "wait_timeout");
+				if (remaining <= 0) return await giveUp("max_wait_exceeded");
 				// The SDK's per-attempt signal also carries its request timeout, which
 				// must not end a wait in line: only the caller's cancellation does.
 				await sleep(Math.min(delay, remaining), caller);
@@ -353,11 +424,11 @@ export function createStepModelQueueFetch(
 					} else {
 						await response.body?.cancel().catch(() => {});
 						// The place is gone: the same as a closed place.
-						if (response.status === 404) status = { state: "closed", retryAfterMs: delay, reason: "not_found" };
+						if (response.status === 404) status = { state: "closed", retryAfterMs: delay };
 						// A throttled or failing status endpoint is retried; other answers
 						// cannot improve by asking again.
 						else if (response.status !== 429 && response.status < 500)
-							return await giveUp(`Queue status request failed with HTTP ${response.status}`);
+							return await giveUp(undefined, `Queue status request failed with HTTP ${response.status}`);
 						else lastFailure = `HTTP ${response.status}`;
 					}
 				} catch (error) {
@@ -366,7 +437,7 @@ export function createStepModelQueueFetch(
 				}
 				if (!status) {
 					if (now() - lastSuccess >= failureBudgetMs)
-						return await giveUp(`Queue status unavailable: ${lastFailure}`);
+						return await giveUp(undefined, `Queue status unavailable: ${lastFailure}`);
 					delay = Math.min(FIRST_POLL_BACKOFF_MS * 2 ** failures, MAX_POLL_BACKOFF_MS);
 					failures++;
 					continue;
@@ -376,7 +447,7 @@ export function createStepModelQueueFetch(
 				delay = status.retryAfterMs;
 				if (status.state === "closed") {
 					closedReason = status.reason;
-					return queueEnded(stepModelQueueClosedMessage(status.reason), status.reason);
+					return queueEnded(status.reason);
 				}
 				if (status.state === "waiting") {
 					position = status.position ?? position;
@@ -387,7 +458,12 @@ export function createStepModelQueueFetch(
 				// abort it already carries is its request timeout expiring in line.
 				unhold();
 				const response = await send(attempt && !attempt.aborted ? AbortSignal.any([caller, attempt]) : caller);
-				if (!isQueued(response)) return response;
+				if (!isQueued(response)) {
+					// The server closed the place on the resend (the wait bound, say): end the call, never re-enter
+					// the line under a new id through a retry.
+					if (isClosed(response)) closedReason = closedReasonFrom(response.headers.get(REASON_HEADER));
+					return await settle(response);
+				}
 				hold();
 				position = nonNegativeInteger(response.headers.get(POSITION_HEADER)) ?? position;
 				delay = pollInterval(response.headers.get(RETRY_AFTER_HEADER));

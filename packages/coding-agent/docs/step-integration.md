@@ -267,14 +267,18 @@ header and no queue.
   server names none, at most 30s) and on `ready` sends the original bytes again
   under the same id; a queued answer to the resend keeps polling. One call waits
   in line at most 20 minutes in all, across resends; past that it ends with the
-  410 below, reason `wait_timeout`.
+  410 below, reason `max_wait_exceeded`.
   The stream idle watchdog is held only while polling.
-- `closed`, or a status answer of 404 (`not_found`), ends the request with a
+- `closed` (a status answer, or a 429 with `X-StepCode-Queue-State: closed` and
+  the code in `X-StepCode-Queue-Reason` on the first send or a resend), or a
+  status answer of 404, ends the request with a
   synthesized HTTP 410 `queue_closed` error carrying `x-should-retry: false`, so
   no retry re-enters the line under a new id. Its message is readable English
-  followed by the reason code (`queue_full`, `user_limit`, `lease_expired`,
-  `max_wait_exceeded`, `not_found`; unknown codes get a generic text), and
-  `error.reason` keeps the code. A 401 or 403 status answer is returned to the
+  followed by the reason code. The server names only reasons a user can act on,
+  a fixed list shared with it (`StepQueueClosedReason`): `queue_full`,
+  `user_limit`, `max_wait_exceeded`; a place closed for any other reason, or with
+  a code this client does not know, gets the generic text and no code.
+  `error.reason` keeps a named code. A 401 or 403 status answer is returned to the
   caller as it is. A 429 or 5xx status answer, or a network error, is retried
   with backoff from 1s to 8s; after 30s without a good answer the request ends
   with the same 410. Any other status answer ends it too.
@@ -291,8 +295,11 @@ header and no queue.
   signals, rpc shutdown, the TUI, a desktop session closing) waits for it before
   the process exits. A request to a control endpoint is never wrapped or
   queued, and keeps the queue id it names.
-- Any other response, including an ordinary 429, goes back unchanged to the
-  existing retry policy.
+- Any other response, including an ordinary 429, goes back to the existing retry
+  policy with its status, error codes and headers unchanged. A 429 carrying
+  `X-StepCode-Limit-Scope` gains a leading sentence on whose limit it hit:
+  `user_quota` (the user's own usage limit) or `upstream_capacity` (Step's
+  capacity).
 
 **Presentation.** Each change of place in line (and entering or leaving it) is
 a `model_queue` session event (`{ queueId, queue: { position? } | null,

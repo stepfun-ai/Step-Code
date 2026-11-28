@@ -4,6 +4,7 @@ import type { ModelFetchRequest, ModelQueueExit, ModelQueueState } from "../src/
 import {
 	createStepModelQueueFactory,
 	createStepModelQueueFetch,
+	type StepQueueClosedReason,
 	stepModelQueueClosedMessage,
 	stepModelQueueStatusText,
 } from "../src/step/model-queue.ts";
@@ -286,6 +287,103 @@ test("passes an ordinary 429 through to the existing retry policy", async () => 
 	assert.deepEqual(h.states, []);
 });
 
+function closed(reason?: string): Response {
+	const headers = new Headers({ "X-StepCode-Queue-State": "closed", "content-type": "application/json" });
+	if (reason !== undefined) headers.set("X-StepCode-Queue-Reason", reason);
+	const message = `Rate limit reached, please try again later.${reason ? ` (${reason})` : ""}`;
+	return new Response(JSON.stringify({ error: { message, type: "rate_limited" } }), { status: 429, headers });
+}
+
+function limited(scope: string, message = "Rate limit reached, please try again later."): Response {
+	return new Response(JSON.stringify({ error: { message, type: "rate_limited" } }), {
+		status: 429,
+		headers: { "content-type": "application/json", "retry-after": "3", "X-StepCode-Limit-Scope": scope },
+	});
+}
+
+test("a place the server closes on the first send ends the call, without polling or a cancel", async () => {
+	const h = harness([closed("queue_full")]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	assert.equal(response.headers.get("x-should-retry"), "false");
+	const body = (await response.json()) as { error: { message: string; code: string; reason: string } };
+	assert.equal(body.error.code, "queue_closed");
+	assert.equal(body.error.reason, "queue_full");
+	assert.equal(body.error.message, "The request queue is full. Try again later. (queue_full)");
+	assert.equal(h.calls.length, 1);
+	// Never in line: no queue events, no watchdog hold.
+	assert.deepEqual(h.states, []);
+	assert.equal(h.holds(), 0);
+});
+
+test("a closed first send without a reason still ends the call with the generic text", async () => {
+	const h = harness([closed()]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	const body = (await response.json()) as { error: { message: string; reason?: string } };
+	assert.equal(body.error.message, stepModelQueueClosedMessage());
+	assert.equal(body.error.reason, undefined);
+});
+
+test("a place closed on the resend ends the call instead of re-entering the line under a new id", async () => {
+	const h = harness([queued(1), status("ready"), closed("max_wait_exceeded")]);
+	const response = await h.post();
+	assert.equal(response.status, 410);
+	const body = (await response.json()) as { error: { reason: string } };
+	assert.equal(body.error.reason, "max_wait_exceeded");
+	assert.deepEqual(h.exits, [{ closedReason: "max_wait_exceeded" }]);
+	// The server closed the place itself: no cancel goes out.
+	assert.deepEqual(
+		h.calls.map((call) => `${call.method} ${new URL(call.url).pathname}`),
+		["POST /step_plan/v1/chat/completions", "GET /stepcode/v1/queue", "POST /step_plan/v1/chat/completions"],
+	);
+	assert.equal(h.released(), 1);
+});
+
+for (const [scope, lead] of [
+	["user_quota", "Your Step usage limit was reached."],
+	["upstream_capacity", "Step is at capacity right now."],
+] as const) {
+	test(`a ${scope} 429 keeps its status, codes and headers and names whose limit it hit`, async () => {
+		const h = harness([limited(scope, "rpm exceeded")]);
+		const response = await h.post();
+		assert.equal(response.status, 429);
+		assert.equal(response.headers.get("retry-after"), "3");
+		assert.equal(response.headers.get("x-stepcode-limit-scope"), scope);
+		const body = (await response.json()) as { error: { message: string; type: string } };
+		assert.equal(body.error.type, "rate_limited");
+		assert.equal(body.error.message, `${lead} rpm exceeded`);
+		assert.deepEqual(h.states, []);
+	});
+}
+
+test("a limit scope on a resend names whose limit it hit as well", async () => {
+	const h = harness([queued(1), status("ready"), limited("upstream_capacity")]);
+	const response = await h.post();
+	assert.equal(response.status, 429);
+	const body = (await response.json()) as { error: { message: string } };
+	assert.match(body.error.message, /^Step is at capacity right now\. /u);
+	assert.deepEqual(h.exits, [undefined]);
+});
+
+test("an unknown limit scope or a body without a message passes through as it is", async () => {
+	const unknown = harness([limited("something_new")]);
+	assert.equal(
+		((await (await unknown.post()).json()) as { error: { message: string } }).error.message,
+		"Rate limit reached, please try again later.",
+	);
+	const plain = harness([
+		new Response("busy", {
+			status: 429,
+			headers: { "X-StepCode-Limit-Scope": "upstream_capacity", "retry-after": "1" },
+		}),
+	]);
+	const response = await plain.post();
+	assert.equal(response.status, 429);
+	assert.equal(response.headers.get("retry-after"), "1");
+	assert.equal(await response.text(), "busy");
+});
+
 test("waits in line, then resends the same bytes under the same id", async () => {
 	const h = harness([
 		queued(3, 1500),
@@ -402,13 +500,22 @@ test("ends with a non-retryable, readable error that keeps the reason code when 
 	assert.equal(h.released(), 1);
 });
 
-test("a status answer of 404 closes the place as not_found", async () => {
+test("a status answer of 404 closes the place, with no reason to name", async () => {
 	const h = harness([queued(1), new Response("gone", { status: 404 })]);
 	const response = await h.post();
 	assert.equal(response.status, 410);
-	const body = (await response.json()) as { error: { reason: string } };
-	assert.equal(body.error.reason, "not_found");
-	assert.deepEqual(h.exits, [{ closedReason: "not_found" }]);
+	const body = (await response.json()) as { error: { message: string; reason?: string } };
+	assert.equal(body.error.reason, undefined);
+	assert.equal(body.error.message, stepModelQueueClosedMessage());
+	assert.deepEqual(h.exits, [undefined]);
+});
+
+test("a closed status answer with a reason the client does not know reads as the generic text", async () => {
+	const h = harness([queued(1), status("closed", { reason: "lease_expired" })]);
+	const response = await h.post();
+	const body = (await response.json()) as { error: { message: string; reason?: string } };
+	assert.equal(body.error.reason, undefined);
+	assert.equal(body.error.message, stepModelQueueClosedMessage());
 });
 
 test("a status answer of 401 or 403 goes back to the caller as it is", async () => {
@@ -442,18 +549,30 @@ test("reports only changes of place or of being in line", async () => {
 	assert.deepEqual(h.states, [{ position: 2 }, { position: 1 }, null]);
 });
 
-test("names every closed reason code in readable text, generic for unknown codes", () => {
-	const codes = ["queue_full", "user_limit", "lease_expired", "max_wait_exceeded", "not_found"];
-	const generic = stepModelQueueClosedMessage("");
+test("names every reason the server names in readable text, generic without one", () => {
+	// The wire values are a contract shared with the server: this list is pinned word for word.
+	const codes: StepQueueClosedReason[] = ["queue_full", "user_limit", "max_wait_exceeded"];
+	const generic = stepModelQueueClosedMessage();
 	const texts = codes.map((code) => stepModelQueueClosedMessage(code));
 	for (const [index, text] of texts.entries()) {
 		assert.equal(text.endsWith(` (${codes[index]})`), true);
-		assert.equal(text.startsWith(generic), false);
+		assert.notEqual(text, generic);
 	}
 	assert.equal(new Set(texts).size, codes.length);
-	assert.equal(stepModelQueueClosedMessage("brand_new_reason"), `${generic} (brand_new_reason)`);
-	assert.equal(stepModelQueueClosedMessage("toString"), `${generic} (toString)`);
 	assert.equal(stepModelQueueClosedMessage("queue_full"), "The request queue is full. Try again later. (queue_full)");
+});
+
+test("a closed first send with a reason the client does not know, or a prototype key, reads as the generic text", async () => {
+	for (const reason of ["brand_new_reason", "toString", "QUEUE_FULL "]) {
+		const h = harness([closed(reason)]);
+		const body = (await (await h.post()).json()) as { error: { message: string; reason?: string } };
+		if (reason === "QUEUE_FULL ") {
+			assert.equal(body.error.reason, "queue_full");
+			continue;
+		}
+		assert.equal(body.error.reason, undefined);
+		assert.equal(body.error.message, stepModelQueueClosedMessage());
+	}
 });
 
 test("a stop always surfaces as an Error", async () => {
@@ -745,7 +864,7 @@ test("a server interval above the bound is capped", async () => {
 	assert.deepEqual(h.sleeps, [30_000]);
 });
 
-test("waits in line 20 minutes at most in all, then releases the place and ends with wait_timeout", async () => {
+test("waits in line 20 minutes at most in all, then releases the place and ends as max_wait_exceeded", async () => {
 	const waiting = () => status("waiting", { position: 9, retry_after_ms: 30_000 });
 	const polls: Reply[] = Array.from({ length: 40 }, waiting);
 	const h = harness([queued(9, 30_000), ...polls, new Response("{}", { status: 200 })]);
@@ -754,13 +873,13 @@ test("waits in line 20 minutes at most in all, then releases the place and ends 
 	assert.equal(response.headers.get("x-should-retry"), "false");
 	const body = (await response.json()) as { error: { type: string; reason: string } };
 	assert.equal(body.error.type, "queue_closed");
-	assert.equal(body.error.reason, "wait_timeout");
+	assert.equal(body.error.reason, "max_wait_exceeded");
 	assert.equal(
 		h.sleeps.reduce((sum, ms) => sum + ms, 0),
 		20 * 60_000,
 	);
 	assertCancel(h.calls.at(-1));
-	assert.deepEqual(h.exits.at(-1), { closedReason: "wait_timeout" });
+	assert.deepEqual(h.exits.at(-1), { closedReason: "max_wait_exceeded" });
 });
 
 test("the wait bound spans resends that are queued again", async () => {
